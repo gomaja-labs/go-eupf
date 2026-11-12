@@ -52,6 +52,11 @@ struct pdr_entry {
     __u8 ue_mask6[16];
     __u8 ue_ip4_present;
     __u8 ue_ip6_present;
+    __u32 assigned_ip4;
+    __u8 assigned_ip6[16];
+    __u8 assigned_mask6[16];
+    __u8 assigned_ip4_present;
+    __u8 assigned_ip6_present;
     __u8 ue_destination;
     __u8 source_interface_present;
     __u8 source_interface;
@@ -73,6 +78,7 @@ struct pdr_info {
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
     __type(key, __u32);
     __type(value, struct pdr_info);
     __uint(max_entries, PDR_MAP_SIZE);
@@ -98,6 +104,7 @@ struct
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
     __type(key, __u32);
     __type(value, struct pdr_info);
     __uint(max_entries, PDR_MAP_SIZE);

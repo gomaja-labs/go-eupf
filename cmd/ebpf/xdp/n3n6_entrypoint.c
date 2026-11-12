@@ -129,6 +129,7 @@ struct pdi_packet {
     __u8 qfi;
     __u8 qfi_present;
     __u8 source_interface;
+    __u8 reserved[7];
 };
 
 // This scalar metadata helper does not re-parse packet headers for each PDR.
@@ -144,6 +145,17 @@ int output_sdf_event(struct xdp_md *ctx,__u64 session_id,__u32 pdr_id,const stru
     __builtin_memcpy(&meta.tuple5.src_ip,&packet->source,16);__builtin_memcpy(&meta.tuple5.dst_ip,&packet->destination,16);
     meta.tuple5.src_port=bpf_htons(packet->source_port);meta.tuple5.dst_port=bpf_htons(packet->destination_port);meta.tuple5.protocol=packet->protocol;
     return bpf_perf_event_output(ctx,&sdf_notify_map,BPF_F_CURRENT_CPU,&meta,sizeof(meta));
+}
+
+// RFC 6733 section 4.3.1: assigned matches the session's terminal address
+// set, including its IPv6 prefix. It is distinct from an unrestricted match.
+static __always_inline int match_assigned(const struct pdr_entry *entry, const struct pdi_packet *packet, __u128 address) {
+    if (packet->family == 1)
+        return entry->assigned_ip4_present && (__u32)address == entry->assigned_ip4;
+    __u128 value, mask;
+    __builtin_memcpy(&value, entry->assigned_ip6, 16);
+    __builtin_memcpy(&mask, entry->assigned_mask6, 16);
+    return entry->assigned_ip6_present && !((address ^ value) & mask);
 }
 
 // TS 29.244 V20.1.0 clause 5.2.1. This memory-only subprogram is
@@ -176,13 +188,15 @@ int match_pdr_entry(const struct pdr_entry *entry, const struct pdi_packet *pack
         if (i>=entry->sdf_count) break;
         const struct sdf_filter *filter=&entry->sdf_filters[i];
         if (filter->protocol!=1 && filter->protocol!=get_sdf_protocol(packet->protocol)) continue;
-        if ((filter->src_addr.type && filter->src_addr.type!=packet->family) || (filter->dst_addr.type && filter->dst_addr.type!=packet->family)) continue;
+        if ((filter->src_addr.type && filter->src_addr.type!=3 && filter->src_addr.type!=packet->family) || (filter->dst_addr.type && filter->dst_addr.type!=3 && filter->dst_addr.type!=packet->family)) continue;
         __u128 src=packet->family==1?bpf_htonl((__u32)filter->src_addr.ip):bpf_htonlll(filter->src_addr.ip);
         __u128 dst=packet->family==1?bpf_htonl((__u32)filter->dst_addr.ip):bpf_htonlll(filter->dst_addr.ip);
         __u128 src_mask=packet->family==1?bpf_htonl((__u32)filter->src_addr.mask):bpf_htonlll(filter->src_addr.mask);
         __u128 dst_mask=packet->family==1?bpf_htonl((__u32)filter->dst_addr.mask):bpf_htonlll(filter->dst_addr.mask);
-        if (filter->src_addr.type && ((packet->source^src)&src_mask)) continue;
-        if (filter->dst_addr.type && ((packet->destination^dst)&dst_mask)) continue;
+        if (filter->src_addr.type == 3) { if (!match_assigned(entry, packet, packet->source)) continue; }
+        else if (filter->src_addr.type && ((packet->source^src)&src_mask)) continue;
+        if (filter->dst_addr.type == 3) { if (!match_assigned(entry, packet, packet->destination)) continue; }
+        else if (filter->dst_addr.type && ((packet->destination^dst)&dst_mask)) continue;
         if (packet->source_port<filter->src_port.lower_bound || packet->source_port>filter->src_port.upper_bound || packet->destination_port<filter->dst_port.lower_bound || packet->destination_port>filter->dst_port.upper_bound) continue;
         return 1;
     }
@@ -251,6 +265,14 @@ static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_con
 
 // TS 29.244 V20.1.0 clause 5.4.4: apply every QER in CP binding
 // order. The first QER carrying QFI supplies QFI/RQI and DSCP marking.
+// Verify one QER independently; carrying each policer branch through the whole
+// binding loop otherwise exceeds the verifier's state bound on Linux 5.15.
+int apply_qer(struct qer_info *qer, __u64 packet_size, __u32 uplink) {
+    if (!qer) return -1;
+    if (uplink ? qer->ul_gate_status != GATE_STATUS_OPEN : qer->dl_gate_status != GATE_STATUS_OPEN) return -1;
+    if (XDP_DROP == limit_rate_sliding_window(packet_size, uplink ? &qer->ul_start : &qer->dl_start, uplink ? qer->ul_maximum_bitrate : qer->dl_maximum_bitrate)) return -1;
+    return ((__u32)qer->dscp << 8) | (qer->qfi_present ? 0x80 | (qer->qfi & 0x3f) | ((qer->rqi & 1) << 6) : 0);
+}
 int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
     if (!pdr || pdr->qer_count>4) return -1;
     __u32 marking=0;
@@ -258,11 +280,11 @@ int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
         if (i>=pdr->qer_count) break;
         __u32 id=pdr->qer_id[i];if (!id) return -1;
         struct qer_info *qer=bpf_map_lookup_elem(&qer_map,&id);
-        if (!qer) return -1;
-        if (uplink?qer->ul_gate_status!=GATE_STATUS_OPEN:qer->dl_gate_status!=GATE_STATUS_OPEN) return -1;
-        if (XDP_DROP==limit_rate_sliding_window(packet_size,uplink?&qer->ul_start:&qer->dl_start,uplink?qer->ul_maximum_bitrate:qer->dl_maximum_bitrate)) return -1;
-        if (!(marking>>8) && qer->dscp) marking |= (__u32)qer->dscp<<8;
-        if (!(marking&0x80) && qer->qfi_present) marking=(marking&0xff00)|0x80|(qer->qfi&0x3f)|((qer->rqi&1)<<6);
+        int result = apply_qer(qer, packet_size, uplink);
+        if (result < 0) return -1;
+        __u32 bits = result & 0xffff;
+        if (!(marking >> 8)) marking |= bits & 0xff00;
+        if (!(marking & 0x80)) marking |= bits & 0xff;
     }
     return marking;
 }

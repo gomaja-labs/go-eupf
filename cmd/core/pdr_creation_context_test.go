@@ -85,7 +85,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 				),
 				spdrInfo: &SPDRInfo{},
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "validFlowDescription",

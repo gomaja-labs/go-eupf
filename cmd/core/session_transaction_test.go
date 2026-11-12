@@ -17,7 +17,7 @@ func TestRejectedModificationKeepsAllSessionState(t *testing.T) {
 	before := cloneSession(session)
 	request := message.NewSessionModificationRequest(2, 1,
 		ie.NewRemoveFAR(ie.NewFARID(1)),
-		ie.NewCreatePDR(ie.NewPDRID(9), ie.NewPDI(ie.NewUEIPAddress(6, "192.0.2.9", "", 0, 0), ie.NewSDFFilter("invalid", nil, nil, nil, 0))))
+		ie.NewCreatePDR(ie.NewPDRID(9), ie.NewPDI(ie.NewUEIPAddress(6, "192.0.2.9", "", 0, 0), ie.NewSDFFilter("permit out 132 from any to any", nil, nil, nil, 0))))
 	response, _, err := HandlePfcpSessionModificationRequest(conn, request, peer)
 	if err != nil {
 		t.Fatal(err)

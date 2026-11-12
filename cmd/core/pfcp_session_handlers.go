@@ -123,6 +123,9 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 
 	logger.Debug().Msgf("session rules arter commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
 
+	if err := conn.bindAssignedAddresses(session); err != nil {
+		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
+	}
 	if err := conn.bindSessionReplies(session); err != nil {
 		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
 	}
@@ -310,6 +313,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
+	if err := conn.bindAssignedAddresses(session); err != nil {
+		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
+	}
 	if err := conn.bindSessionReplies(session); err != nil {
 		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
 	}

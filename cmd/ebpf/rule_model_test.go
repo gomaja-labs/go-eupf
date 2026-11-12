@@ -226,3 +226,54 @@ func TestDatapathCoreGTPIngressUsesN9Address(t *testing.T) {
 		t.Fatalf("Core PDI failed N9 ingress: action=%d", action)
 	}
 }
+
+func TestDatapathAssignedSDFMatchesTerminalAddressSet(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	filter := anyDatapathFilter(1)
+	filter.DstAddress.Type = 3
+	p := PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, AssignedIPv4: net.ParseIP("198.51.100.2"), AssignedIPv6: net.ParseIP("2001:db8::"), AssignedIPv6Mask: net.CIDRMask(64, 128), SdfFilter: []SdfFilter{filter}}
+	check := func(v6 bool, drop bool) {
+		t.Helper()
+		action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, v6), nil, 0x30, false))
+		if (action == 1) != drop {
+			t.Fatalf("v6=%v action=%d wantDrop=%v", v6, action, drop)
+		}
+	}
+	if err := b.PutPdrUplink(10, p); err != nil {
+		t.Fatal(err)
+	}
+	check(false, false)
+	check(true, false)
+	p.AssignedIPv4 = net.ParseIP("198.51.100.99")
+	p.AssignedIPv6 = net.ParseIP("2001:db8:1::")
+	if err := b.PutPdrUplink(10, p); err != nil {
+		t.Fatal(err)
+	}
+	check(false, true)
+	check(true, true)
+	p.AssignedIPv4, p.AssignedIPv6 = nil, nil
+	if err := b.PutPdrUplink(10, p); err != nil {
+		t.Fatal(err)
+	}
+	check(false, true)
+	check(true, true)
+}
+
+func TestDatapathFifthSDFFilterIsSelectable(t *testing.T) {
+	b := loadDatapath(t)
+	filters := make([]SdfFilter, 5)
+	for i := range filters {
+		filters[i] = anyDatapathFilter(2)
+	}
+	filters[4] = anyDatapathFilter(3)
+	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, SdfFilter: filters}); err != nil {
+		t.Fatal(err)
+	}
+	action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false))
+	if action == 1 {
+		t.Fatal("fifth SDF Filter did not match")
+	}
+}

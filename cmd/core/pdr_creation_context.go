@@ -5,6 +5,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -211,7 +212,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 
 	spdrInfo.PdrInfo.SdfFilter = nil
 	spdrInfo.PdrInfo.QFIs = nil
-	if len(pdi.SDFFilter) > ebpf.MaxSDFFiltersPerPDR || len(pdi.QFI) > ebpf.MaxQFIsPerPDR {
+	if len(pdi.QFI) > ebpf.MaxQFIsPerPDR {
 		return ebpf.ErrRuleCapacity
 	}
 	for _, field := range pdi.QFI {
@@ -232,14 +233,21 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 					}
 					// TS 29.244 V20.1.0 clause 5.2.1A.2A: CP descriptions
 					// assume downlink; Access PDRs reverse addresses and ports.
-					if spdrInfo.PdrInfo.SourceInterfacePresent && spdrInfo.SourceInterface == ie.SrcInterfaceAccess {
+					if spdrInfo.PdrInfo.SourceInterfacePresent && (spdrInfo.SourceInterface == ie.SrcInterfaceAccess) != (sdfFilterParsed.Direction == "in") {
 						sdfFilterParsed.SrcAddress, sdfFilterParsed.DstAddress = sdfFilterParsed.DstAddress, sdfFilterParsed.SrcAddress
 						sdfFilterParsed.SrcPortRange, sdfFilterParsed.DstPortRange = sdfFilterParsed.DstPortRange, sdfFilterParsed.SrcPortRange
 					}
 					spdrInfo.PdrInfo.SdfFilter = append(spdrInfo.PdrInfo.SdfFilter, sdfFilterParsed)
+					if len(spdrInfo.PdrInfo.SdfFilter) > ebpf.MaxSDFFiltersPerPDR {
+						return ebpf.ErrRuleCapacity
+					}
 				} else {
-					log.Error().Msgf("SDFFilter err: %v", err)
-					return err
+					if errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
+						return err
+					}
+					// TS 29.244 V20.1.0 clause 7.6.8 and Table 7.5.2.2-2:
+					// a semantically incorrect optional SDF Filter is absent.
+					log.Warn().Err(err).Uint32("PDRID", spdrInfo.PdrID).Msg("Ignore semantically incorrect optional SDF Filter")
 				}
 			}
 		}
@@ -501,3 +509,56 @@ func (pdrContext *PDRCreationContext) hasSessionFTEID(teid uint32, source uint8,
 	}
 	return false
 }
+
+// bindAssignedAddresses resolves RFC 6733 section 4.3.1's terminal address set
+// after all PDIs and address allocations in the request have been processed.
+func (conn *PfcpConnection) bindAssignedAddresses(session *Session) error {
+	hasAssigned := false
+	for _, pdr := range session.PDRs {
+		for _, f := range pdr.PdrInfo.SdfFilter {
+			hasAssigned = hasAssigned || f.SrcAddress.Type == 3 || f.DstAddress.Type == 3
+		}
+	}
+	if !hasAssigned {
+		return nil
+	}
+	var ip4, ip6 net.IP
+	var mask6 net.IPMask
+	for _, pdr := range session.PDRs {
+		if pdr.Ipv4 != nil {
+			if ip4 != nil && !ip4.Equal(pdr.Ipv4) {
+				return fmt.Errorf("multiple assigned IPv4 addresses: %w", ebpf.ErrUnsupportedRuleContent)
+			}
+			ip4 = pdr.Ipv4
+		}
+		if pdr.Ipv6 != nil {
+			if ip6 != nil && (!ip6.Equal(pdr.Ipv6) || !bytes.Equal(mask6, pdr.PdrInfo.UEIPv6Mask)) {
+				return fmt.Errorf("multiple assigned IPv6 prefixes: %w", ebpf.ErrUnsupportedRuleContent)
+			}
+			ip6, mask6 = pdr.Ipv6, pdr.PdrInfo.UEIPv6Mask
+		}
+	}
+	for id, pdr := range session.PDRs {
+		assigned := false
+		for _, filter := range pdr.PdrInfo.SdfFilter {
+			assigned = assigned || filter.SrcAddress.Type == 3 || filter.DstAddress.Type == 3
+		}
+		if !assigned {
+			continue
+		}
+		if ip4 == nil && ip6 == nil {
+			return &ruleFailure{ie.RuleIDTypePDR, id, fmt.Errorf("assigned address is unavailable: %w", ebpf.ErrUnsupportedRuleContent)}
+		}
+		if pdr.PdrInfo.AssignedIPv4.Equal(ip4) && pdr.PdrInfo.AssignedIPv6.Equal(ip6) && bytes.Equal(pdr.PdrInfo.AssignedIPv6Mask, mask6) {
+			continue
+		}
+		pdr.PdrInfo.AssignedIPv4, pdr.PdrInfo.AssignedIPv6 = cloneIP(ip4), cloneIP(ip6)
+		pdr.PdrInfo.AssignedIPv6Mask = append(net.IPMask(nil), mask6...)
+		if err := applyPDR(pdr, conn.mapOperations); err != nil {
+			return &ruleFailure{ie.RuleIDTypePDR, id, err}
+		}
+		session.PDRs[id] = pdr
+	}
+	return nil
+}
+

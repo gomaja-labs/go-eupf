@@ -9,7 +9,7 @@
 #define QER_MAP_SIZE MAX_SESSIONS       //  1 QWR per session
 #define URR_LIST_SIZE 3                 //  3 URR per session
 #define URR_MAP_SIZE MAX_SESSIONS * URR_LIST_SIZE
-#define SDF_LIST_SIZE 2
+#define SDF_LIST_SIZE 5
 
 #define XSTR(x) STR(x)
 #define STR(x) #x

@@ -72,6 +72,12 @@ type IpEntrypointPdrEntry struct {
 	UeMask6                [16]uint8
 	UeIp4Present           uint8
 	UeIp6Present           uint8
+	_                      [2]byte
+	AssignedIp4            uint32
+	AssignedIp6            [16]uint8
+	AssignedMask6          [16]uint8
+	AssignedIp4Present     uint8
+	AssignedIp6Present     uint8
 	UeDestination          uint8
 	SourceInterfacePresent uint8
 	SourceInterface        uint8
@@ -80,8 +86,8 @@ type IpEntrypointPdrEntry struct {
 	SdfCount               uint8
 	QfiCount               uint8
 	Qfis                   [8]uint8
-	_                      [15]byte
-	SdfFilters             [2]struct {
+	_                      [7]byte
+	SdfFilters             [5]struct {
 		Protocol uint8
 		_        [15]byte
 		SrcAddr  struct {

@@ -177,7 +177,7 @@ func validatePDICapability(pdi *ie.IE) error {
 	if err := rejectUnsupportedFields(f, "SourceInterface", "LocalFTEID", "NetworkInstance", "UEIPAddress", "SDFFilter", "QFI"); err != nil {
 		return err
 	}
-	if len(f.SDFFilter) > ebpf.MaxSDFFiltersPerPDR || len(f.QFI) > ebpf.MaxQFIsPerPDR {
+	if len(f.QFI) > ebpf.MaxQFIsPerPDR {
 		return ebpf.ErrRuleCapacity
 	}
 	if len(f.UEIPAddress) > 1 {

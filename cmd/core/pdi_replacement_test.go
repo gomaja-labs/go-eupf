@@ -1,7 +1,6 @@
 package core
 
 import (
-	"errors"
 	"net"
 	"testing"
 
@@ -28,6 +27,7 @@ func TestPDIUpdateReplacesEveryMatchField(t *testing.T) {
 func TestUplinkSDFReversesDownlinkDescription(t *testing.T) {
 	s := NewSession(9, 42, "", "", false)
 	context := NewPDRCreationContext(s, nil)
+	context.Restoration = true
 	info := SPDRInfo{PdrID: 1}
 	request := ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceAccess), ie.NewFTEID(1, 10, net.ParseIP("192.0.2.1"), nil, 0), ie.NewUEIPAddress(2, "10.0.0.1", "", 0, 0), ie.NewSDFFilter("permit out udp from 1.1.1.1 53 to 10.0.0.1 1234", nil, nil, nil, 0)))
 	if err := context.extractPDR(request, &info); err != nil {
@@ -36,12 +36,5 @@ func TestUplinkSDFReversesDownlinkDescription(t *testing.T) {
 	f := info.PdrInfo.SdfFilter[0]
 	if !f.SrcAddress.Ip.Equal(net.ParseIP("10.0.0.1")) || !f.DstAddress.Ip.Equal(net.ParseIP("1.1.1.1")) || f.SrcPortRange.LowerBound != 1234 || f.DstPortRange.LowerBound != 53 {
 		t.Fatalf("incorrect uplink filter: %+v", f)
-	}
-}
-
-func TestUnresolvedAssignedSDFIsRejected(t *testing.T) {
-	_, err := ParseSdfFilter("permit out udp from any to assigned")
-	if !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
-		t.Fatalf("unresolved assigned widened to any: %v", err)
 	}
 }

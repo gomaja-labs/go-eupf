@@ -31,7 +31,7 @@ const (
 	MaxQERsPerPDR       = 4
 	MaxURRsPerPDR       = 3
 	MaxPDRsPerKey       = 4
-	MaxSDFFiltersPerPDR = 2
+	MaxSDFFiltersPerPDR = 5
 	MaxQFIsPerPDR       = 8
 )
 
@@ -53,6 +53,9 @@ type PdrInfo struct {
 	UrrIDs                    []uint32    `json:"urr_ids"`
 	SdfFilter                 []SdfFilter `json:"sdf_filters"`
 	QFIs                      []uint8     `json:"qfis"`
+	AssignedIPv4              net.IP      `json:"assigned_ipv4"`
+	AssignedIPv6              net.IP      `json:"assigned_ipv6"`
+	AssignedIPv6Mask          net.IPMask  `json:"assigned_ipv6_mask"`
 	UEIPv4                    net.IP      `json:"ue_ipv4"`
 	UEIPv6                    net.IP      `json:"ue_ipv6"`
 	UEIPv6Mask                net.IPMask  `json:"ue_ipv6_mask"`
@@ -65,7 +68,8 @@ type PdrInfo struct {
 }
 
 type SdfFilter struct {
-	Protocol     uint8 // 0: icmp, 1: ip, 2: tcp, 3: udp, 4: icmp6
+	Direction    string `json:"direction,omitempty"`
+	Protocol     uint8  // 0: icmp, 1: ip, 2: tcp, 3: udp, 4: icmp6
 	SrcAddress   IpWMask
 	SrcPortRange PortRange
 	DstAddress   IpWMask
@@ -73,7 +77,7 @@ type SdfFilter struct {
 }
 
 type IpWMask struct {
-	Type uint8 // 0: any, 1: ip4, 2: ip6
+	Type uint8 // 0: any, 1: ip4, 2: ip6, 3: session-assigned addresses
 	Ip   net.IP
 	Mask net.IPMask
 }
@@ -131,16 +135,19 @@ func (b *BpfObjects) PutPdrUplink(teid uint32, info PdrInfo) error {
 	return b.PdrMapTeidIp4.Put(teid, &bucket)
 }
 func (b *BpfObjects) PutPdrDownlink(ip net.IP, info PdrInfo) error {
+	return b.putPdrDownlink(ip, info, false)
+}
+func (b *BpfObjects) putPdrDownlink(ip net.IP, info PdrInfo, replacing bool) error {
 	m, key, err := b.downlinkRuleMap(ip, info.UEIPv6Mask)
 	if err != nil {
 		return err
 	}
 	if ip.To4() == nil {
-		if err := b.checkIPv6Overlap(key.(IpEntrypointIpv6PdrKey), info.SessionID); err != nil {
+		if err := b.checkIPv6Overlap(key.(IpEntrypointIpv6PdrKey), info.SessionID, replacing); err != nil {
 			return err
 		}
 	}
-	bucket, err := preparePDR(m.Lookup, key, info)
+	bucket, err := preparePDR(func(k, v interface{}) error { return lookupRuleValue(m, k, v) }, key, info)
 	if err != nil {
 		return err
 	}
@@ -155,7 +162,7 @@ func (b *BpfObjects) UpdatePdrDownlink(ip net.IP, info PdrInfo) error {
 
 func deletePDR(m *ebpf.Map, key interface{}, sessionID uint64, pdrID uint32) error {
 	var bucket IpEntrypointPdrInfo
-	if err := m.Lookup(key, &bucket); err != nil {
+	if err := lookupRuleValue(m, key, &bucket); err != nil {
 		if isKeyAbsent(err) {
 			return nil
 		}
@@ -531,6 +538,22 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 		}
 		copy(entry.UeMask6[:], mask)
 	}
+	if ip := info.AssignedIPv4.To4(); ip != nil {
+		entry.AssignedIp4Present = 1
+		entry.AssignedIp4 = binary.LittleEndian.Uint32(ip)
+	}
+	if ip := info.AssignedIPv6.To16(); ip != nil && info.AssignedIPv6.To4() == nil {
+		entry.AssignedIp6Present = 1
+		copy(entry.AssignedIp6[:], ip)
+		mask := info.AssignedIPv6Mask
+		if mask == nil {
+			mask = net.CIDRMask(128, 128)
+		}
+		if len(mask) != 16 {
+			return entry, fmt.Errorf("invalid assigned IPv6 mask")
+		}
+		copy(entry.AssignedMask6[:], mask)
+	}
 	entry.QfiCount = uint8(len(info.QFIs))
 	copy(entry.Qfis[:], info.QFIs)
 	entry.SdfCount = uint8(len(info.SdfFilter))
@@ -571,6 +594,14 @@ func DecodePDRBucket(bucket IpEntrypointPdrInfo) []PdrInfo {
 			info.UEIPv6 = append(net.IP(nil), entry.UeIp6[:]...)
 			info.UEIPv6Mask = append(net.IPMask(nil), entry.UeMask6[:]...)
 		}
+		if entry.AssignedIp4Present != 0 {
+			info.AssignedIPv4 = make(net.IP, 4)
+			binary.LittleEndian.PutUint32(info.AssignedIPv4, entry.AssignedIp4)
+		}
+		if entry.AssignedIp6Present != 0 {
+			info.AssignedIPv6 = append(net.IP(nil), entry.AssignedIp6[:]...)
+			info.AssignedIPv6Mask = append(net.IPMask(nil), entry.AssignedMask6[:]...)
+		}
 		for _, filter := range entry.SdfFilters[:min(int(entry.SdfCount), MaxSDFFiltersPerPDR)] {
 			info.SdfFilter = append(info.SdfFilter, SdfFilter{Protocol: filter.Protocol, SrcAddress: decodeSubnet(filter.SrcAddr.Type, filter.SrcAddr.Ip, filter.SrcAddr.Mask), DstAddress: decodeSubnet(filter.DstAddr.Type, filter.DstAddr.Ip, filter.DstAddr.Mask), SrcPortRange: PortRange{filter.SrcPort.LowerBound, filter.SrcPort.UpperBound}, DstPortRange: PortRange{filter.DstPort.LowerBound, filter.DstPort.UpperBound}})
 		}
@@ -579,8 +610,8 @@ func DecodePDRBucket(bucket IpEntrypointPdrInfo) []PdrInfo {
 	return result
 }
 func decodeSubnet(kind uint8, ip, mask [16]byte) IpWMask {
-	if kind == 0 {
-		return IpWMask{}
+	if kind == 0 || kind == 3 {
+		return IpWMask{Type: kind}
 	}
 	size := 16
 	if kind == 1 {
@@ -650,7 +681,7 @@ func (b *BpfObjects) LookupDownlinkPDR(ip net.IP) (IpEntrypointPdrInfo, error) {
 	err = m.Lookup(key, &bucket)
 	return bucket, err
 }
-func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64) error {
+func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64, replacing bool) error {
 	var existing IpEntrypointIpv6PdrKey
 	var value IpEntrypointPdrInfo
 	iter := b.PdrMapDownlinkIp6.Iterate()
@@ -664,7 +695,9 @@ func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64) 
 			if value.SessionId != owner {
 				return ErrKeyOwned
 			}
-			return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
+			if !replacing {
+				return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
+			}
 		}
 	}
 	return iter.Err()
@@ -688,4 +721,26 @@ func (b *BpfObjects) ResetUrr(id uint32) error {
 		return fmt.Errorf("reserved URR slot")
 	}
 	return b.UrrMap.Put(id, &IpEntrypointUrrInfo{})
+}
+
+// lookupRuleValue requires an exact rule key. LPM lookup may otherwise return a
+// covering prefix during make-before-break, which is a distinct map entry.
+func lookupRuleValue(m *ebpf.Map, key, value interface{}) error {
+	if err := m.Lookup(key, value); err != nil {
+		return err
+	}
+	prefix, ok := key.(IpEntrypointIpv6PdrKey)
+	if !ok {
+		return nil
+	}
+	bucket, ok := value.(*IpEntrypointPdrInfo)
+	if !ok || bucket.Count == 0 {
+		return ebpf.ErrKeyNotExist
+	}
+	bits, _ := net.IPMask(bucket.Entries[0].UeMask6[:]).Size()
+	if uint32(bits) != prefix.PrefixLength {
+		*bucket = IpEntrypointPdrInfo{}
+		return ebpf.ErrKeyNotExist
+	}
+	return nil
 }
