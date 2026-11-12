@@ -1,0 +1,18 @@
+---
+# Everything required to start the pod (privileged security context,
+# net.ipv4.ip_forward sysctl, /sys hostPath, default UPF_* env, probes,
+# resources, service ports) now lives in the chart defaults (ENV mode).
+# This profile only carries dev-environment specifics.
+
+global:
+  imagePullPolicy: Always
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+    endpoints:
+      port: metrics
+      path: "/metrics"

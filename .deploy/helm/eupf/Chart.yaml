@@ -1,0 +1,5 @@
+apiVersion: v2
+name: eupf
+version: 1.0.0
+appVersion: 1.0.0-rc.1
+description: Helm chart for deploy eUPF to Kubernetes

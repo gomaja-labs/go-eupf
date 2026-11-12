@@ -1,0 +1,28 @@
+---
+# Test environment: ConfigMap-based configuration (config.enabled=true).
+# In this mode the chart creates a ConfigMap from config.data, mounts it at
+# /app/conf and runs the container with `--config /app/conf/config.yml`.
+# Default UPF_* env injection is disabled (env vars would override the file).
+
+config:
+  enabled: true
+  data:
+    config.yml: |
+      interface_name: lo
+      api_address: :8080
+      pfcp_address: :8805
+      pfcp_node_id: localhost
+      metrics_address: :9090
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+    endpoints:
+      port: metrics
+      path: "/metrics"
+
+imagePullSecrets:
+  - name: gh-container-registry

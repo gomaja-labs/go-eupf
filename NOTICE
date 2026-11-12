@@ -1,0 +1,11 @@
+go-eupf
+Copyright 2026 the go-eupf authors
+
+This product includes software developed by Edgecom LLC
+(Copyright 2023-2026 Edgecom LLC), licensed under the Apache License,
+Version 2.0.
+
+The go-eupf authors modified that software in 2026. The changes cover the
+Go module path, the build, CI and deployment configuration, and the
+documentation. Changed source files that carry a copyright header also
+carry the line "Copyright 2026 the go-eupf authors".
