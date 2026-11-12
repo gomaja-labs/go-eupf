@@ -23,7 +23,7 @@ type NodeAssociationDescription struct {
 //	@Description	List PFCP associations
 //	@Tags			PFCP
 //	@Produce		json
-//	@Success		200	{object}	NodeAssociationDescription
+//	@Success		200	{array}	NodeAssociationDescription
 //	@Router			/pfcp_associations [get]
 func (h *ApiHandler) listPfcpAssociations(c *gin.Context) {
 
@@ -57,6 +57,11 @@ func (h *ApiHandler) listPfcpAssociationsFull(c *gin.Context) {
 	c.IndentedJSON(http.StatusOK, associations)
 }
 
+// pfcpAssociationRelease requests release of every association.
+// @Summary Release PFCP associations
+// @Tags PFCP
+// @Success 204 "No Content"
+// @Router /pfcp_associations/release [get]
 func (h *ApiHandler) pfcpAssociationRelease(c *gin.Context) {
 	h.associationReleaseChan <- struct{}{}
 

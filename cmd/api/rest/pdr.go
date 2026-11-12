@@ -112,7 +112,7 @@ func (h *ApiHandler) setUplinkPdrValue(c *gin.Context) {
 //	@Description Retrieve downlink PDR map element by IP address
 //	@Tags PDR
 //	@Produce json
-//	@Param ip path string true "IP Address (IPv4 or IPv6)"
+//	@Param id path string true "IP Address (IPv4 or IPv6)"
 //	@Success 200 {object} PdrDownlinkElement
 //	@Failure 400 {object} map[string]string
 //	@Failure 404 {object} map[string]string
@@ -164,7 +164,7 @@ func (h *ApiHandler) getDownlinkPdrValue(c *gin.Context) {
 //	@Tags PDR
 //	@Accept json
 //	@Produce json
-//	@Param ip path string true "IP Address (IPv4 or IPv6)"
+//	@Param id path string true "IP Address (IPv4 or IPv6)"
 //	@Param pdr body PdrDownlinkElement true "PDR element data"
 //	@Success 201 {object} PdrDownlinkElement
 //	@Failure 400 {object} map[string]string
