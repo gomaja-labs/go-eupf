@@ -3,6 +3,7 @@ package file
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,7 +41,10 @@ func (r *FileRepository) BackupList(ctx context.Context) ([]domain.BackupRecord,
 			continue
 		}
 
-		info, _ := e.Info()
+		info, err := e.Info()
+		if err != nil {
+			return nil, fmt.Errorf("read backup info: %w", err)
+		}
 		name := strings.TrimSuffix(info.Name(), ".zip")
 
 		backups = append(backups, domain.BackupRecord{
@@ -52,7 +56,7 @@ func (r *FileRepository) BackupList(ctx context.Context) ([]domain.BackupRecord,
 	return backups, nil
 }
 
-func (r *FileRepository) SaveUpfConfig(ctx context.Context, config *domain.UpfConfig) error {
+func (r *FileRepository) SaveUpfConfig(ctx context.Context, config *domain.UpfConfig) (retErr error) {
 	err := os.MkdirAll(r.backupDir, os.ModePerm)
 	if err != nil {
 		return err
@@ -65,10 +69,10 @@ func (r *FileRepository) SaveUpfConfig(ctx context.Context, config *domain.UpfCo
 	if err != nil {
 		return err
 	}
-	defer zipFile.Close()
+	defer func() { retErr = errors.Join(retErr, zipFile.Close()) }()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	defer func() { retErr = errors.Join(retErr, zipWriter.Close()) }()
 
 	configFile, err := zipWriter.Create("config.yaml")
 	if err != nil {
@@ -84,7 +88,7 @@ func (r *FileRepository) SaveUpfConfig(ctx context.Context, config *domain.UpfCo
 	return err
 }
 
-func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (*domain.UpfConfig, error) {
+func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (_ *domain.UpfConfig, retErr error) {
 	if !strings.HasSuffix(name, ".zip") {
 		name = name + ".zip"
 	}
@@ -95,7 +99,7 @@ func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (*domai
 	if err != nil {
 		return nil, err
 	}
-	defer zipReader.Close()
+	defer func() { retErr = errors.Join(retErr, zipReader.Close()) }()
 
 	var configFile *zip.File
 	for _, file := range zipReader.File {
@@ -113,7 +117,7 @@ func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (*domai
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { retErr = errors.Join(retErr, rc.Close()) }()
 
 	configData, err := io.ReadAll(rc)
 	if err != nil {

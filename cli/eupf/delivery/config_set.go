@@ -147,9 +147,9 @@ func (cli *CLI) newSetDataPlaneEbpf() *cobra.Command {
 	}
 
 	cmd.Flags().StringArrayVarP(&interfaces, "interfaces", "i", nil, "Network interfaces for eBPF binding (required)")
-	cmd.MarkFlagRequired("interfaces")
+	cmd.MarkFlagsOneRequired("interfaces")
 	cmd.Flags().StringVar(&xdpAttachMode, "xdp-attach", "", "XDP attach mode (generic, native, offload) (required)")
-	cmd.MarkFlagRequired("xdp-attach")
+	cmd.MarkFlagsOneRequired("xdp-attach")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -184,9 +184,9 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().StringVar(&n3, "n3", "", "IP address for N3 interface (required)")
-	cmd.MarkFlagRequired("n3")
+	cmd.MarkFlagsOneRequired("n3")
 	cmd.Flags().StringVar(&n9, "n9", "", "IP address for N9 interface (required)")
-	cmd.MarkFlagRequired("n9")
+	cmd.MarkFlagsOneRequired("n9")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -223,11 +223,11 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().StringVar(&pfcpAddress, "addr", "", "Local PFCP address for N4 interface (required)")
-	cmd.MarkFlagRequired("addr")
+	cmd.MarkFlagsOneRequired("addr")
 	cmd.Flags().StringVar(&pfcpNodeId, "node", "", "PFCP Node ID identifier (required)")
-	cmd.MarkFlagRequired("node")
+	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&pfcpRemoteNode, "remote", "r", nil, "PFCP remote node addresses (required)")
-	cmd.MarkFlagRequired("remote")
+	cmd.MarkFlagsOneRequired("remote")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -264,11 +264,11 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().StringVar(&sxaAddress, "addr", "", "Local PFCP address for Sxa interface (required)")
-	cmd.MarkFlagRequired("addr")
+	cmd.MarkFlagsOneRequired("addr")
 	cmd.Flags().StringVar(&sxaNodeId, "node", "", "PFCP Node ID for Sxa (required)")
-	cmd.MarkFlagRequired("node")
+	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&sxaRemoteNode, "remote", "r", nil, "Sxa remote node addresses (required)")
-	cmd.MarkFlagRequired("remote")
+	cmd.MarkFlagsOneRequired("remote")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -305,11 +305,11 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().StringVar(&sxbAddress, "addr", "", "Local PFCP address for Sxb interface (required)")
-	cmd.MarkFlagRequired("addr")
+	cmd.MarkFlagsOneRequired("addr")
 	cmd.Flags().StringVar(&sxbNodeId, "node", "", "PFCP Node ID for Sxb (required)")
-	cmd.MarkFlagRequired("node")
+	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&sxbRemoteNode, "remote", "r", nil, "Sxb remote node addresses (required)")
-	cmd.MarkFlagRequired("remote")
+	cmd.MarkFlagsOneRequired("remote")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -344,9 +344,9 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().Uint32Var(&associationSetupTimeout, "assoc-timeout", 0, "Association setup timeout in seconds (required)")
-	cmd.MarkFlagRequired("assoc-timeout")
+	cmd.MarkFlagsOneRequired("assoc-timeout")
 	cmd.Flags().Uint32Var(&heartbeatTimeout, "heartbeat-timeout", 0, "Heartbeat timeout in seconds (required)")
-	cmd.MarkFlagRequired("heartbeat-timeout")
+	cmd.MarkFlagsOneRequired("heartbeat-timeout")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
 
 	return cmd
@@ -384,9 +384,9 @@ Overrides configuration parameters:
 	}
 
 	cmd.Flags().StringArrayVarP(&gtpPeer, "peers", "p", nil, "GTP peer addresses (required)")
-	cmd.MarkFlagRequired("peers")
+	cmd.MarkFlagsOneRequired("peers")
 	cmd.Flags().Uint32Var(&gtpEchoInterval, "echo-interval", 1, "GTP echo interval in seconds (required)")
-	cmd.MarkFlagRequired("echo-interval")
+	cmd.MarkFlagsOneRequired("echo-interval")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address")
 
 	return cmd
