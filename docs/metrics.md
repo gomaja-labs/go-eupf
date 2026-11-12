@@ -11,7 +11,7 @@ Metric Name         | Description                                               
 upf_pfcp_rx         | The total number of received PFCP messages                 | `message_name`
 upf_pfcp_tx         | The total number of transmitted PFCP messages              | `message_name`
 upf_pfcp_rx_errors  | The total number of received PFCP messages with cause code | `message_name`, `cause_code`
-upf_pfcp_rx_latency | The total number of PFCP messages processing duration      | `message_type`
+pfcp_upf_pfcp_rx_latency | PFCP request processing duration summary      | `message_type`
 
 ## XDP Action metrics
 

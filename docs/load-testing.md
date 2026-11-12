@@ -130,7 +130,6 @@ trex>start -f stl/gtp_1pkt_simple.py -p 0 -m 5mpps -d 300
 
 1. Set FAR with ID = 0 and action = `forward`
 ```bash
-curl -H 'Content-Type: application/json' -X PUT -d '{"action":2, "outer_header_creation":0,"teid":0,"remote_ip":0, "local_ip": 0,"transport_level_marking": 0}' http://localhost:8080/api/v1/far_map/0
 ```
 
 2. Set QER with ID = 0 and no bitrate limitations
@@ -204,7 +203,6 @@ Consider following test scenarios:
 ```bash
 helm upgrade --install \
   iperf3 oci://registry-1.docker.io/gradiant/iperf3 \
-  --values docs/examples/open5gs/iperf.yaml \
   --version 0.1.2 \
   --namespace open5gs \
   --wait --timeout 30s --create-namespace
@@ -364,7 +362,6 @@ HOST: ueransim-ueransim-gnb-ues-5 Loss%   Snt   Last   Avg  Best  Wrst StDev
 ```bash
 helm upgrade --install \
   iperf3 oci://registry-1.docker.io/gradiant/iperf3 \
-  --values docs/examples/free5gc/iperf.yaml \
   --version 0.1.2 \
   --namespace free5gc \
   --wait --timeout 30s --create-namespace

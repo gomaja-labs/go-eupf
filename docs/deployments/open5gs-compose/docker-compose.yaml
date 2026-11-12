@@ -183,6 +183,7 @@ services:
       GIN_MODE: release
       UPF_INTERFACE_NAME: eth0
       UPF_XDP_ATTACH_MODE: generic
+      UPF_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
       UPF_API_ADDRESS: ":8081"
       UPF_PFCP_ADDRESS: ":8805"
       UPF_METRICS_ADDRESS: ":9091"

@@ -36,7 +36,10 @@ services:
     container_name: eupf
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
-    command: --iface eth0 --iface eth1 --n3addr 192.168.71.134 --nodeid 192.168.71.134 --paddr 192.168.71.134:8805 --attach generic --loglvl trace --feature_ftup true --teid_pool 65535
+    environment:
+      UPF_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
+      UPF_API_ADDRESS: ":8080"
+    command: --iface eth0 --iface eth1 --n3addr 192.168.71.134 --nodeid 192.168.71.134 --paddr 192.168.71.134:8805 --attach generic --loglvl trace --ftup=true --teidpool 65535
     volumes:
       - /sys/fs/bpf:/sys/fs/bpf
       - ./eupf/entrypoint.sh:/app/bin/entrypoint.sh

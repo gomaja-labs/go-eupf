@@ -41,13 +41,13 @@ Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
 <details><summary><i>See startup parameters you might want to change</i></summary>
 <p>
 
-   - UPF_INTERFACE_NAME=lo    *Network interfaces handling N3 (GTP) & N6 (SGi) traffic.*
+   - UPF_INTERFACE_NAME=eth0  *Network interfaces handling N3 (GTP) & N6 (SGi) traffic.*
    - UPF_N3_ADDRESS=127.0.0.1 *IPv4 address for N3 interface*
    - UPF_N9_ADDRESS=127.0.0.1 *IPv4 address for N9 interface*
-   - UPF_XDP_ATTACH_MODE=generic *XDP attach mode. Generic-only at the moment*
-   - UPF_API_ADDRESS=:8080    *Local host:port for serving [REST API](api.md) server*
-   - UPF_PFCP_ADDRESS=:8805   *Local host:port that PFCP server will listen to*
-   - UPF_PFCP_NODE_ID=127.0.0.1  *Local NodeID for PFCP protocol. Format is IPv4 address*
+   - UPF_XDP_ATTACH_MODE=generic *XDP attach mode. generic, native or offload (driver support required)*
+   - UPF_API_ADDRESS=127.0.0.1:8080    *Local host:port for serving [REST API](docs/api.md) server*
+   - UPF_PFCP_ADDRESS=127.0.0.1:8805   *Local host:port that PFCP server will listen to*
+   - UPF_PFCP_NODE_ID=127.0.0.1  *Local NodeID for PFCP protocol. Format is a hostname or IP address*
    - UPF_METRICS_ADDRESS=:9090   *Local host:port for serving Prometheus metrics endpoint*
    - UPF_MAX_SESSIONS=65535      *Maximum number of sessions. Automatically sizes the eBPF maps when individual map sizes are not set*
    - UPF_PDR_MAP_SIZE=0          *Size of the PDR eBPF map. Overrides the value derived from max_sessions when set (non-zero). See also QER/FAR/URR_MAP_SIZE*
@@ -245,3 +245,7 @@ This project is licensed under the [Apache License 2.0](https://www.apache.org/l
 [test-img]: https://github.com/gomaja-labs/go-eupf/actions/workflows/ci.yml/badge.svg
 [license]: https://github.com/gomaja-labs/go-eupf/blob/main/LICENSE
 [license-img]: https://img.shields.io/badge/License-Apache%202.0-blue.svg
+
+### Administration security
+
+The REST API defaults to `127.0.0.1:8080`. Set `api_token` or `UPF_API_TOKEN` before binding it to a non-loopback address. When configured, the token is required as `Authorization: Bearer <token>` for every management and Swagger route; only `GET /api/v1/health` is public. Browser access requires an explicit `api_allowed_origins` list. Use TLS through a trusted proxy or a private management tunnel when accessing the API across hosts. The separate metrics listener should remain on a private network. See [API documentation](docs/api.md) and the [Helm chart](.deploy/helm/eupf/README.md).

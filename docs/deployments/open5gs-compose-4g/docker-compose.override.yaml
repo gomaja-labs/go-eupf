@@ -10,6 +10,7 @@ services:
       GIN_MODE: release
       UPF_INTERFACE_NAME: eth0
       UPF_XDP_ATTACH_MODE: generic
+      UPF_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
       UPF_API_ADDRESS: ":8081"
       UPF_PFCP_ADDRESS: "localhost:8805"
       UPF_SXA_ADDRESS: "sgwu:8805"
@@ -20,7 +21,7 @@ services:
       UPF_PFCP_NODE_ID: "172.20.0.100"
       UPF_N9_ADDRESS: ${SGWU_IP}
       UPF_GTP_PEER: ${SRS_ENB_IP}:2152
-      UPF_HUAWEI_SUPPORT: false
+      UPF_PFCP_PROFILE: huawei
       UPF_LOGGING_LEVEL: debug
     entrypoint: ""
     command:
@@ -43,6 +44,9 @@ services:
       - net.ipv4.conf.all.forwarding=1
 
   eupf-cli:
+    image: ghcr.io/gomaja-labs/go-eupf-cli:main
+    environment:
+      CLI_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
     build:
       context: ../../../
       target: cli
@@ -61,6 +65,7 @@ services:
       GIN_MODE: release
       UPF_INTERFACE_NAME: eth0
       UPF_XDP_ATTACH_MODE: generic
+      UPF_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
       UPF_API_ADDRESS: ":8081"
       UPF_PFCP_ADDRESS: "localhost:8805"
       UPF_SXB_ADDRESS: "upf:8805"
@@ -71,7 +76,7 @@ services:
       UPF_N9_ADDRESS: ${UPF_IP}
       UPF_PFCP_NODE_ID: "172.20.0.100"
       UPF_N3_ADDRESS: "172.20.0.100"
-      UPF_HUAWEI_SUPPORT: false
+      UPF_PFCP_PROFILE: huawei
       UPF_LOGGING_LEVEL: debug
     entrypoint: ""
     command:

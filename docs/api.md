@@ -6,7 +6,7 @@ In addition to prometheus metrics (served on a separate `metrics_address` port, 
 
 Method | URL                    | Description                                                            | Example
 ------ | ---------------------- | ---------------------------------------------------------------------- | ----------------------
-`GET`  | `/api/v1/health`       | Health check (liveness probe). Returns `OK`                            | `/api/v1/health`
+`GET`  | `/api/v1/health`       | Health check (liveness probe). Returns the JSON string `"OK"`                            | `/api/v1/health`
 `GET`  | `/api/v1/xdp_stats`    | Displays the XDP statistics. Returns an object of `XdpStats`           | `/api/v1/xdp_stats`
 `GET`  | `/api/v1/packet_stats` | Displays the PACKET statistics. Returns an object of `PacketStats`     | `/api/v1/packet_stats`
 `GET`  | `/api/v1/route_stats`  | Displays FIB route lookup statistics. Returns an object of `RouteStats` | `/api/v1/route_stats`
@@ -139,8 +139,8 @@ Method | URL                                  | Description                     
 ```json
 {
   "gtp_peer": [
-    "10.100.200.30",
-    "10.100.200.31"
+    "10.100.200.30:2152",
+    "10.100.200.31:2152"
   ],
   "gtp_echo_interval": 10
 }
@@ -150,8 +150,8 @@ Method | URL                                  | Description                     
 
 Method | URL                           | Description                                                         | Example
 ------ | ----------------------------- | ------------------------------------------------------------------- | --------------------------
-`GET`  | `/api/v1/uplink_pdr_map/{id}` | Get Uplink PDR values by TEID. Returns an object of `PdrElement`    | `/api/v1/uplink_pdr_map/1`
-`PUT`  | `/api/v1/uplink_pdr_map/{id}` | Set Uplink PDR values by TEID. Returns a new object of `PdrElement` | `/api/v1/uplink_pdr_map/1`
+`GET`  | `/api/v1/uplink_pdr_map/{id}` | Get Uplink PDR values by TEID. Returns an object of `PdrUplinkElement`    | `/api/v1/uplink_pdr_map/1`
+`PUT`  | `/api/v1/uplink_pdr_map/{id}` | Set Uplink PDR values by TEID. Returns a new object of `PdrUplinkElement` | `/api/v1/uplink_pdr_map/1`
 
 [PUT] Example request body:
 
@@ -169,8 +169,8 @@ Method | URL                           | Description                            
 
 Method | URL                             | Description                                                                  | Example
 ------ | ------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------
-`GET`  | `/api/v1/downlink_pdr_map/{id}` | Get Downlink PDR values by IPv4 or IPv6\. Returns an object of `PdrElement`    | `/api/v1/downlink_pdr_map/2a03:d000:29a0:0509:0001:0000:1f86:9ec4`
-`PUT`  | `/api/v1/downlink_pdr_map/{id}` | Set Downlink PDR values by IPv4 or IPv6\. Returns a new object of `PdrElement` | `/api/v1/downlink_pdr_map/10.45.0.2`
+`GET`  | `/api/v1/downlink_pdr_map/{id}` | Get Downlink PDR values by IPv4 or IPv6\. Returns an object of `PdrDownlinkElement`    | `/api/v1/downlink_pdr_map/2a03:d000:29a0:0509:0001:0000:1f86:9ec4`
+`PUT`  | `/api/v1/downlink_pdr_map/{id}` | Set Downlink PDR values by IPv4 or IPv6\. Returns a new object of `PdrDownlinkElement` | `/api/v1/downlink_pdr_map/10.45.0.2`
 
 [PUT] Example request body:
 
@@ -216,7 +216,7 @@ Method | URL                              | Description                         
 Method   | URL                     | Description                                                                                                                                                | Example
 -------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -----------------------------------------------
 `GET`    | `/api/v1/pfcp_sessions` | Lists the PFCP sessions. If no parameters are given, returns all sessions. If ip or teid is given, returns filtered sessions. Returns a list of `Session`. | `/api/v1/pfcp_sessions?ip=192.168.1.1&teid=123`
-`DELETE` | `/api/v1/pfcp_sessions` | Deletes a PFCP session by IMSI, MSISDN or session ID. At least one parameter required. Returns status message.                                             | `/api/v1/pfcp_sessions?imsi=123456789012345`
+`DELETE` | `/api/v1/pfcp_sessions` | Deletes a PFCP session by IMSI, MSISDN or session ID. Exactly one parameter required. Returns status message.                                             | `/api/v1/pfcp_sessions?imsi=123456789012345`
 
 ### - Subscriber tracing
 
@@ -237,9 +237,20 @@ To explore and test the API, you can use the Swagger API documentation. To acces
 [Reference documentation](https://github.com/swaggo/gin-swagger)
 
 ```bash
-go install github.com/swaggo/swag/cmd/swag@v1.8.12
 cd {repo_root}
 go generate ./cmd/...
 ```
 
 This runs `go tool swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go` (see the `go:generate` directive in `cmd/main.go`).
+
+## Authentication and response formats
+
+The API listens on loopback by default. A non-loopback bind requires `UPF_API_TOKEN` (or `api_token` in the configuration). With a token configured, send `Authorization: Bearer <token>` on all management and Swagger requests. Only `GET /api/v1/health` is unauthenticated; it returns the JSON string `"OK"`. Set `api_allowed_origins` to explicit browser origins if needed; no cross-origin access is allowed by default. The metrics listener is separate and should stay private. Use TLS at a trusted reverse proxy or a private management tunnel across hosts.
+
+```bash
+curl -H "Authorization: Bearer $UPF_API_TOKEN" http://127.0.0.1:8080/api/v1/config
+```
+
+An empty session result currently serializes as JSON `null`. Session deletion takes exactly one query key (`imsi`, `msisdn` or `id`) and returns a JSON message/error object. Trace creation returns empty HTTP 201; a trace lookup with no matches returns empty HTTP 404. Association release returns empty HTTP 204. Configuration edits return HTTP 500 when the runtime edit is applied but the selected configuration file cannot be written.
+
+To change XDP attach mode, first submit `interface_name: []` with the current mode to detach all links, then submit the desired interfaces and mode. Changing the mode while links are active returns HTTP 409.

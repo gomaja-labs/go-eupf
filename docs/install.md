@@ -128,7 +128,7 @@ See docker-compose deployment examples with **open5gs**, **free5gc** and **OpenA
 - [helm](https://helm.sh/docs/intro/install/) installed
 - [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) installed, or <br>
   create CustomResource ServiceMonitor as a minimum: <br>
-  ```kubectl apply -f https://github.com/prometheus-community/helm-charts/raw/main/charts/kube-prometheus-stack/crds/crd-servicemonitors.yaml```
+  ```kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.90.1/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml```
 <!-- - deployed 5g core (open5gs or free5gc) -->
 
 In our environments, we use one node K8s cluster deployed by means of [kubespray](https://github.com/kubernetes-sigs/kubespray).
@@ -559,102 +559,15 @@ If connection can not set up, we recommend to restart components in next sequenc
 1. UERANSIM GnB
 1. UERANSIM UE
 
-## eUPF useful [API](api.md)
-- To check currently applied config use GET `/api/v1/config`
-- To check connected sessions use GET `/api/v1/pfcp_associations`
+## eUPF administration API
 
-You can forward api-port (8080 by default) from eUPF running container to your machine and use pretty GUI interface by opening the link http://localhost:8080/swagger/index.html in browser.
+Use `GET /api/v1/config` for configuration, `GET /api/v1/pfcp_associations` for brief association descriptors, `GET /api/v1/pfcp_associations/full` for full association details and `GET /api/v1/pfcp_sessions` for sessions. Configuration JSON keys use snake_case, for example `interface_name`, `xdp_attach_mode` and `api_address`.
 
-Or you can simply open shell inside the container and run commands:
-`wget  -O - http://localhost:8080/api/v1/config` and `wget  -O - http://localhost:8080/api/v1/pfcp_associations`
+The default listener is `127.0.0.1:8080`. A non-loopback bind requires an API token. The Helm chart supplies it from a Secret; Compose examples require `UPF_API_TOKEN` in the environment. Set `CLI_API_TOKEN` to the same value for the CLI. Use a private tunnel or a trusted TLS reverse proxy for remote access.
 
-<details><summary>API json output example of successfully connected UE</summary>
-<p>
-
-```json
-/ # wget  -O - http://localhost:8080/api/v1/config
-Connecting to localhost:8080 ([::1]:8080)
-writing to stdout
-{
-    "InterfaceName": [
-        "n3",
-        "n6"
-    ],
-    "XDPAttachMode": "generic",
-    "ApiAddress": ":8080",
-    "PfcpAddress": ":8805",
-    "PfcpNodeId": "10.100.50.241",
-    "MetricsAddress": ":9090",
-    "N3Address": "10.100.50.233"
--                    100% |************************************************************************************************************|   246  0:00:00 ETA
-written to stdout
-/ #
-/ # wget  -O - http://localhost:8080/api/v1/pfcp_associations
-Connecting to localhost:8080 ([::1]:8080)
-writing to stdout
-{
-    "10.100.50.244:8805": {
-        "ID": "10.100.50.244",
-        "Addr": "10.100.50.244:8805",
-        "NextSessionID": 2,
-        "Sessions": {
-            "2": {
-                "LocalSEID": 2,
-                "RemoteSEID": 1,
-                "PDRs": {
-                    "1": {
-                        "PdrInfo": {
-                            "OuterHeaderRemoval": 0,
-                            "FarId": 1,
-                            "QerId": 1
-                        },
-                        "Teid": 1,
-                        "Ipv4": ""
-                    },
-                    "2": {
-                        "PdrInfo": {
-                            "OuterHeaderRemoval": 0,
-                            "FarId": 2,
-                            "QerId": 0
-                        },
-                        "Teid": 0,
-                        "Ipv4": "10.1.0.1"
-                    }
-                },
-                "FARs": {
-                    "1": {
-                        "Action": 2,
-                        "OuterHeaderCreation": 0,
-                        "Teid": 0,
-                        "RemoteIP": 0,
-                        "LocalIP": 0
-                    },
-                    "2": {
-                        "Action": 2,
-                        "OuterHeaderCreation": 1,
-                        "Teid": 3,
-                        "RemoteIP": 3962725386,
-                        "LocalIP": 3912393738
-                    }
-                },
-                "QERs": {
-                    "1": {
-                        "GateStatusUL": 0,
-                        "GateStatusDL": 0,
-                        "Qfi": 9,
-                        "MaxBitrateUL": 200000000,
-                        "MaxBitrateDL": 100000000,
-                        "StartUL": 0,
-                        "StartDL": 0
-                    }
-                }
-            }
-        }
-    }
--                    100% |************************************************************************************************************|  1954  0:00:00 ETA
-written to stdout
-/ #
+```bash
+curl -H "Authorization: Bearer $UPF_API_TOKEN" http://127.0.0.1:8080/api/v1/config
+curl -H "Authorization: Bearer $UPF_API_TOKEN" http://127.0.0.1:8080/api/v1/pfcp_associations
 ```
 
-</p>
-</details>
+See [API documentation](api.md) for response formats and routes. Swagger at `/swagger/index.html` also requires the bearer header.

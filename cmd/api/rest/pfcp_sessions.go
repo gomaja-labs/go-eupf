@@ -17,16 +17,16 @@ import (
 // DeletePfcpSessions godoc
 //
 //	@Summary	Delete PFCP session by IMSI, MSISDN or ID
-//	@Description	Deletes a PFCP session based on provided parameters. At least one parameter must be provided.
+//	@Description	Deletes a PFCP session based on provided parameters. Exactly one query key must be provided.
 //	@Tags		PFCP
 //	@Accept		json
 //	@Produce	json
 //	@Param		imsi	query		string	false	"IMSI of the session to delete"
 //	@Param		msisdn	query		string	false	"MSISDN of the session to delete"
 //	@Param		id		query		string	false	"ID of the session to delete"
-//	@Success	200		{string}	string	"Session successfully deleted"
-//	@Failure	400		{string}	string	"Bad Request - No parameters provided"
-//	@Failure	404		{string}	string	"Session not found"
+//	@Success	200		{object}	map[string]string
+//	@Failure	400		{object}	map[string]string
+//	@Failure	404		{object}	map[string]string
 //	@Router		/pfcp_sessions [delete]
 func (h *ApiHandler) deletePfcpSessions(c *gin.Context) {
 	query := c.Request.URL.Query()

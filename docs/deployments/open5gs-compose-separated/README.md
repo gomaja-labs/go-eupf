@@ -83,3 +83,4 @@ when test ended, you can see reports in directory `.deploy/docker/local-data/ipe
 `make clean`
 
 `docker network rm open5gs-main`
+Before starting eUPF, provision a management token: `export UPF_API_TOKEN="$(openssl rand -hex 32)"`. Configure the CLI with the same token in `CLI_API_TOKEN`.

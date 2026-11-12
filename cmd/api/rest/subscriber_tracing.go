@@ -35,7 +35,7 @@ func (h *ApiHandler) verifyTraceArguments(imsi, msisdn string) (bool, error) {
 //	@Param msisdn query string false "MSISDN of subscriber"
 //	@Success 200 {array} tracing.TraceRecord
 //	@Failure 400 {object} map[string]string
-//	@Failure 404 {object} map[string]string
+//	@Failure 404 "Not Found"
 //	@Router /subscriber_trace [get]
 func (h *ApiHandler) listTraces(c *gin.Context) {
 	imsi := c.Query("imsi")
@@ -78,7 +78,7 @@ func (h *ApiHandler) listTraces(c *gin.Context) {
 //	@Produce json
 //	@Param imsi query string false "IMSI of subscriber"
 //	@Param msisdn query string false "MSISDN of subscriber"
-//	@Success 201 {object} map[string]string
+//	@Success 201 "Created"
 //	@Failure 400 {object} map[string]string
 //	@Router /subscriber_trace [post]
 func (h *ApiHandler) startTrace(c *gin.Context) {
@@ -118,7 +118,7 @@ func (h *ApiHandler) startTrace(c *gin.Context) {
 //	@Param msisdn query string false "MSISDN of subscriber"
 //	@Success 200 {array} tracing.TraceRecord
 //	@Failure 400 {object} map[string]string
-//	@Failure 404 {object} map[string]string
+//	@Failure 404 "Not Found"
 //	@Router /subscriber_trace [delete]
 func (h *ApiHandler) stopTrace(c *gin.Context) {
 	imsi := c.Query("imsi")

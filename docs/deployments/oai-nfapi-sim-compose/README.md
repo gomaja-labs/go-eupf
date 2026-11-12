@@ -83,3 +83,5 @@ We will add two services `eupf` and `eupf-nat` with a dedicated network between.
 ### Undeploy all
 `sudo docker-compose down`
 
+
+Before starting eUPF, provision a management token: `export UPF_API_TOKEN="$(openssl rand -hex 32)"`. Configure the CLI with the same token in `CLI_API_TOKEN`.
