@@ -45,22 +45,24 @@ type cachedResponse struct {
 	index   *responseIndex
 }
 type pendingRequest struct {
-	wire        []byte
-	peer        *net.UDPAddr
-	typ         uint8
-	retryAt     time.Time
-	interval    time.Duration
-	remaining   uint32
-	trace       bool
-	entity      string
-	association *NodeAssociation
-	socket      *net.UDPConn
-	upFeatures  []byte
-	remoteSEID  uint64
-	localSEID   uint64
-	usage       []reportedUsage
-	onComplete  func(requestResult)
-	completed   bool
+	wire          []byte
+	peer          *net.UDPAddr
+	typ           uint8
+	retryAt       time.Time
+	lastSent      time.Time
+	releasePeriod time.Duration
+	interval      time.Duration
+	remaining     uint32
+	trace         bool
+	entity        string
+	association   *NodeAssociation
+	socket        *net.UDPConn
+	upFeatures    []byte
+	remoteSEID    uint64
+	localSEID     uint64
+	usage         []reportedUsage
+	onComplete    func(requestResult)
+	completed     bool
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -91,6 +93,9 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	if conn.isClosed() {
 		return nil, net.ErrClosed
 	}
+	if msg.MessageType() == message.MsgTypeAssociationSetupRequest && (conn.ResourceManager.ShuttingDown() || conn.releasing) {
+		return nil, errors.New("PFCP association admission stopped")
+	}
 	if state.pending == nil {
 		state.pending = make(map[uint32]*pendingRequest)
 	}
@@ -119,7 +124,7 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	interval, retries := conn.requestPolicy(msg.MessageType())
 	copied := *peer
 	copied.IP = append(net.IP(nil), peer.IP...)
-	state.pending[state.next] = &pendingRequest{wire: wire, peer: &copied, typ: msg.MessageType(), retryAt: time.Now().Add(interval), interval: interval, remaining: retries, trace: trace, entity: entity, association: association, socket: socket}
+	state.pending[state.next] = &pendingRequest{wire: wire, peer: &copied, typ: msg.MessageType(), lastSent: time.Now(), retryAt: time.Now().Add(interval), interval: interval, remaining: retries, trace: trace, entity: entity, association: association, socket: socket}
 	if setup, ok := msg.(*message.AssociationSetupRequest); ok {
 		if features, err := setup.UPFunctionFeatures.UPFunctionFeatures(); err == nil {
 			state.pending[state.next].upFeatures = append([]byte(nil), features...)
@@ -170,6 +175,7 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 			continue
 		}
 		req.remaining--
+		req.lastSent = now
 		req.retryAt = now.Add(req.interval)
 		resend = append(resend, req)
 	}
@@ -179,6 +185,9 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 		PfcpRequestRetransmissions.WithLabelValues(message.MessageTypeName(req.typ)).Inc()
 		if err := conn.sendEncodedAtSocket(req.wire, req.typ, req.peer, req.trace, req.socket); err != nil {
 			log.Warn().Err(err).Str("peer", req.peer.String()).Str("message", message.MessageTypeName(req.typ)).Msg("PFCP retransmission failed")
+		}
+		if req.releasePeriod > 0 {
+			conn.recordReleaseTransmission(req.wire)
 		}
 	}
 	for _, req := range failed {
@@ -263,7 +272,15 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			}
 			conn.completeReportLocked(req, session, result)
 		case message.MsgTypeAssociationUpdateRequest:
-			// Update completion does not replace CP Release (TS 29.244 V20.1.0 clause 6.2.7.3.1).
+			// TS 29.244 V20.1.0 clauses 6.2.7.3.2 and 6.4: an identical
+			// retransmission grants the CP the full period from reception.
+			if req.releasePeriod > 0 && !assoc.cleaning {
+				start := req.lastSent
+				if result.outcome == requestAccepted {
+					start = time.Now()
+				}
+				assoc.releaseDeadline = start.Add(req.releasePeriod)
+			}
 		}
 	}
 }

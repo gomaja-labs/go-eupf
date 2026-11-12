@@ -339,11 +339,13 @@ func HandlePfcpAssociationReleaseRequest(conn *PfcpConnection, msg message.Messa
 }
 func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
 	request := msg.(*message.AssociationSetupRequest)
-	if conn.releasing || conn.terminalError != nil {
+	// TS 29.244 V20.1.0 table 7.4.4.2-1 and clause 8.2.1: local
+	// shutdown has no resources for a new association (Cause 75).
+	if conn.ResourceManager.ShuttingDown() || conn.releasing || conn.terminalError != nil {
 		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP connection releasing")
 	}
 	if value, err := request.NodeID.NodeID(); err == nil {
-		if old := conn.associationByID(nodeIDText(value)); old != nil && (!old.releaseDeadline.IsZero() || !old.cleanupDeadline.IsZero()) {
+		if old := conn.associationByID(nodeIDText(value)); old != nil && (!old.releaseDeadline.IsZero() || old.cleaning) {
 			return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP association releasing")
 		}
 	}
@@ -398,6 +400,9 @@ func nodeIDText(value ie.NodeIDValue) string {
 }
 func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
 	response := msg.(*message.AssociationSetupResponse)
+	if conn.ResourceManager.ShuttingDown() || conn.releasing {
+		return nil, false, errors.New("association setup canceled during release")
+	}
 	cause, err := response.Cause.Cause()
 	if err != nil || cause != ie.CauseRequestAccepted {
 		return nil, true, err

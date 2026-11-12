@@ -125,7 +125,7 @@ func (conn *PfcpConnection) observeRecovery(addr string, stamp time.Time) bool {
 }
 func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp time.Time, establishing ...bool) bool {
 	assoc := conn.GetAssociation(addr)
-	if assoc == nil || !assoc.cleanupDeadline.IsZero() {
+	if assoc == nil || assoc.cleaning {
 		return true
 	}
 	_, remembered := assoc.recoveries[entity]
@@ -184,7 +184,7 @@ func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 	outgoing := conn.serviceReleasesLocked(now)
 	var peers []string
 	for addr, assoc := range conn.NodeAssociations {
-		if !assoc.releaseDeadline.IsZero() || !assoc.cleanupDeadline.IsZero() {
+		if !assoc.releaseDeadline.IsZero() || assoc.cleaning {
 			continue
 		}
 		if !assoc.failedAt.IsZero() && now.Sub(assoc.failedAt) >= conn.heartbeatGrace {
@@ -222,7 +222,7 @@ func (conn *PfcpConnection) heartbeatFailed(addr string, expected ...*NodeAssoci
 			return
 		}
 		assoc.heartbeatInFlight = false
-		if !assoc.releaseDeadline.IsZero() || !assoc.cleanupDeadline.IsZero() {
+		if !assoc.releaseDeadline.IsZero() || assoc.cleaning {
 			return
 		}
 		if assoc.failedAt.IsZero() {
@@ -512,7 +512,7 @@ func (conn *PfcpConnection) responseSEID(request message.Message, peer string) u
 }
 
 func activeAssociation(assoc *NodeAssociation) *NodeAssociation {
-	if assoc != nil && !assoc.cleanupDeadline.IsZero() {
+	if assoc != nil && assoc.cleaning {
 		return nil
 	}
 	return assoc

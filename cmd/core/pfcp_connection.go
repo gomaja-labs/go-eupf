@@ -52,8 +52,6 @@ type PfcpConnection struct {
 
 	stateMu           sync.RWMutex // Owns all associations, sessions and their indexes.
 	nextSessionID     uint64       // UPF-wide SEID allocator, also owned by stateMu.
-	responseWait      <-chan error
-	addressIndex      map[string]map[*NodeAssociation]int
 	transport         transportState
 	requestTimeout    time.Duration
 	requestRetries    uint32
@@ -68,8 +66,11 @@ type PfcpConnection struct {
 	heartbeatGrace    time.Duration
 	setupRetryAt      map[string]time.Time
 	connectorNodes    map[string]string
+	addressIndex      map[string]map[*NodeAssociation]int
+	responseWait      <-chan error
 	reportCleanup     []reportCleanup
 
+	release       *AssociationRelease
 	releasing     bool
 	terminalError error
 	failures      chan error
@@ -409,9 +410,14 @@ func (connection *PfcpConnection) SetRemoteNodes(nodes []AssociationConnector) {
 	clear(connection.setupRetryAt)
 }
 
-func (connection *PfcpConnection) SendAssociationReleaseRequest() {
+func (connection *PfcpConnection) SendAssociationReleaseRequest() *AssociationRelease {
 	connection.stateMu.Lock()
 	connection.releasing = true
+	release := &AssociationRelease{conn: connection}
+	connection.release = release
+	for _, assoc := range connection.NodeAssociations {
+		release.associations = append(release.associations, assoc)
+	}
 	// Do not create new UP-initiated associations while releasing this connection.
 	connection.transport.mu.Lock()
 	for seq, req := range connection.transport.pending {
@@ -437,6 +443,7 @@ func (connection *PfcpConnection) SendAssociationReleaseRequest() {
 	}
 	connection.stateMu.Unlock()
 	_ = connection.sendAdmitted(outgoing)
+	return release
 }
 
 func (connection *PfcpConnection) Run() {
@@ -648,7 +655,7 @@ func (connection *PfcpConnection) RefreshAssociations() {
 	connection.stateMu.RUnlock()
 	for _, node := range nodes {
 		connection.stateMu.RLock()
-		exists := connection.releasing || connection.associationByID(connection.connectorNodes[node.getAddress()]) != nil || time.Now().Before(connection.setupRetryAt[node.getAddress()])
+		exists := connection.ResourceManager.ShuttingDown() || connection.releasing || connection.associationByID(connection.connectorNodes[node.getAddress()]) != nil || time.Now().Before(connection.setupRetryAt[node.getAddress()])
 		connection.stateMu.RUnlock()
 		if !exists && !connection.hasOutstanding(message.MsgTypeAssociationSetupRequest, node.getAddress()) {
 			node.sendAssociationSetupRequest(connection)

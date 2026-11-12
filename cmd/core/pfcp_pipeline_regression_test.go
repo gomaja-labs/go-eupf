@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -212,4 +215,97 @@ func TestAddressReferencesFollowSessionChanges(t *testing.T) {
 	if conn.GetAssociation("127.0.0.7") != assoc {
 		t.Fatal("deletion removed another session's address")
 	}
+}
+func TestSlowSuccessfulCleanupRemainsNonfatal(t *testing.T) {
+	pipelineQuiet(t)
+	old := config.Conf
+	config.Conf = config.UpfConfig{}
+	t.Cleanup(func() { config.Conf = old })
+	resources, err := service.NewResourceManager("10.60.0.0/16", 65535)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, resources, nil, nil, DefaultProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Close)
+	cp := identityPeer(t, "127.0.0.2", 0)
+	pipelineSetup(t, conn, cp, ie.NewNodeIDFQDN("cp.example"), 1)
+	assoc := conn.associationByID("cp.example")
+	probe := NewSession(1, 1, "", "", false)
+	conn.stateMu.Lock()
+	start := time.Now()
+	if err := conn.DeleteSession(probe); err != nil {
+		t.Fatal(err)
+	}
+	per := time.Since(start)
+	conn.stateMu.Unlock()
+	sessions := int(4*AssociationCleanupTimeout/per) + 10
+	if sessions > 20000 {
+		sessions = 20000
+	}
+	for i := 0; i < sessions; i++ {
+		s := NewSession(uint64(1000+i), uint64(1000+i), "", "", false)
+		s.CPFSEIDIPv4 = net.ParseIP("127.0.0.2").To4()
+		assoc.Sessions[s.LocalSEID] = s
+	}
+	start = time.Now()
+	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(5, ie.NewNodeIDFQDN("cp.example"))), cp.LocalAddr().(*net.UDPAddr))
+	held := time.Since(start)
+	reply := pipelineRead(t, cp, time.Second)
+	conn.stateMu.RLock()
+	remaining, failed := len(assoc.Sessions), assoc.cleanupError
+	conn.stateMu.RUnlock()
+	t.Logf("one DeleteSession = %v; %d sessions; CP Release handler held stateMu %v; response=%v; sessions left=%d; any deletion error=%v; FatalError=%v",
+		per, sessions, held.Round(time.Millisecond), reply != nil, remaining, failed, conn.FatalError())
+	if failed == nil && conn.FatalError() != nil {
+		t.Errorf("no session deletion failed, yet cleanup was declared fatal after %v (process exits non-zero)", AssociationCleanupTimeout)
+	}
+}
+
+type blockedCleanupMaps struct {
+	MapOperationsMock
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (m *blockedCleanupMaps) DeleteFar(uint32) error {
+	select {
+	case m.entered <- struct{}{}:
+	default:
+	}
+	<-m.resume
+	return nil
+}
+func (m *blockedCleanupMaps) BeginRuleTransaction(uint64) (ebpf.RuleTransaction, error) {
+	return &mapTransactionMock{ForwardingPlaneController: m}, nil
+}
+
+func TestReleaseResponsePrecedesRuleCleanup(t *testing.T) {
+	conn := newProtocolConnection(t)
+	maps := &blockedCleanupMaps{entered: make(chan struct{}, 1), resume: make(chan struct{})}
+	conn.mapOperations = maps
+	cp := identityPeer(t, "127.0.0.29", 0)
+	identitySetup(t, conn, cp, "cleanup.example")
+	assoc := conn.associationByID("cleanup.example")
+	session := NewSession(11, 77, "", "", false)
+	session.NewFar(1, 1, ebpf.FarInfo{Action: 1})
+	assoc.Sessions[11] = session
+	done := make(chan struct{})
+	go func() {
+		conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(2, ie.NewNodeIDFQDN(assoc.ID))), cp.LocalAddr().(*net.UDPAddr))
+		close(done)
+	}()
+	select {
+	case <-done:
+		reply := identityRead(t, cp).(*message.AssociationReleaseResponse)
+		if cause, _ := reply.Cause.Cause(); cause != ie.CauseRequestAccepted {
+			t.Errorf("release cause %d", cause)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("release response blocked on data-plane cleanup")
+	}
+	close(maps.resume)
+	<-done
 }

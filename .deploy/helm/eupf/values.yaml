@@ -5,6 +5,9 @@ global:
 
 replicaCount: 1
 
+# Above the default 32-second process shutdown budget; raise with PFCP T1/N1.
+terminationGracePeriodSeconds: 40
+
 # See `kubectl explain deployment.spec.strategy` for more
 # ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
 deploymentStrategy:

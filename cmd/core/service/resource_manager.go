@@ -24,6 +24,7 @@ var ErrResourceExhausted = errors.New("resource pool exhausted")
 
 type ResourceManager struct {
 	nextSEID      atomic.Uint64
+	shuttingDown  atomic.Bool
 	transactionMu sync.Mutex
 	IPAM          *IPAM
 	FTEIDM        *FTEIDM
@@ -468,6 +469,14 @@ func (manager *ResourceManager) LockReservations() func() {
 	}
 	manager.transactionMu.Lock()
 	return manager.transactionMu.Unlock
+}
+
+// BeginShutdown latches shutdown across all PFCP endpoints sharing the UPF.
+func (manager *ResourceManager) BeginShutdown() { manager.shuttingDown.Store(true) }
+
+// ShuttingDown reports whether the process has stopped accepting associations.
+func (manager *ResourceManager) ShuttingDown() bool {
+	return manager != nil && manager.shuttingDown.Load()
 }
 
 func (pool *IPAM) indexForIP(ip net.IP) int {

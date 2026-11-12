@@ -38,6 +38,7 @@ func TestOriginatedReleaseKeepsSessionsUntilCPRelease(t *testing.T) {
 	}
 	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(3, ie.NewNodeIDFQDN("release.example"))), peer.LocalAddr().(*net.UDPAddr))
 	response := identityRead(t, peer).(*message.AssociationReleaseResponse)
+	conn.serviceHeartbeats(time.Now())
 	if cause, _ := response.Cause.Cause(); cause != ie.CauseRequestAccepted || conn.GetAssiciationCount() != 0 || conn.GetSessionCount() != 0 || len(conn.transport.pending) != 0 {
 		t.Fatal("CP Release did not finish cleanup and retries")
 	}
@@ -56,7 +57,7 @@ func TestOriginatedReleaseExpiresOnlyAfterGracefulPeriod(t *testing.T) {
 	if conn.GetAssiciationCount() != 1 {
 		t.Fatal("release completed before grace period")
 	}
-	conn.serviceHeartbeats(time.Now().Add(3 * time.Second))
+	conn.serviceHeartbeats(time.Now().Add(conn.AssociationReleaseWaitTimeout() + time.Second))
 	if conn.GetAssiciationCount() != 0 {
 		t.Fatal("unanswered release exceeded configured local grace period")
 	}
@@ -143,6 +144,7 @@ func TestReleaseCleanupDeadlineNotifiesSupervisorAndRetainsResources(t *testing.
 	if cause, _ := response.Cause.Cause(); cause != ie.CauseRequestAccepted {
 		t.Fatal("cleanup failure changed unconditional Release acceptance")
 	}
+	conn.serviceHeartbeats(time.Now())
 	conn.serviceHeartbeats(time.Now().Add(AssociationCleanupTimeout + time.Second))
 	if conn.FatalError() == nil || conn.GetSessionCount() != 1 {
 		t.Fatal("failed cleanup reported completion instead of terminal failure")
@@ -209,6 +211,7 @@ func TestCleanupBackoffStartsAfterFailedAttemptCompletes(t *testing.T) {
 	assoc.Sessions[11] = session
 	conn.NodeAssociations[assoc.ID] = assoc
 	conn.DeleteAssociation(assoc.ID)
+	conn.serviceHeartbeats(time.Now())
 	if len(maps.finished) != 1 {
 		t.Fatal("cleanup attempt did not finish")
 	}
@@ -262,5 +265,76 @@ func TestCloseUsesNodeIdentityAtSharedAddresses(t *testing.T) {
 		conn.DeleteAllAssociations()
 		<-done
 		t.Fatal("Close stalled on source-address keys shared by different Node IDs")
+	}
+}
+
+func TestSuccessfulCleanupProgressHasNoFailureDeadline(t *testing.T) {
+	conn := newProtocolConnection(t)
+	assoc := NewNodeAssociation("cleanup.example", "127.0.0.92")
+	for id := uint64(10); id < 80; id++ {
+		assoc.Sessions[id] = NewSession(id, id, "", "", false)
+	}
+	conn.NodeAssociations[assoc.ID] = assoc
+	conn.DeleteAssociation(assoc.ID)
+	conn.serviceHeartbeats(time.Now().Add(10 * time.Second))
+	if conn.FatalError() != nil {
+		t.Fatal("successful cleanup was treated as a timed failure")
+	}
+	conn.serviceHeartbeats(time.Now().Add(20 * time.Second))
+	if conn.GetSessionCount() != 0 || conn.GetAssiciationCount() != 0 {
+		t.Fatal("cleanup did not finish")
+	}
+}
+
+func TestReleasePeriodStartsAtAcceptedResponse(t *testing.T) {
+	conn := newProtocolConnection(t)
+	peer := identityPeer(t, "127.0.0.35", 0)
+	node := identityPeer(t, "127.0.0.35", 8805)
+	identitySetup(t, conn, peer, "release.example")
+	conn.requestTimeout = time.Second
+	conn.requestRetries = 2
+	conn.SendAssociationReleaseRequest()
+	request := identityRead(t, node)
+	pending := conn.transport.pending[request.Sequence()]
+	pending.lastSent = time.Now().Add(-time.Second)
+	accepted := time.Now()
+	conn.Handle(protocolWire(t, message.NewAssociationUpdateResponse(request.Sequence(), ie.NewNodeIDFQDN("release.example"), ie.NewCause(1))), node.LocalAddr().(*net.UDPAddr))
+	assoc := conn.associationByID("release.example")
+	if assoc.releaseDeadline.Before(accepted.Add(conn.AssociationReleaseTimeout())) {
+		t.Fatal("accepted retransmission shortened the CP's full graceful period")
+	}
+}
+
+func TestShutdownRefusesSetupEvenOnAnIdleConnection(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.BeginShutdown()
+	conn.SendAssociationReleaseRequest()
+	peer := identityPeer(t, "127.0.0.36", 0)
+	conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(1, ie.NewNodeIDFQDN("new.example"), ie.NewRecoveryTimeStamp(time.Now()))), peer.LocalAddr().(*net.UDPAddr))
+	reply := identityRead(t, peer).(*message.AssociationSetupResponse)
+	if cause, _ := reply.Cause.Cause(); cause != ie.CauseNoResourcesAvailable || conn.GetAssiciationCount() != 0 {
+		t.Fatal("idle connection reopened Setup during process shutdown")
+	}
+}
+
+func TestShutdownCancelsPendingAndRefusesRacingOriginatedSetup(t *testing.T) {
+	conn := newProtocolConnection(t)
+	peer := identityPeer(t, "127.0.0.40", 0)
+	first := message.NewAssociationSetupRequest(0, ie.NewNodeIDFQDN("up.example"), ie.NewRecoveryTimeStamp(time.Now()))
+	if err := conn.SendMessage(first, peer.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatal(err)
+	}
+	_ = identityRead(t, peer)
+	request := conn.transport.pending[first.Sequence()]
+	conn.BeginShutdown()
+	if !request.completed || len(conn.transport.pending) != 0 {
+		t.Fatal("shutdown left an originated Setup pending")
+	}
+	next := message.NewAssociationSetupRequest(0, ie.NewNodeIDFQDN("up.example"), ie.NewRecoveryTimeStamp(time.Now()))
+	if err := conn.SendMessage(next, peer.LocalAddr().(*net.UDPAddr)); err == nil {
+		t.Fatal("Setup raced past the shutdown latch")
+	}
+	if unexpected := pipelineRead(t, peer, 10*time.Millisecond); unexpected != nil {
+		t.Fatal("originated Setup sent during shutdown")
 	}
 }

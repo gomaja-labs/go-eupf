@@ -27,6 +27,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       hostNetwork: {{ .Values.hostNetwork }}
       serviceAccountName: {{ include "eupf.serviceAccountName" . }}
       securityContext:

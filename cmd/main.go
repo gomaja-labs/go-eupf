@@ -32,8 +32,10 @@ import (
 
 func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection) error {
 	period := time.Duration(0)
+	releases := make([]*core.AssociationRelease, 0, len(conns))
 	for _, conn := range conns {
-		period = max(period, conn.AssociationReleaseTimeout())
+		releases = append(releases, conn.CurrentRelease())
+		period = max(period, conn.AssociationReleaseWaitTimeout())
 	}
 	ctx, cancel := context.WithTimeout(ctx, period+core.AssociationCleanupTimeout+200*time.Millisecond)
 	defer cancel()
@@ -41,14 +43,13 @@ func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection)
 	defer tick.Stop()
 	for {
 		total := 0
-		for _, conn := range conns {
-			if conn == nil {
-				continue
-			}
-			if err := conn.FatalError(); err != nil {
+		for _, release := range releases {
+			if err := release.Err(); err != nil {
 				return err
 			}
-			total += conn.GetAssiciationCount()
+			if !release.Done() {
+				total++
+			}
 		}
 		if total == 0 {
 			log.Info().Msg("All associations and rules released")
@@ -84,7 +85,7 @@ func main() {
 	config.Init()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := supervise(ctx, run, 15*time.Second); err != nil {
+	if err := supervise(ctx, run, processShutdownTimeout(config.Conf)); err != nil {
 		log.Error().Err(err).Msg("Service failed")
 		os.Exit(1)
 	}
@@ -134,7 +135,7 @@ func run(ctx context.Context) (runErr error) {
 		return fmt.Errorf("load BPF objects: %w", err)
 	}
 
-	defer func() { _ = bpfObjects.Close() }()
+	defer func() { runErr = errors.Join(runErr, bpfObjects.Close()) }()
 
 	var err error
 	dumper, err := newStartupDumper(
@@ -396,6 +397,11 @@ func run(ctx context.Context) (runErr error) {
 		}
 	}()
 
+	runDone := make(chan struct{})
+	defer close(runDone)
+	defer beginShutdown(pfcpConn, sxaConn, sxbConn)
+	go watchShutdown(ctx, runDone, pfcpConn, sxaConn, sxbConn)
+
 	assocReleaseFunc := func() error {
 		safeReleaseConn(pfcpConn)
 		safeReleaseConn(sxaConn)
@@ -419,10 +425,11 @@ func run(ctx context.Context) (runErr error) {
 			}
 		case <-ctx.Done():
 			log.Info().Msg("OS signal received. Initiating graceful shutdown...")
+			beginShutdown(pfcpConn, sxaConn, sxbConn)
 			return assocReleaseFunc()
 		case <-resetAssociationChan:
 			if err := assocReleaseFunc(); err != nil {
-				return err
+				log.Error().Err(err).Msg("Management association release did not finish within its wait budget")
 			}
 		}
 	}
@@ -434,4 +441,34 @@ func newStartupSdfListener(m *kernel.Map) (*ebpf.SdfNotifyListener, error) {
 		return nil, fmt.Errorf("initialize SDF notification listener: %w", err)
 	}
 	return listener, nil
+}
+
+func beginShutdown(conns ...*core.PfcpConnection) {
+	for _, conn := range conns {
+		conn.BeginShutdown()
+	}
+}
+
+func processShutdownTimeout(conf config.UpfConfig) time.Duration {
+	interval := time.Duration(conf.PfcpRequestTimeout) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	window := interval * time.Duration(conf.PfcpRequestRetries+1)
+	unit := 2 * time.Second
+	period := min(8*time.Second, max(unit, ((window+unit-1)/unit)*unit))
+	// Delivery window, the full period at the CP, HTTP shutdown, scheduling slack.
+	return window + period + 4*time.Second
+}
+
+func watchShutdown(ctx context.Context, done <-chan struct{}, conns ...*core.PfcpConnection) {
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	beginShutdown(conns...)
+	for _, conn := range conns {
+		safeReleaseConn(conn)
+	}
 }

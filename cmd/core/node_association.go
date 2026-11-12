@@ -26,6 +26,7 @@ type NodeAssociation struct {
 	releaseDeadline    time.Time
 	releaseRequestSent bool
 	releaseRetryAt     time.Time
+	cleaning           bool
 	cleanupDeadline    time.Time
 	cleanupNext        time.Time
 	cleanupAttempts    uint32

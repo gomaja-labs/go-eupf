@@ -37,6 +37,48 @@ func (conn *PfcpConnection) releasePeriod() time.Duration {
 	return min(8*time.Second, max(unit, ((window+unit-1)/unit)*unit))
 }
 
+// AssociationReleaseWaitTimeout bounds delivery attempts plus the CP's full
+// advertised period. TS 29.244 V20.1.0 clauses 6.2.7.3.2 and 6.4.
+func (conn *PfcpConnection) AssociationReleaseWaitTimeout() time.Duration {
+	if conn == nil {
+		return 0
+	}
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	interval, retries := conn.requestPolicy(message.MsgTypeAssociationUpdateRequest)
+	return interval*time.Duration(retries+1) + conn.releasePeriod()
+}
+
+// AssociationRelease tracks exactly the associations present at initiation.
+// A management release can finish even after a new association is admitted.
+type AssociationRelease struct {
+	conn         *PfcpConnection
+	associations []*NodeAssociation
+}
+
+// Done reports whether every original association has left the registry.
+func (release *AssociationRelease) Done() bool {
+	if release == nil {
+		return true
+	}
+	release.conn.stateMu.RLock()
+	defer release.conn.stateMu.RUnlock()
+	for _, assoc := range release.associations {
+		if release.conn.associationByID(assoc.ID) == assoc {
+			return false
+		}
+	}
+	return true
+}
+
+// Err reports a terminal data-plane cleanup failure.
+func (release *AssociationRelease) Err() error {
+	if release == nil {
+		return nil
+	}
+	return release.conn.FatalError()
+}
+
 type admittedRequest struct {
 	wire   []byte
 	typ    uint8
@@ -52,6 +94,7 @@ func (conn *PfcpConnection) sendAdmitted(requests []admittedRequest) error {
 			result = errors.Join(result, err)
 			log.Warn().Err(err).Str("peer", request.peer.String()).Msg("Send association release indication; reliable delivery retains it")
 		}
+		conn.recordReleaseTransmission(request.wire)
 	}
 	return result
 }
@@ -71,20 +114,13 @@ func (conn *PfcpConnection) startAssociationRelease(id string, trace bool) error
 	return err
 }
 func (conn *PfcpConnection) prepareAssociationReleaseLocked(assoc *NodeAssociation, now time.Time, trace bool) (*admittedRequest, error) {
-	if assoc.releaseRequestSent || !assoc.cleanupDeadline.IsZero() {
+	if assoc.releaseRequestSent || assoc.cleaning {
 		return nil, nil
 	}
 	period := conn.releasePeriod()
-	if !assoc.releaseDeadline.IsZero() {
-		// A previously full originated queue can be retried while time remains.
-		// Advertise no more than the remaining local grace period.
-		period = (assoc.releaseDeadline.Sub(now) / (2 * time.Second)) * (2 * time.Second)
-		if period < 2*time.Second {
-			return nil, nil
-		}
-	}
 	if assoc.releaseDeadline.IsZero() {
-		assoc.releaseDeadline = now.Add(period)
+		interval, retries := conn.requestPolicy(message.MsgTypeAssociationUpdateRequest)
+		assoc.releaseDeadline = now.Add(interval*time.Duration(retries+1) + period)
 	}
 	assoc.releaseRetryAt = now.Add(100 * time.Millisecond)
 	// The association stays established after Update completion. Only CP Release
@@ -99,6 +135,11 @@ func (conn *PfcpConnection) prepareAssociationReleaseLocked(assoc *NodeAssociati
 	if err != nil {
 		return nil, err
 	}
+	conn.transport.mu.Lock()
+	conn.transport.pending[request.Sequence()].releasePeriod = period
+	conn.transport.mu.Unlock()
+	interval, retries := conn.requestPolicy(message.MsgTypeAssociationUpdateRequest)
+	assoc.releaseDeadline = time.Now().Add(interval*time.Duration(retries+1) + period)
 	assoc.releaseRequestSent = true
 	return &admittedRequest{wire, request.MessageType(), peer, socket, trace}, nil
 }
@@ -106,12 +147,10 @@ func (conn *PfcpConnection) prepareAssociationReleaseLocked(assoc *NodeAssociati
 func (conn *PfcpConnection) serviceReleasesLocked(now time.Time) []admittedRequest {
 	var outgoing []admittedRequest
 	for _, assoc := range conn.NodeAssociations {
-		if !assoc.cleanupDeadline.IsZero() {
-			if !now.Before(assoc.cleanupDeadline) {
+		if assoc.cleaning {
+			if !assoc.cleanupDeadline.IsZero() && !now.Before(assoc.cleanupDeadline) {
 				conn.cleanupFailedLocked(assoc)
-				continue
-			}
-			if !now.Before(assoc.cleanupNext) {
+			} else if !now.Before(assoc.cleanupNext) {
 				conn.cleanupAssociationLocked(assoc, now)
 			}
 			continue
@@ -139,16 +178,28 @@ func (conn *PfcpConnection) serviceReleasesLocked(now time.Time) []admittedReque
 // TS 29.244 V20.1.0 clause 6.2.8.3: accept CP Release and delete its
 // sessions. The bounded retry/fatal policy retains IDs on data-plane failure.
 func (conn *PfcpConnection) beginAssociationCleanupLocked(assoc *NodeAssociation, now time.Time) {
-	if assoc.cleanupDeadline.IsZero() {
-		assoc.cleanupDeadline = now.Add(AssociationCleanupTimeout)
-		assoc.cleanupNext = now
-	}
-	if !now.Before(assoc.cleanupDeadline) {
-		conn.cleanupFailedLocked(assoc)
+	if assoc.cleaning {
 		return
 	}
-	if !now.Before(assoc.cleanupNext) {
-		conn.cleanupAssociationLocked(assoc, now)
+	assoc.cleaning = true // Admission stops before the Release Response.
+	assoc.cleanupNext = now
+	if conn.ResourceManager.ShuttingDown() || len(assoc.Sessions) == 0 {
+		conn.finishAssociationCleanupLocked(assoc)
+	}
+}
+func (conn *PfcpConnection) finishAssociationCleanupLocked(assoc *NodeAssociation) {
+	if !conn.ResourceManager.ShuttingDown() {
+		conn.indexAssociation(assoc, -1)
+	}
+	for key, current := range conn.NodeAssociations {
+		if current == assoc {
+			delete(conn.NodeAssociations, key)
+			break
+		}
+	}
+	conn.forgetPeer(assoc.ID)
+	if len(conn.NodeAssociations) == 0 {
+		conn.releasing = false
 	}
 }
 func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now time.Time) {
@@ -156,30 +207,30 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 		return
 	}
 	assoc.cleanupAttempts++
+	batch := 0
+	failed := false
 	for id, session := range assoc.Sessions {
+		if batch >= 64 {
+			break
+		}
+		batch++
 		if err := conn.DeleteSession(session); err != nil {
+			failed = true
+			if assoc.cleanupDeadline.IsZero() {
+				assoc.cleanupDeadline = time.Now().Add(AssociationCleanupTimeout)
+			}
 			assoc.cleanupError = err
 			log.Error().Err(err).Str("node", assoc.ID).Uint64("session", id).Uint32("attempt", assoc.cleanupAttempts).Msg("Rule cleanup failed; retain session ownership and IDs")
 		} else {
-			delete(assoc.Sessions, id)
-			delete(assoc.sessionEntities, id)
-		}
-		if time.Now().After(assoc.cleanupDeadline) && len(assoc.Sessions) > 0 {
-			conn.cleanupFailedLocked(assoc)
-			return
+			conn.forgetSession(assoc, id)
 		}
 	}
 	if len(assoc.Sessions) == 0 {
-		for key, current := range conn.NodeAssociations {
-			if current == assoc {
-				delete(conn.NodeAssociations, key)
-				break
-			}
-		}
-		conn.forgetPeer(assoc.ID)
-		if len(conn.NodeAssociations) == 0 {
-			conn.releasing = false
-		}
+		conn.finishAssociationCleanupLocked(assoc)
+		return
+	}
+	if !failed {
+		assoc.cleanupNext = time.Time{}
 		return
 	}
 	delay := 100 * time.Millisecond
@@ -237,11 +288,61 @@ func (conn *PfcpConnection) FatalError() error {
 
 // Closing stops receive-loop maintenance, so finish bounded cleanup here too.
 func (conn *PfcpConnection) cleanupBeforeClose() {
+	if conn.ResourceManager.ShuttingDown() {
+		return
+	}
 	conn.DeleteAllAssociations()
 	for conn.GetAssiciationCount() != 0 && conn.FatalError() == nil {
 		time.Sleep(25 * time.Millisecond)
 		conn.stateMu.Lock()
 		conn.serviceReleasesLocked(time.Now())
 		conn.stateMu.Unlock()
+	}
+}
+
+// BeginShutdown latches Setup refusal across the shared process resource domain.
+// TS 29.244 V20.1.0 clauses 6.2.6 and 6.2.7.3.1.
+func (conn *PfcpConnection) BeginShutdown() {
+	if conn == nil {
+		return
+	}
+	conn.stateMu.Lock()
+	defer conn.stateMu.Unlock()
+	conn.ResourceManager.BeginShutdown()
+	conn.transport.mu.Lock()
+	for seq, request := range conn.transport.pending {
+		if request.typ == message.MsgTypeAssociationSetupRequest {
+			conn.completeRequestLocked(request, requestResult{outcome: requestCanceled, err: errors.New("process shutting down")})
+			conn.transport.deletePending(seq)
+		}
+	}
+	conn.transport.mu.Unlock()
+	for _, assoc := range conn.NodeAssociations {
+		if assoc.cleaning {
+			conn.finishAssociationCleanupLocked(assoc)
+		}
+	}
+}
+
+// CurrentRelease returns the immutable membership selected by the latest release.
+func (conn *PfcpConnection) CurrentRelease() *AssociationRelease {
+	if conn == nil {
+		return nil
+	}
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	return conn.release
+}
+
+func (conn *PfcpConnection) recordReleaseTransmission(wire []byte) {
+	if len(wire) < 8 || wire[1] != message.MsgTypeAssociationUpdateRequest {
+		return
+	}
+	// Node header sequence field: TS 29.244 V20.1.0 clause 7.2.2.2.
+	sequence := uint32(wire[4])<<16 | uint32(wire[5])<<8 | uint32(wire[6])
+	conn.transport.mu.Lock()
+	defer conn.transport.mu.Unlock()
+	if request := conn.transport.pending[sequence]; request != nil && request.releasePeriod > 0 {
+		request.lastSent = time.Now()
 	}
 }
