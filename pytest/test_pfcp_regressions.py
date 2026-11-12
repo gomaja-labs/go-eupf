@@ -88,21 +88,32 @@ def test_unknown_far_removal_preserves_other_session(peer):
     assert after == before
 
 
-def test_invalid_sdf_rejects_session_without_leaving_state(peer):
-    # TS 29.244 V20.1.0 clause 5.2.9: reject rules that cannot be activated.
+def test_malformed_optional_sdf_is_ignored(peer):
+    # TS 29.244 V20.1.0 clause 7.6.8 and Table 7.5.2.2-2.
     before = get_json("/api/v1/pfcp_sessions") or []
-    causes = []
     for _ in range(3):
         response = peer.establish([
             far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=b"invalid")),
         ])
-        causes.append(response[pfcp.IE_Cause].cause)
-        assert response[pfcp.IE_FailedRuleId].type == 0
-        assert response[pfcp.IE_FailedRuleId].pdr_id == 1
-    after = get_json("/api/v1/pfcp_sessions") or []
-    print(f"invalid SDF: causes={causes}, sessions before={len(before)}, after={len(after)}")
-    assert all(cause == 73 for cause in causes)
-    assert after == before
+        assert response[pfcp.IE_Cause].cause == 1
+        assert not response.haslayer(pfcp.IE_FailedRuleId)
+        seid = response[pfcp.IE_FSEID].seid
+        deletion = peer.request(pfcp.PFCPSessionDeletionRequest(IE_list=[]), seid)
+        assert deletion[pfcp.IE_Cause].cause == 1
+    assert (get_json("/api/v1/pfcp_sessions") or []) == before
+
+
+def test_valid_unsupported_sdf_rejects_without_leaving_state(peer):
+    # RFC 6733 section 4.3.1: numeric protocol 132 is valid syntax.
+    before = get_json("/api/v1/pfcp_sessions") or []
+    response = peer.establish([
+        far(), pdr(sdf=pfcp.IE_SDF_Filter(
+            FD=1, flow_description=b"permit out 132 from any to any")),
+    ])
+    assert response[pfcp.IE_Cause].cause == 76
+    assert response[pfcp.IE_FailedRuleId].type == 0
+    assert response[pfcp.IE_FailedRuleId].pdr_id == 1
+    assert (get_json("/api/v1/pfcp_sessions") or []) == before
 
 
 def test_unidentifiable_pdr_is_not_silently_accepted(peer):
@@ -181,7 +192,7 @@ def test_rule_rejection_details_and_atomicity(peer,case,cause,offending,rule_kin
     elif case=="allocation":
         rules[1][pfcp.IE_PDI].IE_list.append(pfcp.IE_FTEID(V4=1,TEID=100,ipv4="127.0.0.1"))
     elif case=="capacity":
-        rules[1][pfcp.IE_PDI].IE_list += [pfcp.IE_SDF_Filter(FD=1,flow_description=b"permit out udp from any to any") for _ in range(3)]
+        rules[1][pfcp.IE_PDI].IE_list += [pfcp.IE_SDF_Filter(FD=1,flow_description=b"permit out udp from any to any") for _ in range(6)]
     elif case=="unsupported":
         rules.append(pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=9),pfcp.IE_MeasurementMethod(DURAT=1),pfcp.IE_ReportingTriggers()]))
     before=get_json("/api/v1/pfcp_sessions") or []

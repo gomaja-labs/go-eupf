@@ -57,7 +57,7 @@ def server(request, evidence):
             binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "16",
             "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
             "--n3addr", "127.0.0.1", "--aaddr", "127.0.0.1:18080",
-            "--maddr", "127.0.0.1:19090", "--ftup", "--teidpool", "32", "--hbtimeout", "5", "--hbinterval", "60", "--loglvl", "debug",
+            "--maddr", "127.0.0.1:19090", "--teidpool", "32", "--hbtimeout", "5", "--hbinterval", "60", "--loglvl", "debug",
             *extra,
         ], stdout=output, stderr=output,
             env={**os.environ, "GORACE": "halt_on_error=1"})
