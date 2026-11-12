@@ -37,7 +37,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && echo 'build ALL=(root) NOPASSWD: ALL' > /etc/sudoers.d/build \
     && python3 -m venv /opt/py \
-    && /opt/py/bin/pip install --no-cache-dir pytest==8.4.2 scapy==2.6.1
+    && /opt/py/bin/pip install --no-cache-dir pytest==9.2.0 scapy==2.8.0
 ENV PATH=/opt/py/bin:/lint-tools:${PATH}
 USER build
 
