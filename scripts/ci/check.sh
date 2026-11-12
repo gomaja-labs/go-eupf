@@ -56,7 +56,9 @@ smoke)
 			capture_pid=
 		fi
 	}
-	trap cleanup EXIT
+	# eUPF and pytest run as root; give their output (captures, trace dumps,
+	# pytest caches) back to the build user so the checkout stays removable.
+	trap 'cleanup; sudo chown -R "$(id -u):$(id -g)" /src' EXIT
 	for ueip in false true; do
 		sudo tcpdump -U --immediate-mode -i lo -w "ci-results/pfcp-$ueip.pcap" udp port 8805 >"ci-results/capture-$ueip.log" 2>&1 &
 		capture_pid=$!
