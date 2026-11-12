@@ -81,3 +81,10 @@ func TestDefaultFTEIDAllocationRejectsNewCPChoice(t *testing.T) {
 		t.Fatalf("CP allocation accepted by default: %v", err)
 	}
 }
+
+func TestDefaultConnectionAdvertisesFTUP(t *testing.T) {
+	conn := newProtocolConnection(t)
+	if len(conn.featuresOctets) == 0 || conn.featuresOctets[0]&0x10 == 0 {
+		t.Fatal("default connection does not advertise mandatory FTUP")
+	}
+}

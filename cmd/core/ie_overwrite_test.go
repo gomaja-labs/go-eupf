@@ -248,3 +248,7 @@ func (m *MapOperationsMock) GetNextURR() (uint32, error) { m.nextID++; return m.
 func (m *MapOperationsMock) CheckPDRPlan(uint64, []ebpf.PDRKey) error { return nil }
 
 func (m *MapOperationsMock) ResetUrr(uint32) error { m.urr = ebpf.UrrInfo{}; return nil }
+
+func (m *MapOperationsMock) DetachRule(uint8, uint32) error { return nil }
+
+func (m *MapOperationsMock) SynchronizeRules() error { return nil }
