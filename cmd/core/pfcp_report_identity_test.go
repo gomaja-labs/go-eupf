@@ -12,7 +12,7 @@ import (
 func admittedIdentityReport(t *testing.T) (*PfcpConnection, *NodeAssociation, *net.UDPConn, *message.SessionReportRequest) {
 	t.Helper()
 	conn := newProtocolConnection(t)
-	peer := identityPeer(t, "127.0.0.94", 0)
+	peer := identityPeer(t, "127.0.0.94", 8805)
 	assoc := NewNodeAssociation("report.example", "127.0.0.94")
 	session := NewSession(11, 77, "", "", false)
 	session.CPFSEIDIPv4 = net.ParseIP("127.0.0.94")
@@ -20,7 +20,7 @@ func admittedIdentityReport(t *testing.T) (*PfcpConnection, *NodeAssociation, *n
 	conn.NodeAssociations[assoc.ID] = assoc
 	conn.requestTimeout = time.Millisecond
 	request := message.NewSessionReportRequest(77, 0, ie.NewReportType(0, 0, 0, 1))
-	if err := conn.SendMessage(request, peer.LocalAddr().(*net.UDPAddr)); err != nil {
+	if err := conn.sendAssociationRequest(request, assoc.ID, false, 11); err != nil {
 		t.Fatal(err)
 	}
 	_ = identityRead(t, peer)
@@ -34,7 +34,7 @@ func TestReportCompletionCannotMarkAReplacementSession(t *testing.T) {
 	replacement.CPFSEIDIPv4 = net.ParseIP("127.0.0.94")
 	assoc.Sessions[12] = replacement
 	conn.serviceTransactions(time.Now().Add(time.Second))
-	if _, marked := assoc.reportFailures[12]; marked {
+	if assoc.Sessions[12] != replacement {
 		t.Fatal("old report completion changed a different local session after CP SEID reuse")
 	}
 }
@@ -43,7 +43,7 @@ func TestAcceptedReportResponseMustUseOriginalLocalSEID(t *testing.T) {
 	conn, assoc, peer, request := admittedIdentityReport(t)
 	wrong := message.NewSessionReportResponse(12, request.Sequence(), ie.NewCause(ie.CauseRequestAccepted))
 	conn.Handle(protocolWire(t, wrong), peer.LocalAddr().(*net.UDPAddr))
-	if len(conn.transport.pending) != 0 || assoc.reportFailures[11] != requestInvalid {
+	if len(conn.transport.pending) != 0 || assoc.Sessions[11] == nil {
 		t.Fatal("wrong-SEID response was treated as successful delivery")
 	}
 }

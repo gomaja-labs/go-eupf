@@ -4,6 +4,7 @@
 package core
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -23,6 +24,7 @@ func (conn *PfcpConnection) SetHeartbeatTimeout(seconds uint32) {
 	}
 	for seq, req := range conn.transport.pending {
 		if req.typ == message.MsgTypeHeartbeatRequest {
+			conn.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: errors.New("heartbeat timeout changed")})
 			conn.transport.deletePending(seq)
 		}
 	}

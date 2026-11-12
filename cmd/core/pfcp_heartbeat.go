@@ -52,5 +52,5 @@ func HandlePfcpHeartbeatResponse(conn *PfcpConnection, msg message.Message, addr
 func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) error {
 	hbreq := message.NewHeartbeatRequest(sequenceID, append([]*ie.IE{ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)}, conn.profile.HeartbeatRequestAdditionalIEs()...)...)
 	log.Debug().Msgf("Sent Heartbeat Request to: %s", associationAddr)
-	return conn.sendAssociationRequest(hbreq, associationAddr, true, false)
+	return conn.sendAssociationRequest(hbreq, associationAddr, true, 0)
 }

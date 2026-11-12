@@ -225,7 +225,13 @@ func TestMalformedMatchedReportResponseDoesNotReachApplication(t *testing.T) {
 		return nil, false, nil
 	}}
 	request := message.NewSessionReportRequest(1, 0, ie.NewReportType(0, 0, 1, 0))
-	if err := conn.SendMessage(request, peer.LocalAddr().(*net.UDPAddr)); err != nil {
+	conn.stateMu.Lock()
+	wire, err := conn.prepareRequestContext(request, peer.LocalAddr().(*net.UDPAddr), false, conn.socket(), "", nil, 1)
+	conn.stateMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.sendEncoded(wire, request.MessageType(), peer.LocalAddr().(*net.UDPAddr), false); err != nil {
 		t.Fatal(err)
 	}
 	_ = readTransaction(t, peer)

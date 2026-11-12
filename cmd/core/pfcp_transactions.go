@@ -58,6 +58,7 @@ type pendingRequest struct {
 	upFeatures  []byte
 	remoteSEID  uint64
 	localSEID   uint64
+	usage       []reportedUsage
 	onComplete  func(requestResult)
 	completed   bool
 }
@@ -73,8 +74,12 @@ func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
 	return interval, retries
 }
 func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn) ([]byte, error) {
-	entity, association, localSEID := conn.outgoingContext(msg, peer.IP.String())
-	return conn.prepareRequestContext(msg, peer, trace, socket, entity, association, localSEID)
+	if msg.SEID() != 0 {
+		return nil, errors.New("session request requires an explicit local SEID")
+	}
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	return conn.prepareRequestContext(msg, peer, trace, socket, peer.IP.String(), conn.GetAssociation(peer.IP.String()), 0)
 }
 
 // prepareRequestContext admits reliable delivery using an already resolved
@@ -227,7 +232,6 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			log.Warn().Err(result.err).Str("peer", req.peer.String()).Str("procedure", message.MessageTypeName(req.typ)).Str("outcome", string(result.outcome)).Uint64("remote_seid", req.remoteSEID).Msg("PFCP requesting procedure completed")
 		}
 		if req.typ == message.MsgTypeAssociationSetupRequest {
-			conn.lastSetupOutcome = result.outcome
 			for _, node := range conn.nodes {
 				if node.getAddress() != req.peer.IP.String() {
 					continue
@@ -247,10 +251,6 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 		if assoc == nil || assoc != req.association {
 			return
 		}
-		if assoc.lastOutcomes == nil {
-			assoc.lastOutcomes = make(map[uint8]requestOutcome)
-		}
-		assoc.lastOutcomes[req.typ] = result.outcome
 		switch req.typ {
 		case message.MsgTypeHeartbeatRequest:
 			conn.finishProbeLocked(req)
@@ -261,16 +261,9 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			if session == nil || session.RemoteSEID != req.remoteSEID {
 				return
 			}
-			if assoc.reportFailures == nil {
-				assoc.reportFailures = make(map[uint64]requestOutcome)
-			}
-			if result.outcome == requestAccepted {
-				delete(assoc.reportFailures, req.localSEID)
-			} else {
-				assoc.reportFailures[req.localSEID] = result.outcome
-			}
+			conn.completeReportLocked(req, session, result)
 		case message.MsgTypeAssociationUpdateRequest:
-			// Update completion never substitutes for the CP Release procedure (6.2.7.3.1).
+			// Update completion does not replace CP Release (TS 29.244 V20.1.0 clause 6.2.7.3.1).
 		}
 	}
 }

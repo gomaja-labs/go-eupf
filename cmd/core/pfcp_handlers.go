@@ -285,6 +285,10 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	if completed != nil && completed.typ == message.MsgTypeAssociationSetupRequest && handlerErr == nil {
 		if current := conn.associationForMessage(incomingMsg, addr.IP.String()); current != nil {
 			current.UPFeatures = append([]byte(nil), completed.upFeatures...)
+			if conn.connectorNodes == nil {
+				conn.connectorNodes = make(map[string]string)
+			}
+			conn.connectorNodes[completed.peer.IP.String()] = current.ID
 		}
 	}
 
@@ -405,6 +409,14 @@ func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Messag
 	// CP Function Features is conditional only if optional features are supported
 	// (Table 7.4.4.2-1); its absence is valid. Setup timestamps are ignored for
 	// restart detection: TS 23.527 V20.0.0 clause 4.2.
+	// TS 29.244 V20.1.0 clause 6.2.6.3: a Setup Response does not
+	// invoke the CP-initiated replacement procedure of clause 6.2.6.2.2.
+	if existing := conn.associationByID(nodeIDText(node)); existing != nil {
+		if features, e := response.CPFunctionFeatures.CPFunctionFeatures(); e == nil {
+			existing.CPFeatures = append([]byte(nil), features...)
+		}
+		return nil, true, nil
+	}
 	_, err = conn.replaceAssociation(nodeIDText(node), addr, nil, response.CPFunctionFeatures)
 	return nil, true, err
 }

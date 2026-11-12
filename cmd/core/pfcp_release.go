@@ -163,7 +163,6 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 		} else {
 			delete(assoc.Sessions, id)
 			delete(assoc.sessionEntities, id)
-			delete(assoc.reportFailures, id)
 		}
 		if time.Now().After(assoc.cleanupDeadline) && len(assoc.Sessions) > 0 {
 			conn.cleanupFailedLocked(assoc)

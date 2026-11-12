@@ -96,18 +96,19 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 				if err := conn.DeleteSession(session); err != nil {
 					return false, fmt.Errorf("replace association session %d: %w", seid, err)
 				}
-				delete(old.Sessions, seid)
-				delete(old.sessionEntities, seid)
+				conn.forgetSession(old, seid)
 			}
 		}
 	}
 	for peer, old := range conn.NodeAssociations {
 		if old.ID == id {
+			conn.indexAssociation(old, -1)
 			delete(conn.NodeAssociations, peer)
 			conn.forgetPeerExceptSetup(old.ID)
 		}
 	}
 	conn.NodeAssociations[id] = fresh
+	conn.indexAssociation(fresh, 1)
 	// PSREI confirms that the requested retention operation succeeded, including
 	// a request for an empty set of existing sessions.
 	return retained || (replaces && retention != nil), nil
@@ -129,12 +130,7 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 	}
 	_, remembered := assoc.recoveries[entity]
 	known := remembered || entity == assoc.Addr || entity == assoc.setupSource || len(establishing) > 0 && establishing[0]
-	for _, candidate := range assoc.sessionEntities {
-		if candidate == entity {
-			known = true
-			break
-		}
-	}
+	known = known || conn.addressIndex[entity][assoc] > 0
 	if !known {
 		return true
 	} // Unknown entities receive replies without allocating state.
@@ -164,12 +160,10 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 				}
 				return false
 			}
-			delete(assoc.Sessions, seid)
-			delete(assoc.sessionEntities, seid)
+			conn.forgetSession(assoc, seid)
 		}
 		conn.forgetEntityTransactions(addr, entity)
 	}
-	conn.pruneEntityMetadata(assoc)
 	assoc.recoveries[entity] = stamp
 	if entity == assoc.Addr {
 		assoc.RecoveryTimestamp = stamp
@@ -186,6 +180,7 @@ func (conn *PfcpConnection) heartbeatInterval() time.Duration {
 }
 func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 	conn.stateMu.Lock()
+	conn.serviceReportCleanupLocked(now)
 	outgoing := conn.serviceReleasesLocked(now)
 	var peers []string
 	for addr, assoc := range conn.NodeAssociations {
@@ -286,8 +281,6 @@ func (conn *PfcpConnection) AssociationSnapshots() map[string]*NodeAssociation {
 		copy.CPFeatures = append([]byte(nil), assoc.CPFeatures...)
 		copy.UPFeatures = append([]byte(nil), assoc.UPFeatures...)
 		copy.sessionEntities = nil
-		copy.lastOutcomes = nil
-		copy.reportFailures = nil
 		copy.recoveries = nil
 		copy.Sessions = make(map[uint64]*Session, len(assoc.Sessions))
 		for seid, session := range assoc.Sessions {
@@ -340,11 +333,12 @@ type queuedMessage struct {
 	msg         message.Message
 	association string
 	trace       bool
+	localSEID   uint64
 }
 
 func (conn *PfcpConnection) sendQueued(messages []queuedMessage) {
 	for _, out := range messages {
-		if err := conn.sendAssociationRequest(out.msg, out.association, out.trace, true); err != nil {
+		if err := conn.sendAssociationRequest(out.msg, out.association, out.trace, out.localSEID); err != nil {
 			log.Warn().Err(err).Msg("Admit session report")
 		}
 	}
@@ -396,7 +390,6 @@ func (conn *PfcpConnection) rememberSessionEntity(request, response message.Mess
 	if deleted, ok := request.(*message.SessionDeletionRequest); ok {
 		if assoc.Sessions[deleted.SEID()] == nil {
 			delete(assoc.sessionEntities, deleted.SEID())
-			conn.pruneEntityMetadata(assoc)
 		}
 		return
 	}
@@ -443,20 +436,6 @@ func (conn *PfcpConnection) incomingEntity(msg message.Message, peer string) str
 	}
 	return peer
 }
-func (conn *PfcpConnection) outgoingContext(msg message.Message, peer string) (string, *NodeAssociation, uint64) {
-	conn.stateMu.RLock()
-	defer conn.stateMu.RUnlock()
-	if msg.SEID() != 0 {
-		for _, assoc := range conn.NodeAssociations {
-			for seid, session := range assoc.Sessions {
-				if session.RemoteSEID == msg.SEID() && (session.controlIP(conn).String() == peer || assoc.Addr == peer) {
-					return assoc.sessionEntities[seid], assoc, seid
-				}
-			}
-		}
-	}
-	return peer, conn.GetAssociation(peer), 0
-}
 
 // associationForMessage resolves protocol identity before looking at the source.
 // TS 29.244 V20.1.0 clause 5.8.1: F-SEID entity addresses may differ from Node ID.
@@ -491,6 +470,9 @@ func (conn *PfcpConnection) associationForMessage(msg message.Message, peer stri
 }
 
 func (conn *PfcpConnection) associationByID(id string) *NodeAssociation {
+	if assoc := conn.NodeAssociations[id]; assoc != nil {
+		return assoc
+	}
 	for _, assoc := range conn.NodeAssociations {
 		if assoc.ID == id {
 			return assoc
@@ -539,7 +521,7 @@ func activeAssociation(assoc *NodeAssociation) *NodeAssociation {
 // Admission keeps the explicit Node ID/session context through reliable delivery;
 // several associations can share an IP, so the destination cannot recover it.
 // TS 29.244 V20.1.0 clauses 4.2.2, 4.3.2 and 5.8.1.
-func (conn *PfcpConnection) sendAssociationRequest(msg message.Message, id string, trace, sessionRelated bool) error {
+func (conn *PfcpConnection) sendAssociationRequest(msg message.Message, id string, trace bool, localSEID uint64) error {
 	conn.stateMu.Lock()
 	assoc := activeAssociation(conn.GetAssociation(id))
 	if assoc == nil {
@@ -551,23 +533,22 @@ func (conn *PfcpConnection) sendAssociationRequest(msg message.Message, id strin
 		endpoint = net.JoinHostPort(assoc.Addr, "8805")
 	}
 	entity := assoc.Addr
-	var localSEID uint64
-	if sessionRelated {
-		endpoint = ""
-		for seid, session := range assoc.Sessions {
-			if session.RemoteSEID == msg.SEID() {
-				if ip := session.controlIP(conn); len(ip) != 0 {
-					endpoint = net.JoinHostPort(ip.String(), "8805")
-					entity = assoc.sessionEntities[seid]
-					localSEID = seid
-				}
-				break
-			}
-		}
-		if endpoint == "" {
+	if localSEID != 0 {
+		// TS 29.244 V20.1.0 clauses 5.6.2, 5.22.2 and 4.3.2:
+		// CP SEID values can collide between entities of the same SMF set.
+		session := assoc.Sessions[localSEID]
+		if session == nil || len(session.controlIP(conn)) == 0 {
 			conn.stateMu.Unlock()
 			return ErrSessionNotFound
 		}
+		report, ok := msg.(*message.SessionReportRequest)
+		if !ok {
+			conn.stateMu.Unlock()
+			return fmt.Errorf("unsupported session originator %T", msg)
+		}
+		report.Header.SEID = session.RemoteSEID
+		endpoint = net.JoinHostPort(session.controlIP(conn).String(), "8805")
+		entity = assoc.sessionEntities[localSEID]
 	}
 	peer, err := net.ResolveUDPAddr("udp", endpoint)
 	if err != nil {
@@ -576,6 +557,9 @@ func (conn *PfcpConnection) sendAssociationRequest(msg message.Message, id strin
 	}
 	socket := conn.socket()
 	wire, err := conn.prepareRequestContext(msg, peer, trace, socket, entity, assoc, localSEID)
+	if err == nil {
+		conn.bindReportUsageLocked(msg, assoc, localSEID)
+	}
 	if err == nil && msg.MessageType() == message.MsgTypeHeartbeatRequest {
 		assoc.heartbeatInFlight = true
 	}
@@ -584,17 +568,4 @@ func (conn *PfcpConnection) sendAssociationRequest(msg message.Message, id strin
 		return err
 	}
 	return conn.sendEncodedAtSocket(wire, msg.MessageType(), peer, trace, socket)
-}
-
-func (conn *PfcpConnection) pruneEntityMetadata(assoc *NodeAssociation) {
-	for seid := range assoc.reportFailures {
-		if assoc.Sessions[seid] == nil {
-			delete(assoc.reportFailures, seid)
-		}
-	}
-	for seid := range assoc.sessionEntities {
-		if assoc.Sessions[seid] == nil {
-			delete(assoc.sessionEntities, seid)
-		}
-	}
 }

@@ -145,6 +145,7 @@ func TestAssociationCleanupRemovesUsageRules(t *testing.T) {
 	session.URRs[1] = SUrrInfo{GlobalId: 9}
 	conn.GetAssociation("127.0.0.1").Sessions[3] = session
 	conn.DeleteAssociation("127.0.0.1")
+	conn.serviceHeartbeats(time.Now())
 	if len(maps.deletedURRs) != 1 || maps.deletedURRs[0] != 9 {
 		t.Fatalf("removed URR IDs=%v", maps.deletedURRs)
 	}
@@ -184,8 +185,10 @@ func TestHeartbeatSourceEntityRestartIsSelective(t *testing.T) {
 	assoc := conn.GetAssociation("127.0.0.1")
 	assoc.Sessions[3] = NewSession(3, 4, "", "", false)
 	assoc.sessionEntities[3] = "192.0.2.10"
+	conn.addressReference(assoc, "192.0.2.10", 1)
 	assoc.Sessions[5] = NewSession(5, 6, "", "", false)
 	assoc.sessionEntities[5] = "192.0.2.11"
+	conn.addressReference(assoc, "192.0.2.11", 1)
 	for _, stamp := range []int64{1700000000, 1700000010} {
 		_, _, err := HandlePfcpHeartbeatRequest(conn, message.NewHeartbeatRequest(7, ie.NewRecoveryTimeStamp(time.Unix(stamp, 0)), ie.NewSourceIPAddress(net.ParseIP("192.0.2.10"), nil, 0)), assoc.Addr)
 		if err != nil {

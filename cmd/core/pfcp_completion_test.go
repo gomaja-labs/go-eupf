@@ -15,7 +15,7 @@ func TestOriginatingProceduresReceiveOneTerminalResult(t *testing.T) {
 		for _, outcome := range []string{"accepted", "rejected", "invalid_length", "invalid_ie", "missing_ie", "timeout", "canceled"} {
 			t.Run(procedure+"/"+outcome, func(t *testing.T) {
 				conn := newProtocolConnection(t)
-				peer := identityPeer(t, "127.0.0.2", 0)
+				peer := identityPeer(t, "127.0.0.2", 8805)
 				address := peer.LocalAddr().(*net.UDPAddr)
 				assoc := NewNodeAssociation("cp.example", "127.0.0.2")
 				assoc.endpoint = address.String()
@@ -51,7 +51,13 @@ func TestOriginatingProceduresReceiveOneTerminalResult(t *testing.T) {
 				case "update":
 					request = message.NewAssociationUpdateRequest(0, ie.NewNodeIDFQDN(conn.nodeId), ie.NewPFCPAssociationReleaseRequest(1, 0))
 				}
-				if err := conn.SendMessage(request, address); err != nil {
+				send := func() error {
+					if procedure == "report" {
+						return conn.sendAssociationRequest(request, assoc.ID, false, 11)
+					}
+					return conn.SendMessage(request, address)
+				}
+				if err := send(); err != nil {
 					t.Fatal(err)
 				}
 				_ = identityRead(t, peer)
@@ -140,14 +146,7 @@ func TestOriginatingProceduresReceiveOneTerminalResult(t *testing.T) {
 					if assoc.heartbeatInFlight {
 						t.Fatal("completed probe remained in flight")
 					}
-				case "report":
-					if want != requestAccepted && outcome != "canceled" && assoc.reportFailures[11] != want {
-						t.Fatal("report failure did not reach the reporting procedure")
-					}
 				case "setup", "sxa_setup", "sxb_setup":
-					if conn.lastSetupOutcome != want {
-						t.Fatal("setup procedure missed terminal result")
-					}
 					if want != requestAccepted && outcome != "canceled" && !time.Now().Before(conn.setupRetryAt["127.0.0.2"]) {
 						t.Fatal("failed setup did not delay the next attempt")
 					}

@@ -18,8 +18,6 @@ type NodeAssociation struct {
 	endpoint           string
 	setupSource        string
 	UPFeatures         []byte
-	lastOutcomes       map[uint8]requestOutcome
-	reportFailures     map[uint64]requestOutcome
 	sessionEntities    map[uint64]string
 	recoveries         map[string]time.Time
 	nextHeartbeat      time.Time
