@@ -13,7 +13,6 @@ import (
 
 	kernel "github.com/cilium/ebpf"
 	"github.com/gin-gonic/gin"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
@@ -40,7 +39,7 @@ func TestAddressUpdateReachesDataplaneConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &ApiHandler{
-		BpfObjects: bpf, Cfg: &config.UpfConfig{},
+		BpfObjects: bpf, Cfg: validEditConfigPtr(),
 		pfcpSrv:        map[string]*core.PfcpConnection{},
 		GtpPathManager: core.NewGtpPathManager("192.0.2.1:2152", time.Second),
 	}

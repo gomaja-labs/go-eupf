@@ -61,6 +61,7 @@ type PfcpConnection struct {
 	maxAssociations   uint32
 	allowedPeers      []netip.Prefix
 	heartbeatEvery    time.Duration
+	setupEvery        time.Duration
 	heartbeatGrace    time.Duration
 
 	udpConn                *net.UDPConn
@@ -171,6 +172,7 @@ func NewPfcpConnection(
 		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxTransactions: config.Conf.PfcpMaxTransactions, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
 		heartbeatEvery: time.Duration(config.Conf.HeartbeatInterval) * time.Second,
+		setupEvery:     defaultDuration(config.Conf.AssociationSetupTimeout, 5),
 	}, nil
 }
 
@@ -178,6 +180,13 @@ func (connection *PfcpConnection) Update(
 	pfcpAddress string,
 	pfcpNodeId string,
 ) error {
+	return connection.updateEndpoint(pfcpAddress, pfcpNodeId, nil, nil)
+}
+
+// updateEndpoint prepares every fallible resource first. Under stateMu, commit
+// persists the candidate before publishing it, so failure retains the socket,
+// transactions, identity and connectors without a lossy rollback.
+func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string, nodes *[]AssociationConnector, commit func() error) error {
 	if connection.isClosed() {
 		return net.ErrClosed
 	}
@@ -205,6 +214,19 @@ func (connection *PfcpConnection) Update(
 		}
 		return net.ErrClosed
 	}
+	if commit != nil {
+		if err := commit(); err != nil {
+			connection.stateMu.Unlock()
+			if replacement != nil {
+				_ = replacement.Close()
+			}
+			return err
+		}
+	}
+	if nodes != nil {
+		connection.nodes = *nodes
+	}
+
 	var old *net.UDPConn
 	if replacement != nil {
 		// A retransmission may never migrate to another local endpoint (clause 6.4).
@@ -229,7 +251,7 @@ func (connection *PfcpConnection) Update(
 	connection.stateMu.Unlock()
 	if old != nil {
 		if err := old.Close(); err != nil {
-			return fmt.Errorf("close previous PFCP endpoint: %w", err)
+			log.Warn().Err(err).Msg("close previous PFCP endpoint")
 		}
 	}
 

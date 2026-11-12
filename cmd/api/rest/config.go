@@ -11,12 +11,12 @@ import (
 	"net/http"
 	"reflect"
 
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
 	"github.com/mitchellh/mapstructure"
-	"github.com/rs/zerolog/log"
 )
 
 // DisplayConfig godoc
@@ -47,6 +47,10 @@ func (h *ApiHandler) displayConfig(c *gin.Context) {
 func (h *ApiHandler) editLoggingLevelConfig(c *gin.Context) {
 	var config LoggingLevelConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := h.validatedEdit(config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -82,6 +86,10 @@ func (h *ApiHandler) editLoggingCallerConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, _, err := h.validatedEdit(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	core.UpdateLogCaller(config.LoggingCaller)
 
@@ -108,6 +116,10 @@ func (h *ApiHandler) editLoggingCallerConfig(c *gin.Context) {
 func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 	var config DataPlaneEbpfConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := h.validatedEdit(config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -149,6 +161,10 @@ func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 	var config DataPlaneAddressesConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := h.validatedEdit(config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -215,16 +231,21 @@ func (h *ApiHandler) editPFCPN4Config(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, _, err := h.validatedEdit(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	pfcpSrv := h.GetPFCPSrv()
 
 	if _, exists := pfcpSrv[core.N4PFCPKeyName]; exists {
-		err := core.UpdatePFCPConnections(
+		err := core.UpdatePFCPConnectionsAndPersist(
 			pfcpSrv,
 			core.N4PFCPKeyName,
 			config.PFCPAddress,
 			config.PFCPNodeID,
 			config.PFCPRemoteNode,
+			func() error { return h.updateConfigFile(config) },
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -234,11 +255,6 @@ func (h *ApiHandler) editPFCPN4Config(c *gin.Context) {
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "PFCP connection for N4 not found"})
 
-		return
-	}
-
-	if err := h.updateConfigFile(config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
 		return
 	}
 
@@ -263,16 +279,21 @@ func (h *ApiHandler) editPFCPSxaConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, _, err := h.validatedEdit(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	pfcpSrv := h.GetPFCPSrv()
 
 	if _, exists := pfcpSrv[core.SxaPFCPKeyName]; exists {
-		err := core.UpdatePFCPConnections(
+		err := core.UpdatePFCPConnectionsAndPersist(
 			pfcpSrv,
 			core.SxaPFCPKeyName,
 			config.SXAAddress,
 			config.SXANodeID,
 			config.SXARemoteNode,
+			func() error { return h.updateConfigFile(config) },
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -282,11 +303,6 @@ func (h *ApiHandler) editPFCPSxaConfig(c *gin.Context) {
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "PFCP connection for Sxa not found"})
 
-		return
-	}
-
-	if err := h.updateConfigFile(config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
 		return
 	}
 
@@ -311,16 +327,21 @@ func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, _, err := h.validatedEdit(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	pfcpSrv := h.GetPFCPSrv()
 
 	if _, exists := pfcpSrv[core.SxbPFCPKeyName]; exists {
-		err := core.UpdatePFCPConnections(
+		err := core.UpdatePFCPConnectionsAndPersist(
 			pfcpSrv,
 			core.SxbPFCPKeyName,
 			config.SXBAddress,
 			config.SXBNodeID,
 			config.SXBRemoteNode,
+			func() error { return h.updateConfigFile(config) },
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -330,11 +351,6 @@ func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "PFCP connection for Sxb not found"})
 
-		return
-	}
-
-	if err := h.updateConfigFile(config); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
 		return
 	}
 
@@ -356,6 +372,10 @@ func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 	var config PFCPTimersConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, _, err := h.validatedEdit(config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -391,6 +411,10 @@ func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1): " + err.Error()})
 		return
 	}
+	if _, _, err := h.validatedEdit(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	core.UpdateGTPManager(h.GtpPathManager, config.GtpPeer, config.GtpEchoInterval)
 
@@ -402,47 +426,49 @@ func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
-func (h *ApiHandler) updateConfigFile(data interface{}) error {
-	h.cfgMu.Lock()
-	defer h.cfgMu.Unlock()
+// validatedEdit applies only submitted keys to a separate configuration, then
+// runs the same validator as startup before any runtime or persistence change.
+func (h *ApiHandler) validatedEdit(data any) (*config.UpfConfig, map[string]interface{}, error) {
+	h.cfgMu.RLock()
+	next := *h.Cfg
+	h.cfgMu.RUnlock()
 	cfgs := make(map[string]interface{})
-
 	val := reflect.ValueOf(data)
 	if val.Kind() == reflect.Pointer {
 		val = val.Elem()
 	}
-
 	if val.Kind() != reflect.Struct {
-		log.Error().Msgf("input must be a struct")
-
-		return fmt.Errorf("input must be a struct")
+		return nil, nil, fmt.Errorf("input must be a struct")
 	}
-
-	typ := val.Type()
-
 	for i := 0; i < val.NumField(); i++ {
-		field := typ.Field(i)
-		fieldValue := val.Field(i)
-
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "" || jsonTag == "-" {
-			continue
+		key := val.Type().Field(i).Tag.Get("json")
+		if key != "" && key != "-" {
+			cfgs[key] = val.Field(i).Interface()
 		}
-
-		cfgs[jsonTag] = fieldValue.Interface()
 	}
-
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		Result:           h.Cfg,
-		WeaklyTypedInput: true,
-	})
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &next, WeaklyTypedInput: true})
 	if err != nil {
-		return fmt.Errorf("failed to create decoder: %w", err)
+		return nil, nil, fmt.Errorf("create config decoder: %w", err)
 	}
-
 	if err := decoder.Decode(cfgs); err != nil {
-		return fmt.Errorf("decode to UpfConfig failed: %w", err)
+		return nil, nil, fmt.Errorf("decode configuration edit: %w", err)
 	}
+	if err := next.Validate(); err != nil {
+		return nil, nil, err
+	}
+	return &next, cfgs, nil
+}
 
-	return h.Cfg.UpdateFile(cfgs)
+func (h *ApiHandler) updateConfigFile(data interface{}) error {
+	next, keys, err := h.validatedEdit(data)
+	if err != nil {
+		return err
+	}
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
+	if err := next.UpdateFile(keys); err != nil {
+		return err
+	}
+	*h.Cfg = *next
+	return nil
 }

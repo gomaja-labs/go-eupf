@@ -37,8 +37,8 @@ type PFCPSxbConfig struct {
 }
 
 type PFCPTimersConfig struct {
-	AssociationSetupTimeout uint32 `json:"association_setup_timeout" binding:"required,gte=1,lte=86400"`
-	HeartbeatTimeout        uint32 `json:"heartbeat_timeout" binding:"required,gte=1,lte=86400"`
+	AssociationSetupTimeout uint32 `json:"association_setup_timeout" binding:"required"`
+	HeartbeatTimeout        uint32 `json:"heartbeat_timeout" `
 }
 
 type GTPPathConfig struct {

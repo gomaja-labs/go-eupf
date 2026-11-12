@@ -39,9 +39,18 @@ func (c *UpfConfig) ValidatePFCP() error {
 	if _, err := c.PFCPPeerPrefixes(); err != nil {
 		return err
 	}
-	if c.PfcpRequestTimeout > 3600 || c.PfcpRequestRetries > 100 || c.HeartbeatTimeout > 3600 || c.HeartbeatRetries > 100 || c.HeartbeatInterval > 3600 || c.HeartbeatFailureGrace > 86400 || c.PfcpResponseRetention > 86400 || c.PfcpMaxTransactions > 65536 || c.PfcpMaxAssociations > 65536 {
-		return fmt.Errorf("PFCP transport option exceeds its supported bound")
+	for key, bound := range map[string]struct{ value, max uint32 }{
+		"pfcp_request_timeout": {c.PfcpRequestTimeout, 3600}, "pfcp_request_retries": {c.PfcpRequestRetries, 100},
+		"heartbeat_timeout": {c.HeartbeatTimeout, 3600}, "heartbeat_retries": {c.HeartbeatRetries, 100},
+		"heartbeat_interval": {c.HeartbeatInterval, 3600}, "heartbeat_failure_grace": {c.HeartbeatFailureGrace, 86400},
+		"pfcp_response_retention": {c.PfcpResponseRetention, 86400}, "pfcp_max_transactions": {c.PfcpMaxTransactions, 65536},
+		"pfcp_max_associations": {c.PfcpMaxAssociations, 65536},
+	} {
+		if bound.value > bound.max {
+			return fmt.Errorf("%s must not exceed %d", key, bound.max)
+		}
 	}
+
 	timeout := c.PfcpRequestTimeout
 	if timeout == 0 {
 		timeout = 5
@@ -50,8 +59,11 @@ func (c *UpfConfig) ValidatePFCP() error {
 	if retention == 0 {
 		retention = 60
 	}
+	if retention < 20 {
+		return fmt.Errorf("pfcp_response_retention must be at least 20 seconds for the minimum replay window")
+	}
 	if uint64(retention) < uint64(timeout)*(uint64(c.PfcpRequestRetries)+1) || uint64(retention) < uint64(c.HeartbeatTimeout)*(uint64(c.HeartbeatRetries)+1) {
-		return fmt.Errorf("PFCP response retention must cover the configured request retry window")
+		return fmt.Errorf("pfcp_response_retention must cover pfcp_request_timeout and heartbeat_timeout retry windows")
 	}
 	return nil
 }

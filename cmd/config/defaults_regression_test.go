@@ -22,7 +22,9 @@ func initConfigFixture(t *testing.T, data string) string {
 	os.Args = []string{"config-test", "--config", path}
 	commonConfigV = viper.New()
 	defineFlags()
-	initCommonConfig()
+	if err := initCommonConfig(); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 

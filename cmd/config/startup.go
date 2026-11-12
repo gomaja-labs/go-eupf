@@ -12,7 +12,9 @@ var PCCConf PCCRulesConfig
 
 // Init init config for eupf package
 func Init() {
-	initialize()
+	if err := initialize(); err != nil {
+		log.Fatalf("Unable to load configuration: %v", err)
+	}
 
 	if err := Conf.Unmarshal(); err != nil {
 		log.Fatalf("Unable to decode into struct, %v", err)

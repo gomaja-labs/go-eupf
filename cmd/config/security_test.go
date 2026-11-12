@@ -34,8 +34,8 @@ func TestConfigurationLimitsNameKeys(t *testing.T) {
 		edit func(*UpfConfig)
 	}{
 		{"association_setup_timeout", func(c *UpfConfig) { c.AssociationSetupTimeout = 0 }},
-		{"heartbeat_interval", func(c *UpfConfig) { c.HeartbeatInterval = 0 }},
-		{"heartbeat_timeout", func(c *UpfConfig) { c.HeartbeatTimeout = 0 }},
+		{"heartbeat_interval", func(c *UpfConfig) { c.HeartbeatInterval = 3601 }},
+		{"heartbeat_timeout", func(c *UpfConfig) { c.HeartbeatTimeout = 3601 }},
 		{"max_sessions", func(c *UpfConfig) { c.MaxSessions = 1 << 31 }},
 		{"pdr_map_size", func(c *UpfConfig) { c.PdrMapSize = 1 << 31 }},
 		{"trace_max_size", func(c *UpfConfig) { c.TraceMaxDumpSize = 0 }},

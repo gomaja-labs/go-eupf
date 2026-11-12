@@ -28,7 +28,7 @@ func TestRESTHeartbeatTimeoutChangesRetransmission(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); conn.Run() }()
 	defer func() { conn.Close(); <-stopped }()
-	h := NewApiHandler(nil, map[string]*core.PfcpConnection{"n4": conn}, nil, &config.UpfConfig{}, nil, nil, nil)
+	h := NewApiHandler(nil, map[string]*core.PfcpConnection{"n4": conn}, nil, validEditConfigPtr(), nil, nil, nil)
 	r := gin.New()
 	r.POST("/timers", h.editPFCPTimersConfig)
 	out := httptest.NewRecorder()

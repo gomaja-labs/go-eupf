@@ -117,10 +117,10 @@ func BindDataPlaneInterfaces(
 }
 
 func UpdateDataPlaneAddresses(
-	pfcpConnection map[string]*PfcpConnection,
+	_ map[string]*PfcpConnection,
 	gtpPathManager *GtpPathManager,
 	n3Addr net.IP,
-	n9Addr net.IP,
+	_ net.IP,
 ) error {
 	if gtpPathManager == nil {
 		return ErrNilGtpPathManager
@@ -128,71 +128,43 @@ func UpdateDataPlaneAddresses(
 
 	gtpPathManager.UpdateLocalAddress(n3Addr.String() + GTPPortStr)
 
-	for _, conn := range pfcpConnection {
-		conn.UpdateN3Address(n3Addr)
-		conn.UpdateN9Address(n9Addr)
-
-	}
+	// Interface addresses do not change the separately configured advertised
+	// N4, Sxa or Sxb F-TEID addresses (which may be behind NAT).
 
 	return nil
 }
 
-func UpdatePFCPConnections(
-	pfcpSrv map[string]*PfcpConnection,
-	keyName string,
-	address string,
-	nodeID string,
-	remoteNodes []string,
-) error {
-	conn, ok := pfcpSrv[keyName]
-	if ok {
-		if err := conn.Update(address, nodeID); err != nil {
-			return err
-		}
-	} else {
-		return ErrNonePFCPConn
-	}
+func UpdatePFCPConnections(pfcpSrv map[string]*PfcpConnection, keyName, address, nodeID string, remoteNodes []string) error {
+	return UpdatePFCPConnectionsAndPersist(pfcpSrv, keyName, address, nodeID, remoteNodes, nil)
+}
+
+// UpdatePFCPConnectionsAndPersist resolves peers and binds a replacement socket
+// before committing configuration and publishing the new endpoint together.
+func UpdatePFCPConnectionsAndPersist(pfcpSrv map[string]*PfcpConnection, keyName, address, nodeID string, remoteNodes []string, persist func() error) error {
+	conn := pfcpSrv[keyName]
 	if conn == nil {
 		return ErrNonePFCPConn
 	}
-
+	var create func(string) (AssociationConnector, error)
 	switch keyName {
 	case N4PFCPKeyName:
-		remotePFCPNodes := make([]AssociationConnector, 0, len(remoteNodes))
-		for _, remoteNode := range remoteNodes {
-			connector, err := conn.profile.N4Connector(remoteNode)
-			if err != nil {
-				return fmt.Errorf("failed to create default association connector: %w", err)
-			}
-			remotePFCPNodes = append(remotePFCPNodes, connector)
-		}
-
-		conn.SetRemoteNodes(remotePFCPNodes)
+		create = conn.profile.N4Connector
 	case SxaPFCPKeyName:
-		remotePFCPNodes := make([]AssociationConnector, 0, len(remoteNodes))
-		for _, remoteNode := range remoteNodes {
-			connector, err := conn.profile.SxaConnector(remoteNode)
-			if err != nil {
-				return fmt.Errorf("failed to create sxa association connector: %w", err)
-			}
-			remotePFCPNodes = append(remotePFCPNodes, connector)
-		}
-
-		conn.SetRemoteNodes(remotePFCPNodes)
+		create = conn.profile.SxaConnector
 	case SxbPFCPKeyName:
-		remotePFCPNodes := make([]AssociationConnector, 0, len(remoteNodes))
-		for _, remoteNode := range remoteNodes {
-			connector, err := conn.profile.SxbConnector(remoteNode)
-			if err != nil {
-				return fmt.Errorf("failed to create sxb association connector: %w", err)
-			}
-			remotePFCPNodes = append(remotePFCPNodes, connector)
-		}
-
-		conn.SetRemoteNodes(remotePFCPNodes)
+		create = conn.profile.SxbConnector
+	default:
+		return ErrNonePFCPConn
 	}
-
-	return nil
+	nodes := make([]AssociationConnector, 0, len(remoteNodes))
+	for _, remote := range remoteNodes {
+		connector, err := create(remote)
+		if err != nil {
+			return fmt.Errorf("prepare PFCP remote node: %w", err)
+		}
+		nodes = append(nodes, connector)
+	}
+	return conn.updateEndpoint(address, nodeID, &nodes, persist)
 }
 
 func UpdateAssociationSetupTimeout(

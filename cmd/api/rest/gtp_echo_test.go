@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
 )
 
@@ -17,7 +16,7 @@ func TestGTPEchoRESTMinimumInterval(t *testing.T) {
 	t.Chdir(t.TempDir())
 	manager := core.NewGtpPathManager("127.0.0.1:0", time.Hour)
 	defer manager.Stop()
-	h := &ApiHandler{Cfg: &config.UpfConfig{}, GtpPathManager: manager}
+	h := &ApiHandler{Cfg: validEditConfigPtr(), GtpPathManager: manager}
 	r := gin.New()
 	r.POST("/gtp", h.editGTPPathConfig)
 	for _, seconds := range []uint32{0, 1, 59, 60, 61} {

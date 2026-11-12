@@ -46,7 +46,14 @@ func (conn *PfcpConnection) associationTicker() *time.Ticker {
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
 	if conn.AssociationSetupTicker == nil {
-		conn.AssociationSetupTicker = time.NewTicker(5 * time.Second)
+		conn.AssociationSetupTicker = time.NewTicker(conn.setupInterval())
 	}
 	return conn.AssociationSetupTicker
+}
+
+func (conn *PfcpConnection) setupInterval() time.Duration {
+	if conn.setupEvery <= 0 {
+		return 5 * time.Second
+	}
+	return conn.setupEvery
 }

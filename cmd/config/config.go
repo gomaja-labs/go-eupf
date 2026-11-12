@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,7 +117,7 @@ type UpfConfig struct {
 	HeartbeatTimeout        uint32         `mapstructure:"heartbeat_timeout" json:"heartbeat_timeout"`
 	LoggingLevel            string         `mapstructure:"logging_level" validate:"required" json:"logging_level"`
 	LoggingCaller           bool           `mapstructure:"logging_caller" json:"logging_caller"`
-	UEIPPool                string         `mapstructure:"ueip_pool" validate:"cidr" json:"ueip_pool"`
+	UEIPPool                string         `mapstructure:"ueip_pool" validate:"omitempty,cidr" json:"ueip_pool"`
 	FTEIDPool               uint32         `mapstructure:"teid_pool" json:"teid_pool"`
 	FeatureUEIP             bool           `mapstructure:"feature_ueip" json:"feature_ueip"`
 	FeatureFTUP             bool           `mapstructure:"feature_ftup" json:"feature_ftup"`
@@ -138,11 +139,13 @@ type UpfConfig struct {
 	n3AdvertisedAddress5G net.IP
 }
 
-func initialize() {
+func initialize() error {
 	defineFlags()
 	initValidator()
-	initCommonConfig()
-	initPccConfig()
+	if err := initCommonConfig(); err != nil {
+		return err
+	}
+	return initPccConfig()
 }
 
 func defineFlags() {
@@ -217,7 +220,7 @@ func defineFlags() {
 	pflag.Parse()
 }
 
-func initPccConfig() {
+func initPccConfig() error {
 	configPath := pflag.Lookup("pcc-config").Value.String()
 
 	pccConfigV.SetDefault("pcc_rules", []PccRule{})
@@ -226,20 +229,26 @@ func initPccConfig() {
 	pccConfigV.SetEnvPrefix("pcc")
 	pccConfigV.AutomaticEnv()
 
-	if err := pccConfigV.ReadInConfig(); err != nil {
-		if errors.As(err, &viper.ConfigFileNotFoundError{}) || errors.Is(err, os.ErrNotExist) {
-			log.Print("PCC config file not found. Using defaults")
-		} else {
-			log.Printf("Unable to read PCC config file: %v", err)
-		}
-
-		return
+	if err := readConfig(pccConfigV, pflag.Lookup("pcc-config").Changed); err != nil {
+		return fmt.Errorf("PCC configuration: %w", err)
 	}
-
-	log.Printf("Startup PCC config: %+v", pccConfigV.AllSettings())
+	return nil
 }
 
-func initCommonConfig() {
+// readConfig allows only an absent implicit default file. A present unreadable
+// or malformed file, and every explicitly selected missing file, are errors.
+func readConfig(v *viper.Viper, explicit bool) error {
+	if err := v.ReadInConfig(); err != nil {
+		var absent viper.ConfigFileNotFoundError
+		if !explicit && (errors.As(err, &absent) || errors.Is(err, os.ErrNotExist)) {
+			return nil
+		}
+		return fmt.Errorf("read configuration: %w", err)
+	}
+	return nil
+}
+
+func initCommonConfig() error {
 	configPath := pflag.Lookup("config").Value.String()
 	// Bind flag errors only when flag is nil, and we ignore empty cli args
 	_ = commonConfigV.BindPFlag("interface_name", pflag.Lookup("iface"))
@@ -309,14 +318,8 @@ func initCommonConfig() {
 	commonConfigV.SetEnvPrefix("upf")
 	commonConfigV.AutomaticEnv()
 
-	if err := commonConfigV.ReadInConfig(); err != nil {
-		if errors.As(err, &viper.ConfigFileNotFoundError{}) || errors.Is(err, os.ErrNotExist) {
-			// Config file not found; ignore error if desired
-			log.Print("Config file not found. Using defaults")
-		} else {
-			// Config file was found but another error was produced
-			log.Printf("Unable to read config file: %s commonConfigV. Using defaults", err)
-		}
+	if err := readConfig(commonConfigV, pflag.Lookup("config").Changed); err != nil {
+		return err
 	}
 
 	commonConfigV.SetDefault("n9_address", commonConfigV.GetString("n3_address"))
@@ -325,6 +328,7 @@ func initCommonConfig() {
 	commonConfigV.SetDefault("n9_adv_address", commonConfigV.GetString("n9_address"))
 
 	log.Print("Loaded startup configuration")
+	return nil
 }
 
 func (c *UpfConfig) GetDscpMarkByQci(qci uint8) uint8 {
@@ -361,11 +365,7 @@ func (c *UpfConfig) Validate() error {
 			return fmt.Errorf("%s must be between 1 and 1048576", key)
 		}
 	}
-	for key, value := range map[string]uint32{"heartbeat_interval": c.HeartbeatInterval, "heartbeat_timeout": c.HeartbeatTimeout, "heartbeat_retries": c.HeartbeatRetries} {
-		if value > 86400 || (key != "heartbeat_retries" && value == 0) {
-			return fmt.Errorf("%s must be positive and must not exceed 86400 (zero heartbeat_retries is allowed)", key)
-		}
-	}
+
 	for key, value := range map[string]uint32{"pdr_map_size": c.PdrMapSize, "far_map_size": c.FarMapSize, "qer_map_size": c.QerMapSize, "urr_map_size": c.UrrMapSize} {
 		if value > 2<<20 {
 			return fmt.Errorf("%s must not exceed 2097152", key)
@@ -480,9 +480,22 @@ func (c *UpfConfig) UpdateFile(params map[string]interface{}) error {
 	for key, value := range params {
 		saved.Set(key, value)
 	}
-	if err := saved.WriteConfigAs(path); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".eupf-config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("prepare selected config: %w", err)
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }()
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close config temporary file: %w", err)
+	}
+	if err := saved.WriteConfigAs(name); err != nil {
 		return fmt.Errorf("write selected config: %w", err)
 	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("commit selected config: %w", err)
+	}
+
 	return nil
 }
 

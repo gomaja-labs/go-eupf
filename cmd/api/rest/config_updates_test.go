@@ -10,7 +10,6 @@ import (
 
 	"github.com/cilium/ebpf/link"
 	"github.com/gin-gonic/gin"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/rs/zerolog"
 )
 
@@ -18,7 +17,8 @@ func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
 	previousLevel := zerolog.GlobalLevel()
 	defer zerolog.SetGlobalLevel(previousLevel)
 	t.Chdir(t.TempDir())
-	startup := config.UpfConfig{LoggingLevel: "info", InterfaceName: []string{"original"}}
+	startup := validEditConfig()
+	startup.InterfaceName = []string{"original"}
 	h := NewApiHandler(nil, nil, nil, &startup, nil, nil, nil)
 	h.Cfg.InterfaceName[0] = "api-owned"
 	router := h.InitRoutes()
@@ -26,6 +26,8 @@ func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
 	wg.Go(func() {
 		for range 40 {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/config/logging_level", strings.NewReader(`{"logging_level":"warn"}`))
+			req.Host = "localhost"
+			req.Header.Set("Content-Type", "application/json")
 			out := httptest.NewRecorder()
 			router.ServeHTTP(out, req)
 			if out.Code != 200 {
@@ -36,7 +38,7 @@ func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
 	wg.Go(func() {
 		for range 40 {
 			out := httptest.NewRecorder()
-			router.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+			router.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "http://localhost/api/v1/config", nil))
 			if out.Code != 200 {
 				t.Errorf("read status=%d", out.Code)
 			}
@@ -50,7 +52,7 @@ func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
 
 func TestConfigurationPersistenceFailureIsReported(t *testing.T) {
 	t.Chdir(t.TempDir())
-	h := &ApiHandler{Cfg: &config.UpfConfig{}}
+	h := &ApiHandler{Cfg: validEditConfigPtr()}
 	router := gin.New()
 	router.POST("/logging", h.editLoggingCallerConfig)
 	// The fallback config path cannot be written when occupied by a directory.
@@ -66,7 +68,7 @@ func TestConfigurationPersistenceFailureIsReported(t *testing.T) {
 
 func TestChangingAttachModeRequiresRemovingActiveInterfaces(t *testing.T) {
 	links := []link.Link{nil}
-	h := &ApiHandler{Cfg: &config.UpfConfig{XDPAttachMode: "generic"}, Links: &links}
+	h := &ApiHandler{Cfg: validEditConfigPtr(), Links: &links}
 	router := gin.New()
 	router.POST("/ebpf", h.editDataPlaneConfig)
 	out := httptest.NewRecorder()
