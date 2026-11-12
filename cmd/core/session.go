@@ -83,9 +83,10 @@ type SQerInfo struct {
 }
 
 type SUrrInfo struct {
-	UrrInfo         ebpf.UrrInfo
-	GlobalId        uint32
-	ReportSeqNumber uint32
+	UnreportedUplink, UnreportedDownlink uint64
+	UrrInfo                              ebpf.UrrInfo
+	GlobalId                             uint32
+	ReportSeqNumber                      uint32
 }
 
 func (s *Session) NewFar(id uint32, internalId uint32, farInfo ebpf.FarInfo) {

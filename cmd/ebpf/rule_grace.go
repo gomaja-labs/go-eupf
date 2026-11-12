@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
 
 	cilium "github.com/cilium/ebpf"
 )
@@ -25,13 +28,18 @@ type ruleGrace struct {
 	stop         chan struct{}
 	done         chan struct{}
 	err          error
+	failures     chan error
 	synchronize  func() error
 }
 
 type graceWork struct {
-	reclaim func() error
-	done    chan error
-	graced  bool
+	reclaim   func() error
+	done      chan error
+	graced    bool
+	prepare   func() error
+	sessionID uint64
+	failedAt  time.Time
+	delay     time.Duration
 }
 
 func newRuleGrace() (*ruleGrace, error) {
@@ -45,7 +53,7 @@ func newRuleGrace() (*ruleGrace, error) {
 		_ = inner.Close()
 		return nil, fmt.Errorf("create rule grace outer map: %w", err)
 	}
-	g := &ruleGrace{inner: inner, outer: outer, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	g := &ruleGrace{failures: make(chan error, 1), inner: inner, outer: outer, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 	g.synchronize = func() error { return g.outer.Put(uint32(0), g.inner) }
 	go g.run()
 	return g, nil
@@ -80,38 +88,94 @@ func (g *ruleGrace) wait() error {
 	g.enqueue(graceWork{done: done})
 	return <-done
 }
+
+// ruleRecoveryWindow bounds actual I/O failures, never successful progress.
+// Keep all affected identifiers reserved; after retries, the process supervisor
+// must restart the UPF with fresh maps. Backoff is 100, 200, 400, then 500 ms.
+const ruleRecoveryWindow = 3 * time.Second
+
 func (g *ruleGrace) drain() {
 	g.mu.Lock()
 	work := g.pending
 	g.pending = nil
 	g.mu.Unlock()
-	if len(work) == 0 {
-		return
-	}
-	// Even replacing an equal descriptor invokes maybe_wait_bpf_programs.
-	var err error
-	for _, item := range work {
-		if !item.graced {
-			err = g.synchronize()
-			break
-		}
-	}
-	if err == nil {
+	for len(work) > 0 {
+		var ready, retry []graceWork
 		for _, item := range work {
-			if item.reclaim != nil {
-				err = errors.Join(err, item.reclaim())
+			if item.prepare != nil {
+				if err := item.prepare(); err != nil {
+					g.retryWork(item, err, &retry)
+					continue
+				}
+				item.prepare = nil
+			}
+			ready = append(ready, item)
+		}
+		var graceErr error
+		for _, item := range ready {
+			if !item.graced {
+				graceErr = g.synchronize()
+				break
 			}
 		}
-	}
-	g.mu.Lock()
-	g.err = errors.Join(g.err, err)
-	err = g.err
-	g.mu.Unlock()
-	for _, item := range work {
-		if item.done != nil {
-			item.done <- err
+		for _, item := range ready {
+			if graceErr != nil {
+				g.retryWork(item, graceErr, &retry)
+				continue
+			}
+			item.graced = true
+			if item.reclaim != nil {
+				if err := item.reclaim(); err != nil {
+					g.retryWork(item, err, &retry)
+					continue
+				}
+			}
+			if item.done != nil {
+				item.done <- nil
+			}
 		}
+		if len(retry) == 0 {
+			return
+		}
+		delay := time.Duration(0)
+		for _, item := range retry {
+			delay = max(delay, item.delay)
+		}
+		time.Sleep(delay)
+		g.mu.Lock()
+		work = append(retry, g.pending...)
+		g.pending = nil
+		g.mu.Unlock()
 	}
+}
+func (g *ruleGrace) retryWork(item graceWork, err error, retry *[]graceWork) {
+	now := time.Now()
+	if item.failedAt.IsZero() {
+		item.failedAt = now
+	}
+	log.Error().Err(err).Uint64("session", item.sessionID).Dur("retry_for", now.Sub(item.failedAt)).Msg("Rule reclamation failed; keep identifiers reserved")
+	if now.Sub(item.failedAt) >= ruleRecoveryWindow {
+		fatal := fmt.Errorf("session %d rule recovery failed for %s: %w", item.sessionID, ruleRecoveryWindow, err)
+		g.mu.Lock()
+		g.err = errors.Join(g.err, fatal)
+		g.mu.Unlock()
+		if g.failures != nil {
+			select {
+			case g.failures <- fatal:
+			default:
+			}
+		}
+		if item.done != nil {
+			item.done <- fatal
+		}
+		return
+	}
+	if item.delay == 0 {
+		item.delay = 100 * time.Millisecond
+	} else {
+		item.delay = min(500*time.Millisecond, item.delay*2)
+	}
+	*retry = append(*retry, item)
 }
 func (g *ruleGrace) run() {
 	defer close(g.done)

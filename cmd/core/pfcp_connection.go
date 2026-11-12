@@ -52,6 +52,8 @@ type PfcpConnection struct {
 
 	stateMu           sync.RWMutex // Owns all associations, sessions and their indexes.
 	nextSessionID     uint64       // UPF-wide SEID allocator, also owned by stateMu.
+	responseWait      <-chan error
+	addressIndex      map[string]map[*NodeAssociation]int
 	transport         transportState
 	requestTimeout    time.Duration
 	requestRetries    uint32
@@ -303,10 +305,14 @@ func (connection *PfcpConnection) GetN9Addr() string {
 }
 
 func (connection *PfcpConnection) GetMapOperations() ebpf.ForwardingPlaneController {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return connection.mapOperations
 }
 
 func (connection *PfcpConnection) GetResourceManager() *service.ResourceManager {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return connection.ResourceManager
 }
 
@@ -434,6 +440,17 @@ func (connection *PfcpConnection) Run() {
 	for {
 		select {
 		case <-connection.done:
+			return
+		case err := <-connection.ruleFailureChannel():
+			connection.stateMu.Lock()
+			connection.terminalError = err
+			if connection.failures != nil {
+				select {
+				case connection.failures <- err:
+				default:
+				}
+			}
+			connection.stateMu.Unlock()
 			return
 		case <-ticker.C:
 			connection.RefreshAssociations()
@@ -668,7 +685,9 @@ func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
 		return err
 	}
 	connection.ReleaseResources(session.LocalSEID)
-	return finish(true)
+	err = finish(true)
+	connection.responseWait = nil
+	return err
 }
 
 func (connection *PfcpConnection) GetSessionCount() int {

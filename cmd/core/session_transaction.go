@@ -96,6 +96,7 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() err
 			return errors.Join(err, rollback)
 		}
 		if deferred {
+			conn.responseWait = async.UsageCompletion()
 			return nil
 		}
 		return reclaimReservations(reclaim)
@@ -131,6 +132,37 @@ func (conn *PfcpConnection) reconcileSessionResources(session *Session) {
 		conn.ResourceManager.IPAM.ReleaseUnused(session.LocalSEID, ips)
 		conn.ResourceManager.IPAM.ReleaseUnusedPrefixes(session.LocalSEID, prefixes)
 	}
+}
+
+func (proxy *sessionMapProxy) DeferUsage(id uint32, report func(ebpf.UrrInfo)) error {
+	if deferred, ok := proxy.ForwardingPlaneController.(interface {
+		DeferUsage(uint32, func(ebpf.UrrInfo)) error
+	}); ok {
+		return deferred.DeferUsage(id, report)
+	}
+	counters, err := proxy.DeleteUrr(id)
+	if err == nil {
+		report(counters)
+	}
+	return err
+}
+
+func deferUsage(controller ebpf.ForwardingPlaneController, id uint32, report func(ebpf.UrrInfo)) error {
+	if deferred, ok := controller.(interface {
+		DeferUsage(uint32, func(ebpf.UrrInfo)) error
+	}); ok {
+		return deferred.DeferUsage(id, report)
+	}
+	counters, err := controller.DeleteUrr(id)
+	if err == nil {
+		report(counters)
+	}
+	return err
+}
+
+func (proxy *sessionMapProxy) asynchronousUsage() bool {
+	_, ok := proxy.ForwardingPlaneController.(interface{ UsageCompletion() <-chan error })
+	return ok
 }
 
 func reclaimReservations(reclaim func() error) error {

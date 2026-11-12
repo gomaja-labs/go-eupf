@@ -3,6 +3,8 @@ package core
 import (
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
@@ -29,24 +31,63 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 		if _, exists := session.URRs[id]; !exists {
 			continue
 		}
-		pool.AddRule(ie.RuleIDTypeURR, id, Operation{Retire: func() error {
-			urr := session.URRs[id]
-			counters, err := maps.GetUrr(urr.GlobalId)
-			if err != nil {
-				return err
+		old := session.URRs[id]
+		replacement := uint32(0)
+		emit := func(counters ebpf.UrrInfo) {
+			up := counters.UplinkVolume - old.UrrInfo.UplinkVolume + old.UnreportedUplink
+			down := counters.DownlinkVolume - old.UrrInfo.DownlinkVolume + old.UnreportedDownlink
+			if up != 0 || down != 0 || replacement != 0 {
+				*reports = append(*reports, ie.NewUsageReportWithinSessionModificationResponse(ie.NewURRID(id), conn.profile.URSEQN(old.ReportSeqNumber), ie.NewUsageReportTrigger(0, 1<<3, 0), ie.NewEndTime(time.Now()), ie.NewVolumeMeasurement(7, up+down, up, down, 0, 0, 0)))
 			}
-			if err := maps.ResetUrr(urr.GlobalId); err != nil {
-				return err
-			}
-			up, down := counters.UplinkVolume-urr.UrrInfo.UplinkVolume, counters.DownlinkVolume-urr.UrrInfo.DownlinkVolume
-			if up != 0 || down != 0 {
-				*reports = append(*reports, ie.NewUsageReportWithinSessionModificationResponse(ie.NewURRID(id), conn.profile.URSEQN(urr.ReportSeqNumber), ie.NewUsageReportTrigger(0, 1<<3, 0), ie.NewEndTime(time.Now()), ie.NewVolumeMeasurement(7, up+down, up, down, 0, 0, 0)))
+		}
+		pool.AddRule(ie.RuleIDTypeURR, id, Operation{
+			Reserve: func() error {
+				proxy, ok := maps.(*sessionMapProxy)
+				if !ok || !proxy.asynchronousUsage() {
+					return nil
+				}
+				var err error
+				replacement, err = maps.GetNextURR()
+				if err != nil {
+					return err
+				}
+				urr := old
+				urr.GlobalId = replacement
 				urr.ReportSeqNumber++
-			}
-			urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
-			urr.UrrInfo.VolumeReported = false
-			session.URRs[id] = urr
-			return nil
-		}})
+				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
+				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
+				urr.UrrInfo.VolumeReported = false
+				session.URRs[id] = urr
+				return nil
+			},
+			Apply: func() error {
+				if replacement == 0 {
+					return nil
+				}
+				return maps.UpdateUrr(replacement, session.URRs[id].UrrInfo)
+			},
+			Retire: func() error {
+				if replacement != 0 {
+					return deferUsage(maps, old.GlobalId, emit)
+				}
+				counters, err := maps.GetUrr(old.GlobalId)
+				if err != nil {
+					return err
+				}
+				if err := maps.ResetUrr(old.GlobalId); err != nil {
+					return err
+				}
+				emit(counters)
+				urr := old
+				if counters.UplinkVolume != old.UrrInfo.UplinkVolume || counters.DownlinkVolume != old.UrrInfo.DownlinkVolume || old.UnreportedUplink+old.UnreportedDownlink > 0 {
+					urr.ReportSeqNumber++
+				}
+				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
+				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
+				urr.UrrInfo.VolumeReported = false
+				session.URRs[id] = urr
+				return nil
+			},
+		})
 	}
 }

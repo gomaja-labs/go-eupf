@@ -73,7 +73,9 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	}
 	session := NewSession(localSEID, remoteSEID.SEID, imsi, msisdn, isTraced)
 	session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(remoteSEID.IPv4Address), slices.Clone(remoteSEID.IPv6Address)
-	printSessionEstablishmentRequest(req, conn.profile)
+	if zerolog.GlobalLevel() <= zerolog.DebugLevel {
+		printSessionEstablishmentRequest(req, conn.profile)
+	}
 
 	if req.SNSSAI != nil || requestHasQFI(req.CreateQER) {
 		session.Is5G = true
@@ -135,6 +137,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	}
 
 	association.Sessions[localSEID] = session
+	conn.indexSession(association, session, 1)
 
 	additionalIEs := []*ie.IE{
 		conn.profile.NodeID(conn.nodeId),
@@ -172,7 +175,9 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
 	}
-	printSessionDeleteRequest(req)
+	if zerolog.GlobalLevel() <= zerolog.DebugLevel {
+		printSessionDeleteRequest(req)
+	}
 
 	session, ok := association.Sessions[req.SEID()]
 	if !ok {
@@ -231,14 +236,12 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	}
 
 	logger.Debug().Msgf("Deleting session: %d", req.SEID())
-	delete(association.Sessions, req.SEID())
-
-	conn.ReleaseResources(req.SEID())
+	conn.forgetSession(association, req.SEID())
 
 	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
 	delResp := message.NewSessionDeletionResponse(session.RemoteSEID, req.Sequence(), additionalIEs...)
 
-	return delResp, traced, nil
+	return conn.deferredUsageResponse(delResp, func() { delResp.UsageReport = deletedURRs }), traced, nil
 }
 
 func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Message, addr string) (result message.Message, tracedResult bool, handlerErr error) {
@@ -281,7 +284,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 
 	traced := session.IsSessionTraced()
 
-	printSessionModificationRequest(req, conn.profile)
+	if zerolog.GlobalLevel() <= zerolog.DebugLevel {
+		printSessionModificationRequest(req, conn.profile)
+	}
 
 	start, finish := conn.prepareSessionMutation(session)
 	defer func() {
@@ -333,7 +338,10 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 			association.sessionEntities[req.SEID()] = session.controlIP(conn).String()
 		}
 	}
+	conn.indexSession(association, association.Sessions[req.SEID()], -1)
 	association.Sessions[req.SEID()] = session
+	conn.indexSession(association, session, 1)
+	association.sessionEntities[req.SEID()] = session.controlIP(conn).String()
 
 	additionalIEs := []*ie.IE{
 		ie.NewCause(ie.CauseRequestAccepted),
@@ -353,7 +361,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	modResp := message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), additionalIEs...)
 	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
 
-	return modResp, traced, nil
+	return conn.deferredUsageResponse(modResp, func() { modResp.UsageReport = removedURRs }), traced, nil
 }
 
 // ruleFailure identifies a rule that could not be stored or applied.
@@ -678,7 +686,9 @@ func HandlePfcpSessionReportResponse(conn *PfcpConnection, msg message.Message, 
 	srr := msg.(*message.SessionReportResponse)
 	log.Debug().Msgf("Got Session Report Response from: %s.", addr)
 
-	printSessionReportResponse(srr)
+	if zerolog.GlobalLevel() <= zerolog.DebugLevel {
+		printSessionReportResponse(srr)
+	}
 
 	return nil, true, nil
 }
@@ -774,32 +784,23 @@ func processDeletionRequestRules(
 			Detach: func() error { return mapOperations.DetachRule(3, urr.GlobalId) },
 			Retire: func(urrID uint32, urr SUrrInfo) func() error {
 				return func() error {
-					data, err := mapOperations.DeleteUrr(urr.GlobalId)
-					if err != nil {
-						return err
-					}
+					return deferUsage(mapOperations, urr.GlobalId, func(data ebpf.UrrInfo) {
 
-					session.URRs[urrID] = SUrrInfo{
-						UrrInfo:         urr.UrrInfo,
-						GlobalId:        urr.GlobalId,
-						ReportSeqNumber: urr.ReportSeqNumber + 1,
-					}
+						uplink := data.UplinkVolume - urr.UrrInfo.UplinkVolume + urr.UnreportedUplink
+						downlink := data.DownlinkVolume - urr.UrrInfo.DownlinkVolume + urr.UnreportedDownlink
 
-					uplink := data.UplinkVolume - urr.UrrInfo.UplinkVolume
-					downlink := data.DownlinkVolume - urr.UrrInfo.DownlinkVolume
+						deletionReportIEs := append([]*ie.IE{
+							ie.NewURRID(urrID),
+							conn.profile.URSEQN(urr.ReportSeqNumber),
+							ie.NewUsageReportTrigger(0, 1<<3, 0),
+							ie.NewEndTime(time.Now()),
+							ie.NewVolumeMeasurement(0x7, uplink+downlink, uplink, downlink, 0, 0, 0),
+						}, conn.profile.UsageReportDeletionVendorIEs()...)
+						report := ie.NewUsageReportWithinSessionDeletionResponse(deletionReportIEs...)
 
-					deletionReportIEs := append([]*ie.IE{
-						ie.NewURRID(urrID),
-						conn.profile.URSEQN(urr.ReportSeqNumber),
-						ie.NewUsageReportTrigger(0, 1<<3, 0),
-						ie.NewEndTime(time.Now()),
-						ie.NewVolumeMeasurement(0x7, uplink+downlink, uplink, downlink, 0, 0, 0),
-					}, conn.profile.UsageReportDeletionVendorIEs()...)
-					report := ie.NewUsageReportWithinSessionDeletionResponse(deletionReportIEs...)
+						*deletedURRs = append(*deletedURRs, report)
 
-					*deletedURRs = append(*deletedURRs, report)
-
-					return nil
+					})
 				}
 			}(urrID, urr),
 		})
@@ -1348,28 +1349,24 @@ func removeURRs(
 		operationPool.AddRule(ie.RuleIDTypeURR, urrID, Operation{
 			Detach: func() error { return mapOperations.DetachRule(3, oldUrr.GlobalId) },
 			Retire: func() error {
-				newReport, err := mapOperations.DeleteUrr(oldUrr.GlobalId)
-				if err != nil {
-					return err
-				}
+				return deferUsage(mapOperations, oldUrr.GlobalId, func(newReport ebpf.UrrInfo) {
+					uplink := newReport.UplinkVolume - oldUrr.UrrInfo.UplinkVolume + oldUrr.UnreportedUplink
+					downlink := newReport.DownlinkVolume - oldUrr.UrrInfo.DownlinkVolume + oldUrr.UnreportedDownlink
 
-				uplink := newReport.UplinkVolume - oldUrr.UrrInfo.UplinkVolume
-				downlink := newReport.DownlinkVolume - oldUrr.UrrInfo.DownlinkVolume
+					report := ie.NewUsageReportWithinSessionModificationResponse(
+						ie.NewURRID(urrID),
+						profile.URSEQN(oldUrr.ReportSeqNumber),
+						ie.NewUsageReportTrigger([]uint8{0, 1 << 3, 0}...),
+						ie.NewEndTime(time.Now()),
+						ie.NewVolumeMeasurement(0x7,
+							uplink+downlink,
+							uplink,
+							downlink,
+							0, 0, 0),
+					)
 
-				report := ie.NewUsageReportWithinSessionModificationResponse(
-					ie.NewURRID(urrID),
-					profile.URSEQN(oldUrr.ReportSeqNumber),
-					ie.NewUsageReportTrigger([]uint8{0, 1 << 3, 0}...),
-					ie.NewEndTime(time.Now()),
-					ie.NewVolumeMeasurement(0x7,
-						uplink+downlink,
-						uplink,
-						downlink,
-						0, 0, 0),
-				)
-
-				*removedURRs = append(*removedURRs, report)
-				return nil
+					*removedURRs = append(*removedURRs, report)
+				})
 			},
 		})
 	}

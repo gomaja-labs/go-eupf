@@ -1,6 +1,7 @@
 package ebpf
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -71,5 +72,52 @@ func TestRuleGraceBatchesRetirementsAfterReadersFinish(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("1000 retirements used %d grace periods, want two including initial reader", got)
+	}
+}
+
+func TestRuleRecoveryRetriesWithBackoff(t *testing.T) {
+	g := &ruleGrace{failures: make(chan error, 1)}
+	g.synchronize = func() error { return nil }
+	attempts := []time.Time{}
+	done := make(chan error, 1)
+	g.enqueue(graceWork{sessionID: 17, done: done, reclaim: func() error {
+		attempts = append(attempts, time.Now())
+		if len(attempts) < 3 {
+			return fmt.Errorf("synthetic reclaim failure")
+		}
+		return nil
+	}})
+	g.drain()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 3 || attempts[1].Sub(attempts[0]) < 100*time.Millisecond || attempts[2].Sub(attempts[1]) < 200*time.Millisecond {
+		t.Fatal("recovery omitted bounded exponential backoff")
+	}
+	if g.failure() != nil {
+		t.Fatal("successful recovery poisoned admission")
+	}
+}
+
+func TestExhaustedRuleRecoveryNotifiesSupervisorWithoutReclaiming(t *testing.T) {
+	g := &ruleGrace{failures: make(chan error, 1)}
+	g.synchronize = func() error { return fmt.Errorf("synthetic grace failure") }
+	reclaimed := false
+	done := make(chan error, 1)
+	g.enqueue(graceWork{sessionID: 17, failedAt: time.Now().Add(-ruleRecoveryWindow), done: done, reclaim: func() error { reclaimed = true; return nil }})
+	g.drain()
+	if err := <-done; err == nil {
+		t.Fatal("waiting response did not receive terminal failure")
+	}
+	if reclaimed || g.failure() == nil {
+		t.Fatal("failed grace released identifiers or hid fatal failure")
+	}
+	select {
+	case err := <-g.failures:
+		if err == nil {
+			t.Fatal("nil supervisor error")
+		}
+	default:
+		t.Fatal("supervisor was not notified")
 	}
 }

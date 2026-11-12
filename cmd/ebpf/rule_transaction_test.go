@@ -93,6 +93,10 @@ func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
 			if err := tx.Rollback(); err != nil {
 				t.Fatal(err)
 			}
+			// Rollback restores keys immediately; allocated slots retire after grace.
+			if err := b.SynchronizeRules(); err != nil {
+				t.Fatal(err)
+			}
 			assertMapValue(t, b.PdrMapTeidIp4.Lookup, uint32(10), pdr)
 			assertMapValue(t, b.FarMap.Lookup, uint32(1), far)
 			assertMapValue(t, b.QerMap.Lookup, uint32(1), qer)

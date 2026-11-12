@@ -243,8 +243,8 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	}
 	if handlerErr == nil {
 		handlerIdentity := addr.IP.String()
-		if bound != nil {
-			handlerIdentity = bound.ID
+		if assoc != nil {
+			handlerIdentity = assoc.ID
 		}
 		if completed != nil && completed.typ == message.MsgTypeHeartbeatRequest && completed.association != nil {
 			handlerIdentity = completed.association.ID
@@ -254,13 +254,10 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			conn.rememberSessionEntity(incomingMsg, outgoing, addr.IP.String())
 		}
 	}
-	if _, deleted := incomingMsg.(*message.SessionDeletionRequest); deleted {
-		if assoc != nil {
-			conn.pruneEntityMetadata(assoc)
-		}
-	}
+
+	waiting, deferred := outgoing.(*usageResponse)
 	var wire []byte
-	if outgoing != nil {
+	if outgoing != nil && !deferred {
 		wire = make([]byte, outgoing.MarshalLen())
 		if err := outgoing.MarshalTo(wire); err != nil {
 			handlerErr = errors.Join(handlerErr, err)
@@ -299,6 +296,12 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		conn.TraceMessage(buf, addr, true)
 	}
 	UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(time.Since(startTime).Seconds())
+	if deferred {
+		copied := *addr
+		copied.IP = append(net.IP(nil), addr.IP...)
+		go conn.completeUsageResponse(waiting, key, digest, &copied, entity, assoc, trace, startTime)
+		return handlerErr
+	}
 	if wire != nil {
 		handlerErr = errors.Join(handlerErr, conn.sendEncoded(wire, outgoing.MessageType(), addr, trace))
 	}

@@ -136,7 +136,11 @@ func (b *BpfObjects) PutPdrUplink(teid uint32, info PdrInfo) error {
 	if err != nil {
 		return err
 	}
-	return b.PdrMapTeidIp4.Put(teid, &bucket)
+	if err := b.PdrMapTeidIp4.Put(teid, &bucket); err != nil {
+		return err
+	}
+	b.recordPDRKey(b.PdrMapTeidIp4, teid, info.SessionID, true)
+	return nil
 }
 func (b *BpfObjects) PutPdrDownlink(ip net.IP, info PdrInfo) error {
 	return b.putPdrDownlink(ip, info)
@@ -155,7 +159,11 @@ func (b *BpfObjects) putPdrDownlink(ip net.IP, info PdrInfo) error {
 	if err != nil {
 		return err
 	}
-	return m.Put(key, &bucket)
+	if err := m.Put(key, &bucket); err != nil {
+		return err
+	}
+	b.recordPDRKey(m, key, info.SessionID, true)
+	return nil
 }
 func (b *BpfObjects) UpdatePdrUplink(teid uint32, info PdrInfo) error {
 	return b.PutPdrUplink(teid, info)
@@ -164,7 +172,7 @@ func (b *BpfObjects) UpdatePdrDownlink(ip net.IP, info PdrInfo) error {
 	return b.PutPdrDownlink(ip, info)
 }
 
-func deletePDR(m *ebpf.Map, key interface{}, sessionID uint64, pdrID uint32) error {
+func (b *BpfObjects) deletePDR(m *ebpf.Map, key interface{}, sessionID uint64, pdrID uint32) error {
 	var bucket IpEntrypointPdrInfo
 	if err := lookupRuleValue(m, key, &bucket); err != nil {
 		if isKeyAbsent(err) {
@@ -186,21 +194,25 @@ func deletePDR(m *ebpf.Map, key interface{}, sessionID uint64, pdrID uint32) err
 		bucket.Count--
 		bucket.Entries[bucket.Count] = IpEntrypointPdrEntry{}
 		if bucket.Count == 0 {
-			return m.Delete(key)
+			if err := m.Delete(key); err != nil {
+				return err
+			}
+			b.recordPDRKey(m, key, sessionID, false)
+			return nil
 		}
 		return m.Put(key, &bucket)
 	}
 	return nil
 }
 func (b *BpfObjects) DeletePdrUplink(teid uint32, sessionID uint64, pdrID uint32) error {
-	return deletePDR(b.PdrMapTeidIp4, teid, sessionID, pdrID)
+	return b.deletePDR(b.PdrMapTeidIp4, teid, sessionID, pdrID)
 }
 func (b *BpfObjects) DeletePdrDownlink(ip net.IP, sessionID uint64, pdrID uint32) error {
 	m, key, err := b.downlinkMap(ip)
 	if err != nil {
 		return err
 	}
-	return deletePDR(m, key, sessionID, pdrID)
+	return b.deletePDR(m, key, sessionID, pdrID)
 }
 func (b *BpfObjects) PutDownlinkPdrIp6(ip net.IP, info PdrInfo) error {
 	return b.PutPdrDownlink(ip, info)
@@ -213,7 +225,7 @@ func (b *BpfObjects) DeleteDownlinkPdrIp6(ip net.IP, sessionID uint64, pdrID uin
 	if err != nil {
 		return err
 	}
-	return deletePDR(m, key, sessionID, pdrID)
+	return b.deletePDR(m, key, sessionID, pdrID)
 }
 
 type FarInfo struct {
@@ -704,23 +716,17 @@ func (b *BpfObjects) LookupDownlinkPDR(ip net.IP) (IpEntrypointPdrInfo, error) {
 	return bucket, err
 }
 func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64) error {
-	var existing IpEntrypointIpv6PdrKey
-	var value IpEntrypointPdrInfo
-	iter := b.PdrMapDownlinkIp6.Iterate()
-	for iter.Next(&existing, &value) {
-		if existing == key {
-			continue
-		}
-		bits := min(int(existing.PrefixLength), int(key.PrefixLength))
-		mask := net.CIDRMask(bits, 128)
-		if net.IP(existing.Address[:]).Mask(mask).Equal(net.IP(key.Address[:]).Mask(mask)) {
-			if value.SessionId != owner {
-				return ErrKeyOwned
-			}
-			return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
-		}
+	tree := b.ruleKeys.prefixes
+	if tree == nil {
+		return nil
 	}
-	return iter.Err()
+	if tree.conflicts(key.Address, int(key.PrefixLength), owner) {
+		return ErrKeyOwned
+	}
+	if tree.distinctOverlap(key.Address, int(key.PrefixLength)) {
+		return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
+	}
+	return nil
 }
 
 func boolByte(value bool) uint8 {

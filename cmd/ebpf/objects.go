@@ -29,6 +29,7 @@ import (
 
 type BpfObjects struct {
 	ruleMutex  sync.Mutex
+	ruleKeys   ruleKeyIndex
 	rulePoison error
 	ruleClosed bool
 	grace      *ruleGrace
@@ -110,6 +111,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	}
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
+	bpfObjects.ruleKeys = ruleKeyIndex{}
 	loaded := false
 	defer func() {
 		if !loaded {
@@ -146,15 +148,16 @@ func (bpfObjects *BpfObjects) Load() error {
 
 func (bpfObjects *BpfObjects) Close() error {
 	bpfObjects.ruleMutex.Lock()
-	defer bpfObjects.ruleMutex.Unlock()
 	if bpfObjects.ruleClosed {
+		bpfObjects.ruleMutex.Unlock()
 		return nil
 	}
 	bpfObjects.ruleClosed = true
+	grace := bpfObjects.grace
+	bpfObjects.ruleMutex.Unlock()
 	var err error
-	if bpfObjects.grace != nil {
-		err = bpfObjects.grace.close()
-		bpfObjects.grace = nil
+	if grace != nil {
+		err = grace.close()
 	}
 	return errors.Join(err, CloseAllObjects(
 		&bpfObjects.IpEntrypointObjects,

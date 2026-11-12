@@ -72,10 +72,10 @@ func (b *BpfObjects) CheckPDRPlan(sessionID uint64, keys []PDRKey) error {
 			ipv6 = append(ipv6, plannedPDRKey[IpEntrypointIpv6PdrKey]{key.(IpEntrypointIpv6PdrKey), pdr.ID})
 		}
 	}
-	if err := checkPDRMapPlan(b.PdrMapTeidIp4, sessionID, uplink, nil); err != nil {
+	if err := checkPDRMapPlan(b, b.PdrMapTeidIp4, sessionID, uplink, nil); err != nil {
 		return err
 	}
-	if err := checkPDRMapPlan(b.PdrMapDownlinkIp4, sessionID, ipv4, nil); err != nil {
+	if err := checkPDRMapPlan(b, b.PdrMapDownlinkIp4, sessionID, ipv4, nil); err != nil {
 		return err
 	}
 	overlap := func(a, c IpEntrypointIpv6PdrKey) bool {
@@ -83,9 +83,9 @@ func (b *BpfObjects) CheckPDRPlan(sessionID uint64, keys []PDRKey) error {
 		right := net.IPNet{IP: net.IP(c.Address[:]), Mask: net.CIDRMask(int(c.PrefixLength), 128)}
 		return left.Contains(right.IP) || right.Contains(left.IP)
 	}
-	return checkPDRMapPlan(b.PdrMapDownlinkIp6, sessionID, ipv6, overlap)
+	return checkPDRMapPlan(b, b.PdrMapDownlinkIp6, sessionID, ipv6, overlap)
 }
-func checkPDRMapPlan[K comparable](m *cilium.Map, sessionID uint64, planned []plannedPDRKey[K], overlap func(K, K) bool) error {
+func checkPDRMapPlan[K comparable](b *BpfObjects, m *cilium.Map, sessionID uint64, planned []plannedPDRKey[K], overlap func(K, K) bool) error {
 	if len(planned) == 0 {
 		return nil
 	}
@@ -105,34 +105,34 @@ func checkPDRMapPlan[K comparable](m *cilium.Map, sessionID uint64, planned []pl
 		}
 		owners[entry.key] = entry.id
 	}
-	var key K
-	var value IpEntrypointPdrInfo
-	other := uint64(0)
-	iterator := m.Iterate()
-	for iterator.Next(&key, &value) {
-		if value.SessionId == sessionID {
-			continue
-		}
-		other++
-		if id, exists := owners[key]; exists {
+	for key, id := range owners {
+		if owner, exists := b.ruleKeys.keys[pdrMutationKey{m, key}]; exists && owner != sessionID {
 			return &PDRPlanError{id, ErrKeyOwned}
 		}
-		if overlap != nil {
-			for candidate, id := range owners {
-				if overlap(key, candidate) {
-					return &PDRPlanError{id, ErrKeyOwned}
-				}
-			}
+		if prefix, ok := any(key).(IpEntrypointIpv6PdrKey); ok && b.ruleKeys.prefixes != nil && b.ruleKeys.prefixes.conflicts(prefix.Address, int(prefix.PrefixLength), sessionID) {
+			return &PDRPlanError{id, ErrKeyOwned}
 		}
 	}
-	if err := iterator.Err(); err != nil {
-		return fmt.Errorf("read PDR map for validation: %w", err)
+	own := uint64(0)
+	for key := range b.ruleKeys.owners[sessionID] {
+		if key.m == m {
+			own++
+		}
 	}
-	info, err := m.Info()
-	if err != nil {
-		return err
+	other := b.ruleKeys.counts[m] - own
+	capacity := b.ruleKeys.capacities[m]
+	if capacity == 0 {
+		info, err := m.Info()
+		if err != nil {
+			return err
+		}
+		capacity = uint64(info.MaxEntries)
+		if b.ruleKeys.capacities == nil {
+			b.ruleKeys.capacities = make(map[*cilium.Map]uint64)
+		}
+		b.ruleKeys.capacities[m] = capacity
 	}
-	if other+uint64(len(counts)) > uint64(info.MaxEntries) {
+	if other+uint64(len(counts)) > capacity {
 		return &PDRPlanError{planned[len(planned)-1].id, ErrRuleCapacity}
 	}
 	return nil

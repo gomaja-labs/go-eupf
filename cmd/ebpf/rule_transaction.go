@@ -30,6 +30,9 @@ type ruleTransaction struct {
 	newQER, newURR                           map[uint32]bool
 	finished                                 bool
 	beforeWrite                              func() error
+	resourceReclaim                          func() error
+	usagePending                             bool
+	completion                               chan error
 	pdrs                                     map[pdrMutationKey]*pdrMutation
 	pdrOrder                                 []*pdrMutation
 }
@@ -69,16 +72,31 @@ func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, cha
 	if err := change(); err != nil {
 		return err
 	}
+	isPDR := m == tx.objects.PdrMapTeidIp4 || m == tx.objects.PdrMapDownlinkIp4 || m == tx.objects.PdrMapDownlinkIp6
 	tx.undo = append(tx.undo, func() error {
+		var err error
 		if present {
-			return m.Put(key, &previous)
+			err = m.Put(key, &previous)
+		} else {
+			err = m.Delete(key)
+			if isKeyAbsent(err) {
+				err = nil
+			}
 		}
-		err := m.Delete(key)
-		if isKeyAbsent(err) {
-			return nil
+		if err == nil && isPDR {
+			old, _ := any(previous).(IpEntrypointPdrInfo)
+			tx.objects.recordPDRKey(m, key, old.SessionId, present && old.Count > 0)
 		}
 		return err
 	})
+	if isPDR {
+		var current IpEntrypointPdrInfo
+		err := lookupRuleValue(m, key, &current)
+		if err != nil && !isKeyAbsent(err) {
+			return err
+		}
+		tx.objects.recordPDRKey(m, key, current.SessionId, err == nil && current.Count > 0)
+	}
 	return nil
 }
 
@@ -89,14 +107,41 @@ func (tx *ruleTransaction) Commit() error {
 	if err := tx.publishPDRs(); err != nil {
 		return err
 	}
-	if tx.retiredKey {
-		if err := tx.synchronize(); err != nil {
-			return err
-		}
+	work := append([]func() error(nil), tx.retired...)
+	if tx.resourceReclaim != nil {
+		work = append(work, tx.resourceReclaim)
 	}
-	tx.objects.grace.retire(tx.retired, tx.graced && !tx.dirty)
-	for _, release := range tx.releases {
-		release()
+	if len(tx.releases) > 0 {
+		work = append(work, func() error {
+			for _, release := range tx.releases {
+				release()
+			}
+			return nil
+		})
+	}
+	if len(work) > 0 || tx.retiredKey || tx.usagePending {
+		if tx.usagePending {
+			tx.completion = make(chan error, 1)
+		}
+		index := 0
+		reclaim := func() error {
+			for index < len(work) {
+				if err := work[index](); err != nil {
+					return err
+				}
+				index++
+			}
+			return nil
+		}
+		if tx.graced && !tx.dirty {
+			if err := reclaim(); err != nil {
+				tx.objects.grace.enqueue(graceWork{sessionID: tx.sessionID, reclaim: reclaim, graced: true, done: tx.completion})
+			} else if tx.completion != nil {
+				tx.completion <- nil
+			}
+		} else {
+			tx.objects.grace.enqueue(graceWork{sessionID: tx.sessionID, reclaim: reclaim, done: tx.completion})
+		}
 	}
 	tx.finished = true
 	tx.objects.ruleMutex.Unlock()
@@ -106,13 +151,34 @@ func (tx *ruleTransaction) Rollback() error {
 	if tx.finished {
 		return nil
 	}
-	var result error
-	for i := len(tx.undo) - 1; i >= 0; i-- {
-		result = errors.Join(result, tx.undo[i]())
-	}
 	b := tx.objects
-	result = errors.Join(result, b.grace.wait())
-	if result == nil {
+	undo := func() error {
+		var result error
+		for i := len(tx.undo) - 1; i >= 0; i-- {
+			result = errors.Join(result, tx.undo[i]())
+		}
+		return result
+	}
+	result := undo()
+	var prepare func() error
+	if result != nil {
+		b.rulePoison = result
+		prepare = func() error {
+			b.ruleMutex.Lock()
+			defer b.ruleMutex.Unlock()
+			err := undo()
+			if err == nil {
+				b.rulePoison = nil
+			}
+			return err
+		}
+	}
+	release := func() error {
+		if tx.resourceReclaim != nil {
+			if err := tx.resourceReclaim(); err != nil {
+				return err
+			}
+		}
 		for _, id := range tx.allocatedFAR {
 			b.ReleaseFAR(id)
 		}
@@ -122,13 +188,56 @@ func (tx *ruleTransaction) Rollback() error {
 		for _, id := range tx.allocatedURR {
 			b.ReleaseURR(id)
 		}
+		return nil
+	}
+	if len(tx.undo) > 0 || len(tx.allocatedFAR)+len(tx.allocatedQER)+len(tx.allocatedURR) > 0 || result != nil {
+		b.grace.enqueue(graceWork{sessionID: tx.sessionID, prepare: prepare, reclaim: release})
 	} else {
-		b.rulePoison = result
+		_ = release()
 	}
 	tx.finished = true
 	b.ruleMutex.Unlock()
 	return result
 }
+
+// RetireResources adds the session's resource releases to the same grace batch.
+func (tx *ruleTransaction) RetireResources(reclaim func() error) { tx.resourceReclaim = reclaim }
+
+// UsageCompletion is non-nil only when the response needs final counters.
+func (tx *ruleTransaction) UsageCompletion() <-chan error { return tx.completion }
+
+// DeferUsage reads and frees a detached counter after every old reader returns.
+// The callback writes only private response data, never live session state.
+func (tx *ruleTransaction) DeferUsage(id uint32, report func(UrrInfo)) error {
+	if id == 0 {
+		return fmt.Errorf("reserved URR slot")
+	}
+	tx.usagePending = true
+	tx.retired = append(tx.retired, func() error {
+		counters, err := tx.objects.GetUrr(id)
+		if err != nil {
+			return err
+		}
+		if err := tx.objects.UrrMap.Put(id, &IpEntrypointUrrInfo{}); err != nil {
+			return err
+		}
+		report(counters)
+		tx.objects.ReleaseURR(id)
+		return nil
+	})
+	return nil
+}
+
+// RuleFailures exposes exhausted recovery attempts to the process supervisor.
+func (b *BpfObjects) RuleFailures() <-chan error {
+	b.ruleMutex.Lock()
+	defer b.ruleMutex.Unlock()
+	if b.grace == nil {
+		return nil
+	}
+	return b.grace.failures
+}
+
 func (tx *ruleTransaction) PutPdrUplink(key uint32, info PdrInfo) error {
 	return tx.stagePDR(tx.objects.PdrMapTeidIp4, key, info)
 }
@@ -169,14 +278,12 @@ func (tx *ruleTransaction) DeleteDownlinkPdrIp6(ip net.IP, sessionID uint64, id 
 	return tx.stagePDRDelete(m, key, sessionID, id)
 }
 func (tx *ruleTransaction) NewFar(info FarInfo) (uint32, error) {
-	b := tx.objects
 	id, err := tx.GetNextFAR()
 	if err != nil {
 		return 0, err
 	}
 	err = tx.UpdateFar(id, info)
 	if err != nil {
-		b.ReleaseFAR(id)
 		return 0, err
 	}
 	return id, nil
@@ -190,7 +297,6 @@ func (tx *ruleTransaction) NewQer(info QerInfo) (uint32, error) {
 	value := qerMapValue(info)
 	err = journalRule[IpEntrypointQerInfo](tx, b.QerMap, id, func() error { return b.QerMap.Put(id, &value) })
 	if err != nil {
-		b.ReleaseQER(id)
 		return 0, err
 	}
 	return id, nil
@@ -205,7 +311,6 @@ func (tx *ruleTransaction) NewUrr(info UrrInfo) (uint32, error) {
 		return b.UrrMap.Put(id, &IpEntrypointUrrInfo{Ul: info.UplinkVolume, Dl: info.DownlinkVolume})
 	})
 	if err != nil {
-		b.ReleaseURR(id)
 		return 0, err
 	}
 	return id, nil
@@ -284,19 +389,13 @@ func (tx *ruleTransaction) detach(kind uint8, id uint32) error {
 	return errors.Join(detachRuleMap[uint32](tx, b.PdrMapTeidIp4, kind, id), detachRuleMap[[4]byte](tx, b.PdrMapDownlinkIp4, kind, id), detachRuleMap[IpEntrypointIpv6PdrKey](tx, b.PdrMapDownlinkIp6, kind, id))
 }
 func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8, id uint32) error {
-	var key K
-	var bucket IpEntrypointPdrInfo
-	iter := m.Iterate()
-	for iter.Next(&key, &bucket) {
-		if bucket.SessionId != tx.sessionID {
+	for key := range tx.objects.ruleKeys.owners[tx.sessionID] {
+		if key.m != m {
 			continue
 		}
-		if _, err := tx.pdrDraft(m, key); err != nil {
+		if _, err := tx.pdrDraft(m, key.key); err != nil {
 			return err
 		}
-	}
-	if err := iter.Err(); err != nil {
-		return err
 	}
 	for _, draft := range tx.pdrOrder {
 		if draft.m != m {

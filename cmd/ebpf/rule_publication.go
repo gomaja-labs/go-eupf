@@ -55,6 +55,9 @@ func (tx *ruleTransaction) stagePDR(m *cilium.Map, key interface{}, info PdrInfo
 	}
 	for i := range draft.entries {
 		if draft.entries[i].PdrId == info.PdrID {
+			if draft.entries[i] == entry {
+				return nil
+			}
 			draft.entries[i] = entry
 			draft.changed = true
 			return nil
