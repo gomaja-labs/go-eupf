@@ -1,16 +1,14 @@
 package rest
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/config"
-	"github.com/gomaja-labs/go-eupf/cmd/core"
 	"net/http"
 	"testing"
+
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-eupf/cmd/core"
 )
 
-// R2: PFCPTimersConfig.heartbeat_timeout lost binding:"required" (schemas.go:41)
-// and the generated schema lists only association_setup_timeout as required.
-// A request that omits it decodes 0, which disables heartbeat probing on every
-// PFCP connection and is persisted.
+// Omitting a timer must not turn a running heartbeat timeout into zero.
 func TestMissingHeartbeatTimeoutIsRejected(t *testing.T) {
 	t.Chdir(t.TempDir())
 	old := config.Conf

@@ -3,12 +3,13 @@ package rest
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
-	"github.com/gomaja-labs/go-eupf/cmd/core"
 	"net"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-eupf/cmd/core"
 )
 
 // R2: PFCP endpoint edits compare LocalAddr().String() with the resolved
