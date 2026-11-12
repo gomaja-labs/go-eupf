@@ -664,7 +664,9 @@ func (b *BpfObjects) downlinkMap(ip net.IP) (*ebpf.Map, interface{}, error) {
 	return b.downlinkRuleMap(ip, nil)
 }
 func (b *BpfObjects) downlinkRuleMap(ip net.IP, mask net.IPMask) (*ebpf.Map, interface{}, error) {
-	if key := ip.To4(); key != nil {
+	if address := ip.To4(); address != nil {
+		var key [4]byte
+		copy(key[:], address)
 		return b.PdrMapDownlinkIp4, key, nil
 	}
 	if ip = ip.To16(); ip == nil {

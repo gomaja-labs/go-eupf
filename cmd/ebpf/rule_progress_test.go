@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -105,5 +106,42 @@ func TestRuleTransactionUsesFinalBucketCapacity(t *testing.T) {
 		if err := b.PdrMapTeidIp4.Lookup(key, &got); err != nil || got.Count != 4 {
 			t.Fatalf("key=%d count=%d error=%v", key, got.Count, err)
 		}
+	}
+}
+
+func TestRuleTransactionPublishesIPv4DownlinkKey(t *testing.T) {
+	b := loadDatapath(t)
+	for _, ip := range []net.IP{net.IP{203, 0, 113, 17}, net.ParseIP("203.0.113.17")} {
+		tx, err := b.BeginRuleTransaction(77)
+		if err != nil {
+			t.Fatal(err)
+		}
+		func() {
+			defer func() { _ = tx.Rollback() }()
+			if err := tx.PutPdrDownlink(ip, PdrInfo{SessionID: 77, PdrID: 1, FarId: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+	}
+	var value IpEntrypointPdrInfo
+	if err := b.PdrMapDownlinkIp4.Lookup([4]byte{203, 0, 113, 17}, &value); err != nil || value.Count != 1 || value.SessionId != 77 {
+		t.Fatalf("published IPv4 bucket: %+v error=%v", value, err)
+	}
+	tx, err := b.BeginRuleTransaction(77)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := tx.DeletePdrDownlink(net.ParseIP("203.0.113.17"), 77, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PdrMapDownlinkIp4.Lookup([4]byte{203, 0, 113, 17}, &value); !isKeyAbsent(err) {
+		t.Fatalf("IPv4 key was not removed: %v", err)
 	}
 }
