@@ -125,7 +125,9 @@ func TestSendHeartbeatRequestProfileMetricIE(t *testing.T) {
 			defer func() { _ = udpConn.Close() }()
 			pfcpConn.udpConn = udpConn
 
-			SendHeartbeatRequest(pfcpConn, 0, smfIP)
+			if err := SendHeartbeatRequest(pfcpConn, 0, smfIP); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }

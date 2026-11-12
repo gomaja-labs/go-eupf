@@ -250,6 +250,7 @@ func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message
 	if failure := validateIncomingRequest(request); failure != nil {
 		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
+	printAssociationSetupRequest(request)
 	node, _ := request.NodeID.NodeID()
 	retained, err := conn.replaceAssociation(nodeIDText(node), addr, request.PFCPSessionRetentionInformation, request.CPFunctionFeatures)
 	if err != nil {
@@ -270,9 +271,10 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 	if failure := validateIncomingRequest(request); failure != nil {
 		return conn.errorResponse(message.MsgTypeAssociationUpdateResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
+	printAssociationUpdateRequest(request)
 	node, _ := request.NodeID.NodeID()
 	assoc := conn.GetAssociation(addr)
-	cause := uint8(ie.CauseRequestAccepted)
+	cause := ie.CauseRequestAccepted
 	if assoc == nil || assoc.ID != nodeIDText(node) {
 		cause = ie.CauseNoEstablishedPFCPAssociation
 	} else if request.CPFunctionFeatures != nil {
