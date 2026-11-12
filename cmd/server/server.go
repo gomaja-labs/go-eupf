@@ -42,7 +42,12 @@ func (s *Server) Run() error {
 
 func (s *Server) Stop(ctx context.Context) error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		return errors.Join(err, s.httpServer.Close())
+		closeErr := s.httpServer.Close()
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Warn().Err(err).Msg("HTTP shutdown deadline reached; remaining connections force-closed")
+			return closeErr
+		}
+		return errors.Join(err, closeErr)
 	}
 	return nil
 }

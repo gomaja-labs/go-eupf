@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +50,7 @@ func TestShutdownDeadlineClosesActiveRequests(t *testing.T) {
 	<-entered
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if err := s.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if err := s.Stop(ctx); err != nil {
 		t.Fatalf("error=%v", err)
 	}
 	select {
