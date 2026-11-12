@@ -6,7 +6,7 @@ CLI tool is a separate application available to run as a carside to working eUPF
 ~# eupf -h
 Usage of cli-flags:
       --backup_path string   Directory to store backups
-      --eupf_addr string     Base URL for eupf API (e.g. http://localhost:8081/api/v1/)
+      --eupf_addr string     Base URL for eupf API (e.g. http://localhost:8080/api/v1/)
       --log_level string     Log level (debug, info, warn, error)
 eUPF CLI tool
 
@@ -33,13 +33,13 @@ Use "eupf [command] --help" for more information about a command.
 
 Configuration file `./config-cli.yaml` is possible to be created from scratch using command
 
-`eupf cli-config set-baseurl --url http://127.0.0.1:8081/api/v1`
+`eupf cli-config set-baseurl --url http://127.0.0.1:8080/api/v1`
 
 Default CLI tool config-cli.yaml is:
 
 ```yaml
 backup_path: /var/lib/eupf/backups
-eupf_addr: http://172.19.0.1:8082/api/v1/
+eupf_addr: http://127.0.0.1:8080/api/v1/
 log_level: debug
 ```
 
@@ -60,19 +60,19 @@ This overrides the "eupf_addr" value in the config-cli.yaml file.
 
 Example:
 
-- eupf cli-config set-baseurl --url <http://localhost:8081/api/v1>
+- eupf cli-config set-baseurl --url <http://localhost:8080/api/v1>
 
 Usage: eupf cli-config set-baseurl [flags]
 
 Flags:
 
 - -h, --help help for set-baseurl
-- --url string New base URL to save in config (e.g. <http://localhost:8081/api/v1>)
+- --url string New base URL to save in config (e.g. <http://localhost:8080/api/v1>)
 
 Example
 
 ```ruby
-root@a2fc85d4d909:~# eupf cli-config set-baseurl  --url http://172.19.0.1:8082/api/v1/
+root@a2fc85d4d909:~# eupf cli-config set-baseurl  --url http://127.0.0.1:8080/api/v1/
 2025/05/22 06:49:31 INF CLI config file updated successfully: config-cli.yaml
 Base URL updated successfully.
 ```
@@ -81,7 +81,7 @@ Base URL updated successfully.
 
 which is stored in the config-cli.yaml file under "eupf_addr".
 
-Usage: eupf config show-baseurl [flags]
+Usage: eupf cli-config show-baseurl [flags]
 
 Flags:
 
@@ -91,7 +91,7 @@ Example
 
 ```ruby
 root@a2fc85d4d909:~# eupf cli-config show-baseurl
-Current base URL: http://172.19.0.1:8082/api/v1/
+Current base URL: http://127.0.0.1:8080/api/v1/
 ```
 
 ## Backup/Restore current eUPF parameters
@@ -116,7 +116,7 @@ Usage:
 
 Flags:
 
-- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8081>)
+- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8080>)
 - -h, --help help for create
 
 ### Retrieve list of backups
@@ -139,12 +139,12 @@ Usage:
 
 Flags:
 
-- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8081>)
+- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8080>)
 
 Example
 
 ```ruby
-root@2ff8c95c6ecc:~# eupf backup create --baseurl http://172.19.0.1:8082/api/v1/
+root@2ff8c95c6ecc:~# eupf backup create --baseurl http://127.0.0.1:8080/api/v1/
 root@2ff8c95c6ecc:~# eupf backup show
 #1: 1747753851 (20.05.25 15:10:51 UTC)
 #2: 1746461057 (05.05.25 16:04:17 UTC)
@@ -194,12 +194,12 @@ Usage: eupf trace show [flags]
 
 Flags:
 
-- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8081>)
+- --baseurl string Optional base URL to override eupf API address (e.g. <http://localhost:8080>)
 
 Example: empty list returns error 404
 
 ```ruby
-root@aeb8218ffaea:~# eupf trace show --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace show --baseurl http://127.0.0.1:8080/api/v1/
 failed to list traces: trace list failed: 404 Not Found
 ```
 
@@ -219,17 +219,17 @@ Flags:
 Example
 
 ```ruby
-root@aeb8218ffaea:~# eupf trace set --imsi 250020000000016 --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace set --imsi 250020000000016 --baseurl http://127.0.0.1:8080/api/v1/
 Trace started (imsi=250020000000016, msisdn=)
-root@aeb8218ffaea:~# eupf trace show --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace show --baseurl http://127.0.0.1:8080/api/v1/
 {250020000000016  2025-05-22 20:22:02.686734276 +0300 +0300 }
 {250020000000016  2025-05-22 20:22:02.686731014 +0300 +0300 }
 {250020000000016  2025-05-22 20:22:02.686733069 +0300 +0300 }
-root@aeb8218ffaea:~# eupf trace stop --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace stop --baseurl http://127.0.0.1:8080/api/v1/
 error: at least one of --imsi or --msisdn must be provided
-root@aeb8218ffaea:~# eupf trace stop --imsi 250020000000016 --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace stop --imsi 250020000000016 --baseurl http://127.0.0.1:8080/api/v1/
 Trace stopped (imsi=250020000000016, msisdn=)
-root@aeb8218ffaea:~# eupf trace show --baseurl http://172.19.0.1:8082/api/v1/
+root@aeb8218ffaea:~# eupf trace show --baseurl http://127.0.0.1:8080/api/v1/
 failed to list traces: trace list failed: 404 Not Found
 ```
 
@@ -307,3 +307,11 @@ Example display eBPF dataplane configuration:
 ```ruby
 eupf show dataplane ebpf
 ```
+
+## Authentication, flags and shell completion
+
+Global flags `--eupf_addr`, `--backup_path`, `--log_level` and `--api_token` work before or after the subcommand. Their environment equivalents are `CLI_EUPF_ADDR`, `CLI_BACKUP_PATH`, `CLI_LOG_LEVEL` and `CLI_API_TOKEN`; the same names without the prefix are YAML keys. The default API URL is `http://127.0.0.1:8080/api/v1`. Set `CLI_API_TOKEN` to the server's token; every API request carries the bearer header.
+
+Cobra provides `eupf completion bash`, `eupf completion zsh`, `eupf completion fish` and `eupf completion powershell`. For example: `eupf completion bash > ~/.local/share/bash-completion/completions/eupf` (create the directory first).
+
+Restore continues through each configuration section and returns an error containing every failed section. Partial restore is not atomic; inspect the error before retrying. Backup names must be filenames in the configured backup directory. Restore accepts at most 32 ZIP members, 4 MiB per expanded member, 16 MiB expanded in total and 16 MiB of archive data. Oversized entries are rejected before YAML parsing.

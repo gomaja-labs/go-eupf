@@ -1,9 +1,7 @@
 package delivery
 
 import (
-	"fmt"
-	"os"
-
+	"github.com/gomaja-labs/go-eupf/cli/config"
 	"github.com/gomaja-labs/go-eupf/cli/domain"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +17,7 @@ func NewCLI(usecase domain.EupfUseCase) *CLI {
 		Short: "eUPF CLI tool",
 	}
 
+	root.PersistentFlags().AddFlagSet(config.GlobalFlags())
 	cli := &CLI{
 		Root:    root,
 		usecase: usecase,
@@ -30,25 +29,10 @@ func NewCLI(usecase domain.EupfUseCase) *CLI {
 	root.AddCommand(cli.newCliConfigCmd())
 	root.AddCommand(cli.newTraceCmd())
 	root.AddCommand(cli.newBackupCmd())
-	root.AddCommand(cli.newCompletion())
 
 	return cli
 }
 
 func (cli *CLI) Execute() error {
 	return cli.Root.Execute()
-}
-
-func (cli *CLI) newCompletion() *cobra.Command {
-	return &cobra.Command{
-		Use:   "completion",
-		Short: "Generate shell completion scripts",
-		Run: func(cmd *cobra.Command, args []string) {
-			err := cli.Root.GenBashCompletion(os.Stdout)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "completion generation failed: %v\n", err)
-				os.Exit(1)
-			}
-		},
-	}
 }

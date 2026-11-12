@@ -74,7 +74,7 @@ func (cli *CLI) newShowLoggingLevel() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -100,7 +100,7 @@ func (cli *CLI) newShowLoggingCaller() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -130,7 +130,7 @@ func (cli *CLI) newShowDataPlaneEbpf() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -157,7 +157,7 @@ func (cli *CLI) newShowDataPlaneAddresses() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -188,7 +188,7 @@ func (cli *CLI) newShowPFCPN4() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -219,7 +219,7 @@ func (cli *CLI) newShowPFCPSxa() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -250,7 +250,7 @@ func (cli *CLI) newShowPFCPSxb() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -277,7 +277,7 @@ func (cli *CLI) newShowPFCPTimers() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }
 
@@ -307,6 +307,6 @@ func (cli *CLI) newShowGTPPath() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 	return cmd
 }

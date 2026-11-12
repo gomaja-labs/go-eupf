@@ -114,7 +114,7 @@ If no parameters are provided, all sessions are listed.`,
 	cmd.Flags().StringVarP(&teid, "teid", "t", "", "Filter by TEID")
 	cmd.Flags().BoolVarP(&formatJson, "json", "j", false, "Output the result in JSON format")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed session information")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -174,7 +174,7 @@ Use --baseurl to override the eupf API endpoint.`,
 	cmd.Flags().StringVarP(&imsi, "imsi", "i", "", "IMSI of the session to release")
 	cmd.Flags().StringVarP(&msisdn, "msisdn", "m", "", "MSISDN of the session to release")
 	cmd.Flags().StringVarP(&sessionID, "session-id", "s", "", "Session ID to release")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }

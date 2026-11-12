@@ -62,8 +62,8 @@ func (cli *CLI) newSetLoggingLevel() *cobra.Command {
 		Long: `Configure logging verbosity level (debug, info, warn, error, etc.)
 
 Examples:
-  eupf config logging level debug
-  eupf config logging level info
+  eupf set logging level debug
+  eupf set logging level info
 
 Overrides configuration parameter: logging_level`,
 		Args: cobra.ExactArgs(1),
@@ -81,7 +81,7 @@ Overrides configuration parameter: logging_level`,
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -96,8 +96,8 @@ func (cli *CLI) newSetLoggingCaller() *cobra.Command {
 		Long: `Enable or disable including source file and line number in log entries.
 
 Examples:
-  eupf config logging caller true   # Enable caller info
-  eupf config logging caller false  # Disable caller info
+  eupf set logging caller true   # Enable caller info
+  eupf set logging caller false  # Disable caller info
 
 Overrides configuration parameter: logging_caller`,
 		Args: cobra.ExactArgs(1),
@@ -115,7 +115,7 @@ Overrides configuration parameter: logging_caller`,
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -150,7 +150,7 @@ func (cli *CLI) newSetDataPlaneEbpf() *cobra.Command {
 	cmd.MarkFlagsOneRequired("interfaces")
 	cmd.Flags().StringVar(&xdpAttachMode, "xdp-attach", "", "XDP attach mode (generic, native, offload) (required)")
 	cmd.MarkFlagsOneRequired("xdp-attach")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -187,7 +187,7 @@ Overrides configuration parameters:
 	cmd.MarkFlagsOneRequired("n3")
 	cmd.Flags().StringVar(&n9, "n9", "", "IP address for N9 interface (required)")
 	cmd.MarkFlagsOneRequired("n9")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -228,7 +228,7 @@ Overrides configuration parameters:
 	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&pfcpRemoteNode, "remote", "r", nil, "PFCP remote node addresses (required)")
 	cmd.MarkFlagsOneRequired("remote")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -269,7 +269,7 @@ Overrides configuration parameters:
 	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&sxaRemoteNode, "remote", "r", nil, "Sxa remote node addresses (required)")
 	cmd.MarkFlagsOneRequired("remote")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -310,7 +310,7 @@ Overrides configuration parameters:
 	cmd.MarkFlagsOneRequired("node")
 	cmd.Flags().StringArrayVarP(&sxbRemoteNode, "remote", "r", nil, "Sxb remote node addresses (required)")
 	cmd.MarkFlagsOneRequired("remote")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }
@@ -347,7 +347,7 @@ Overrides configuration parameters:
 	cmd.MarkFlagsOneRequired("assoc-timeout")
 	cmd.Flags().Uint32Var(&heartbeatTimeout, "heartbeat-timeout", 0, "Heartbeat timeout in seconds (required)")
 	cmd.MarkFlagsOneRequired("heartbeat-timeout")
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g., http://localhost:8080/api/v1)")
 
 	return cmd
 }

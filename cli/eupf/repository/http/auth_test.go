@@ -1,0 +1,31 @@
+package http
+
+import (
+	"context"
+	"github.com/gomaja-labs/go-eupf/cli/config"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestRepositorySendsBearerToken(t *testing.T) {
+	received := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received++
+		if r.Header.Get("Authorization") != "Bearer synthetic-token" {
+			t.Errorf("missing bearer header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	repository := NewEupfHttpRepository(server.URL, &config.Config{ApiToken: "synthetic-token"})
+	for _, base := range []string{"", server.URL} {
+		if _, err := repository.GetUpfConfig(context.Background(), base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if received != 2 {
+		t.Fatalf("requests=%d", received)
+	}
+}

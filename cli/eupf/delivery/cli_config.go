@@ -29,7 +29,7 @@ func (cli *CLI) newConfigSetBaseURLCmd() *cobra.Command {
 		Long: `Set a new base URL to be used as the default endpoint for eupf API.
 This overrides the "eupf_addr" value in the config-cli.yaml file.
 Example:
-  eupf config set-baseurl --url http://localhost:8081/api/v1`,
+  eupf cli-config set-baseurl --url http://localhost:8080/api/v1`,
 		Run: func(cmd *cobra.Command, args []string) {
 			if newBaseURL == "" {
 				fmt.Fprintln(os.Stderr, "error: --url must be provided")
@@ -45,7 +45,7 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVar(&newBaseURL, "url", "", "New base URL to save in config (e.g. http://127.0.0.1:8081/api/v1)")
+	cmd.Flags().StringVar(&newBaseURL, "url", "", "New base URL to save in config (e.g. http://127.0.0.1:8080/api/v1)")
 	return cmd
 }
 

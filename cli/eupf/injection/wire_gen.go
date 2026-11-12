@@ -17,7 +17,7 @@ import (
 // Injectors from wire.go:
 
 func InitEupfCLI(baseURL string, cfg *config.Config) *delivery.CLI {
-	eupfRepository := http.NewEupfHttpRepository(baseURL)
+	eupfRepository := http.NewEupfHttpRepository(baseURL, cfg)
 	eupfLocalRepository := file.NewFileRepository(cfg)
 	eupfUseCase := usecase.NewEupf(eupfRepository, eupfLocalRepository, cfg)
 	cli := delivery.NewCLI(eupfUseCase)

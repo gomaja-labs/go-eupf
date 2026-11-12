@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/gomaja-labs/go-eupf/cli/config"
 	"github.com/gomaja-labs/go-eupf/cli/domain"
 	"github.com/gomaja-labs/go-eupf/cli/eupf/models"
 )
@@ -15,10 +16,11 @@ type EupfHttpRepository struct {
 	baseURL string
 }
 
-func NewEupfHttpRepository(baseURL string) domain.EupfRepository {
+func NewEupfHttpRepository(baseURL string, cfg *config.Config) domain.EupfRepository {
 	client := resty.New().
 		SetTimeout(5 * time.Second).
-		SetBaseURL(baseURL)
+		SetBaseURL(baseURL).
+		SetAuthToken(cfg.ApiToken)
 
 	return &EupfHttpRepository{
 		client:  client,

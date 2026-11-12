@@ -52,7 +52,7 @@ RUN apk add --no-cache bash bash-completion
 WORKDIR /root
 ENV PATH=/root:${PATH}
 COPY --from=cli-builder /app/bin/eupf ./eupf
-RUN ./eupf completion > /usr/share/bash-completion/completions/eupf \
+RUN ./eupf completion bash > /usr/share/bash-completion/completions/eupf \
     && echo 'source /usr/share/bash-completion/bash_completion' >> /root/.bashrc
 CMD ["bash", "-c", "while true; do sleep 60; done"]
 

@@ -51,7 +51,7 @@ func (cli *CLI) newTraceShowCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g. http://127.0.0.1:8081/api/v1)")
+	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address (e.g. http://127.0.0.1:8080/api/v1)")
 	return cmd
 }
 

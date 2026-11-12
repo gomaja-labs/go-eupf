@@ -22,6 +22,7 @@ var (
 
 // Config defines CLI-related config
 type Config struct {
+	ApiToken   string `mapstructure:"api_token"`
 	LogLevel   string `mapstructure:"log_level" validate:"omitempty,oneof=debug info warn error"`
 	EupfAddr   string `mapstructure:"eupf_addr" validate:"omitempty,url"`
 	BackupPath string `mapstructure:"backup_path" validate:"required"`
@@ -30,10 +31,10 @@ type Config struct {
 // NewConfig initializes config: flags, env, file
 func NewConfig() (*Config, error) {
 	defineFlags()
-
+	cfgViper = viper.New()
 	cfgViper.SetDefault("log_level", "debug")
 	cfgViper.SetDefault("backup_path", "/var/lib/eupf/backups")
-	cfgViper.SetDefault("eupf_addr", "http://127.0.0.1:8081/api/v1")
+	cfgViper.SetDefault("eupf_addr", "http://127.0.0.1:8080/api/v1")
 
 	cfgViper.SetConfigFile(configFileName)
 	cfgViper.SetConfigType("yaml")
@@ -60,7 +61,7 @@ func NewConfig() (*Config, error) {
 		return nil, err
 	}
 
-	log.Info().Msgf("Loaded CLI config: %+v", cfg)
+	log.Info().Msg("Loaded CLI configuration")
 
 	return &cfg, nil
 }
@@ -84,9 +85,20 @@ func (c *Config) UpdateFile(params map[string]interface{}) error {
 	return nil
 }
 
+// GlobalFlags returns the configuration flags registered with the root command.
+func GlobalFlags() *pflag.FlagSet {
+	if flagGroup.Lookup("log_level") == nil {
+		defineFlags()
+	}
+	return flagGroup
+}
+
 func defineFlags() {
+	flagGroup = pflag.NewFlagSet("cli-flags", pflag.ContinueOnError)
+	flagGroup.ParseErrorsWhitelist.UnknownFlags = true
+	flagGroup.String("api_token", "", "Bearer token for the administration API")
 	flagGroup.String("log_level", "", "Log level (debug, info, warn, error)")
-	flagGroup.String("eupf_addr", "", "Base URL for eupf API (e.g. http://localhost:8081/api/v1/)")
+	flagGroup.String("eupf_addr", "", "Base URL for eupf API (e.g. http://localhost:8080/api/v1/)")
 	flagGroup.String("backup_path", "", "Directory to store backups")
 
 	_ = flagGroup.Parse(os.Args[1:])
