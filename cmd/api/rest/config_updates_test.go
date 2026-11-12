@@ -15,7 +15,8 @@ import (
 )
 
 func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
- previousLevel:=zerolog.GlobalLevel();defer zerolog.SetGlobalLevel(previousLevel)
+	previousLevel := zerolog.GlobalLevel()
+	defer zerolog.SetGlobalLevel(previousLevel)
 	t.Chdir(t.TempDir())
 	startup := config.UpfConfig{LoggingLevel: "info", InterfaceName: []string{"original"}}
 	h := NewApiHandler(nil, nil, nil, &startup, nil, nil, nil)
