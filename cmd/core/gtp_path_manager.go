@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/gopacket/gopacket"
@@ -16,6 +17,10 @@ import (
 )
 
 type GtpPathManager struct {
+	mu            sync.Mutex // Owns configuration, peers and sequence state; never held for I/O.
+	runOnce       sync.Once
+	updates       chan struct{}
+	generation    uint64
 	localAddress  string
 	peers         map[string]uint16
 	checkInterval time.Duration
@@ -33,66 +38,117 @@ func NewGtpPathManager(localAddress string, interval time.Duration) *GtpPathMana
 		checkInterval: interval,
 		ctx:           ctx,
 		cancelCtx:     cancelCtx,
+		updates:       make(chan struct{}, 1),
 	}
 }
 
 func (gtpPathManager *GtpPathManager) AddGtpPath(gtpPeerAddress string) {
-	gtpPathManager.peers[gtpPeerAddress] = 0
+	gtpPathManager.mu.Lock()
+	defer gtpPathManager.mu.Unlock()
+	if _, exists := gtpPathManager.peers[gtpPeerAddress]; !exists {
+		gtpPathManager.peers[gtpPeerAddress] = 0
+		gtpPathManager.generation++
+	}
 }
 
 func (gtpPathManager *GtpPathManager) UpdateGtpPath(gtpPeerAddresses []string) {
+	gtpPathManager.mu.Lock()
+	defer gtpPathManager.mu.Unlock()
 	newPeers := make(map[string]uint16, len(gtpPeerAddresses))
 
 	for _, peerAddress := range gtpPeerAddresses {
-		if _, ok := gtpPathManager.peers[peerAddress]; !ok {
-			newPeers[peerAddress] = gtpPathManager.peers[peerAddress]
-		} else {
-			newPeers[peerAddress] = 0
-		}
+		newPeers[peerAddress] = gtpPathManager.peers[peerAddress]
 	}
 
 	gtpPathManager.peers = newPeers
+	gtpPathManager.generation++
 }
 
 func (gtpPathManager *GtpPathManager) UpdateCheckTicker(newTicker *time.Ticker) {
+	if newTicker == nil {
+		return
+	}
+	gtpPathManager.mu.Lock()
+	old := gtpPathManager.ticker
 	gtpPathManager.ticker = newTicker
+	select {
+	case <-gtpPathManager.ctx.Done():
+		newTicker.Stop()
+	default:
+	}
+	gtpPathManager.mu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
+	select {
+	case gtpPathManager.updates <- struct{}{}:
+	default:
+	}
 }
 
 func (gtpPathManager *GtpPathManager) UpdateLocalAddress(newLocalAddress string) {
+	gtpPathManager.mu.Lock()
+	defer gtpPathManager.mu.Unlock()
 	gtpPathManager.localAddress = newLocalAddress
 }
 
-func (gtpPathManager *GtpPathManager) Run() {
-	go func() {
-		gtpPathManager.ticker = time.NewTicker(gtpPathManager.checkInterval)
-
-		defer gtpPathManager.ticker.Stop()
-		for {
-			select {
-			case <-gtpPathManager.ctx.Done():
-				// The context is over, stop processing results
-				return
-			case <-gtpPathManager.ticker.C:
-				log.Debug().Msg("gpt path manage trigger")
-				for peer, sequenceNumber := range gtpPathManager.peers {
-					log.Trace().Msgf("Send GTP Echo request to %s, seq %d", peer, sequenceNumber)
-					elapseTime, err := gtpPathManager.sendEcho(peer, sequenceNumber)
-					if err != nil {
-						log.Warn().Msgf("%v", err)
-						continue
-					}
-
-					log.Trace().Msgf("Received GTP Echo response from %s, seq %d in %d ms", peer, sequenceNumber, elapseTime.Milliseconds())
-					gtpPathManager.peers[peer] = sequenceNumber + 1
-
+func (manager *GtpPathManager) Run() {
+	manager.runOnce.Do(func() { go manager.run() })
+}
+func (manager *GtpPathManager) run() {
+	manager.mu.Lock()
+	if manager.ticker == nil {
+		interval := manager.checkInterval
+		if interval <= 0 {
+			interval = time.Minute
+		}
+		manager.ticker = time.NewTicker(interval)
+	}
+	manager.mu.Unlock()
+	defer func() { manager.mu.Lock(); manager.ticker.Stop(); manager.mu.Unlock() }()
+	for {
+		manager.mu.Lock()
+		ticker := manager.ticker
+		manager.mu.Unlock()
+		select {
+		case <-manager.ctx.Done():
+			return
+		case <-manager.updates:
+			continue
+		case <-ticker.C:
+			manager.mu.Lock()
+			peers := make(map[string]uint16, len(manager.peers))
+			for peer, seq := range manager.peers {
+				peers[peer] = seq
+			}
+			generation := manager.generation
+			manager.mu.Unlock()
+			for peer, seq := range peers {
+				select {
+				case <-manager.ctx.Done():
+					return
+				default:
 				}
+				if _, err := manager.sendEcho(peer, seq); err != nil {
+					log.Warn().Err(err).Msg("GTP path probe failed")
+					continue
+				}
+				manager.mu.Lock()
+				if manager.generation == generation {
+					manager.peers[peer] = seq + 1
+				}
+				manager.mu.Unlock()
 			}
 		}
-	}()
+	}
 }
-
-func (gtpPathManager *GtpPathManager) Stop() {
-	gtpPathManager.cancelCtx()
+func (manager *GtpPathManager) Stop() {
+	manager.cancelCtx()
+	manager.mu.Lock()
+	if manager.ticker != nil {
+		manager.ticker.Stop()
+	}
+	manager.mu.Unlock()
 }
 
 func (gtpPathManager *GtpPathManager) sendEcho(gtpPeerAddress string, seq uint16) (time.Duration, error) {
@@ -107,20 +163,23 @@ func (gtpPathManager *GtpPathManager) sendEcho(gtpPeerAddress string, seq uint16
 			SequenceNumber:     seq,
 		},
 	); err != nil {
-		return 0, fmt.Errorf("serializing input packet failed: %v", err)
+		return 0, fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	udpLocalAddr, err := net.ResolveUDPAddr("udp", gtpPathManager.localAddress)
+	gtpPathManager.mu.Lock()
+	localAddress := gtpPathManager.localAddress
+	gtpPathManager.mu.Unlock()
+	udpLocalAddr, err := net.ResolveUDPAddr("udp", localAddress)
 	if err != nil {
-		return 0, fmt.Errorf("can't resolve local UDP address: %v", err)
+		return 0, fmt.Errorf("can't resolve local UDP address: %w", err)
 	}
 	udpRemoteAddr, err := net.ResolveUDPAddr("udp", gtpPeerAddress)
 	if err != nil {
-		return 0, fmt.Errorf("can't resolve remote UDP address: %v", err)
+		return 0, fmt.Errorf("can't resolve remote UDP address: %w", err)
 	}
 	conn, err := net.DialUDP("udp", udpLocalAddr, udpRemoteAddr)
 	if err != nil {
-		return 0, fmt.Errorf("can't create UDP connection: %v", err)
+		return 0, fmt.Errorf("can't create UDP connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -129,12 +188,12 @@ func (gtpPathManager *GtpPathManager) sendEcho(gtpPeerAddress string, seq uint16
 
 	sendTime := time.Now()
 	if _, err := conn.Write(gtpEchoRequest.Bytes()); err != nil {
-		return 0, fmt.Errorf("can't send echo request: %v", err)
+		return 0, fmt.Errorf("can't send echo request: %w", err)
 	}
 
 	n, err := conn.Read(receiveBuffer)
 	if err != nil {
-		return 0, fmt.Errorf("can't read echo response: %v", err)
+		return 0, fmt.Errorf("can't read echo response: %w", err)
 	}
 	elapsedTime := time.Since(sendTime)
 
