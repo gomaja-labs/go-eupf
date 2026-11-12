@@ -6,6 +6,7 @@ package core
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -23,6 +24,19 @@ type PfcpHandlerMap map[uint8]PfcpFunc
 
 func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *net.UDPAddr) error {
 	log.Debug().Msgf("Handling PFCP message from %s", addr)
+	// TS 29.244 V20.1.0 clauses 6.5, 7.2.1A, 8.2.25 and 8.2.58:
+	// both functions must advertise BUNDL before any bundled message is handled.
+	// Reject the entire unsupported/oversized bundle before decoding or replying.
+	if len(buf) > 0 && buf[0]>>5 == 1 && buf[0]&0x04 != 0 {
+		conn.stateMu.RLock()
+		assoc := conn.GetAssociation(addr.IP.String())
+		negotiated := assoc != nil && len(assoc.CPFeatures) > 4 && assoc.CPFeatures[4]&0x10 != 0 && len(conn.featuresOctets) > 6 && conn.featuresOctets[6]&0x40 != 0
+		conn.stateMu.RUnlock()
+		if !negotiated || !boundedBundle(buf) {
+			return nil
+		}
+	}
+
 	incoming, parseErr := message.ParseDatagram(buf)
 	var results []error
 	if parseErr != nil {
@@ -157,21 +171,15 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	// Heartbeat responses are deterministic from the immutable local timestamp.
 	// They must remain answerable even when the bounded response cache is full
 	// (clause 6.2.2.2), and unknown peers must not consume cache entries.
-	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil
+	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil && conn.GetAssociation(addr.IP.String()) != nil
 	if cacheable {
 		wire, found, err := conn.cachedReply(key, digest)
 		if found {
-			var rejected message.Message
-			if errors.Is(err, errTransactionCapacity) {
-				rejected = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoResourcesAvailable, nil)
-			}
 			conn.stateMu.Unlock()
-			if rejected != nil {
-				return errors.Join(err, conn.SendMessage(rejected, addr))
-			}
 			if err != nil {
 				return err
 			}
+
 			if wire == nil {
 				return nil
 			}
@@ -206,7 +214,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			}
 		}
 	}
-	if cacheable {
+	if cacheable && conn.GetAssociation(addr.IP.String()) != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest && handlerErr == nil && conn.GetAssociation(addr.IP.String()) != nil {
 		conn.cacheReply(key, digest, wire, entity)
 	}
 	conn.stateMu.Unlock()
@@ -360,4 +368,24 @@ func requireIEsError(fields ...requiredIE) error {
 
 func HandlePfcpVersionNotSupportedResponse(_ *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
 	return nil, true, fmt.Errorf("PFCP peer %s rejected the protocol version (highest supported %d)", addr, msg.Version())
+}
+
+const maxBundleMessages = 16
+const maxBundleBytes = 8192
+
+func boundedBundle(buf []byte) bool {
+	if len(buf) > maxBundleBytes {
+		return false
+	}
+	for count := 1; len(buf) > 0; count++ {
+		if count > maxBundleMessages || len(buf) < 4 {
+			return false
+		}
+		n := int(binary.BigEndian.Uint16(buf[2:4])) + 4
+		if n < 16 || n > len(buf) {
+			return false
+		}
+		buf = buf[n:]
+	}
+	return true
 }

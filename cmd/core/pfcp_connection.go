@@ -125,7 +125,7 @@ func NewPfcpConnection(
 
 	log.Info().Msgf("Starting PFCP connection: %v with Node ID: %v, N3 address: %v, N9 address: %v", udpAddr, nodeId, n3Addr, n9Addr)
 
-	featuresOctets := []uint8{0, 0, 0}
+	featuresOctets := []uint8{0, 0, 0, 0, 0, 0, 0x40} // BUNDL: TS 29.244 V20.1.0 table 8.2.25-1
 	featuresOctets[1] = setBit(featuresOctets[1], 0)
 	if config.Conf.FeatureFTUP {
 		featuresOctets[0] = setBit(featuresOctets[0], 4)
@@ -238,6 +238,8 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 		connection.socketMu.Unlock()
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
+		clear(connection.transport.responseBudgets)
+		connection.transport.responseExpiry = nil
 		connection.transport.bytes = 0
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
@@ -451,6 +453,8 @@ func (connection *PfcpConnection) Close() {
 		connection.transport.mu.Lock()
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
+		clear(connection.transport.responseBudgets)
+		connection.transport.responseExpiry = nil
 		connection.transport.bytes = 0
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()

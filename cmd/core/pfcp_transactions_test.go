@@ -34,6 +34,7 @@ func readTransaction(t *testing.T, peer *net.UDPConn) []byte {
 func TestRetransmittedRequestExecutesOnce(t *testing.T) {
 	conn := newProtocolConnection(t)
 	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
 	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeAssociationSetupRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
 		calls++
@@ -132,8 +133,8 @@ func TestResponseCacheBoundsAndExpiry(t *testing.T) {
 	if _, _, err := conn.cachedReply(key, [32]byte{2}); err == nil {
 		t.Fatal("changed request reused transaction ID")
 	}
-	if _, _, err := conn.cachedReply(requestKey{peer: "127.0.0.2:8805", sequence: 1, typ: 5}, digest); err == nil {
-		t.Fatal("cache exceeded entry bound")
+	if _, _, err := conn.cachedReply(requestKey{peer: "127.0.0.2:8805", sequence: 1, typ: 5}, digest); err != nil {
+		t.Fatal("another peer inherited a full budget")
 	}
 	conn.transport.mu.Lock()
 	conn.expireResponsesLocked(time.Now().Add(2 * time.Second))
@@ -147,6 +148,7 @@ func TestResponseCacheCapacityRejectsWithoutExecuting(t *testing.T) {
 	conn := newProtocolConnection(t)
 	conn.maxTransactions = 1
 	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
 	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeAssociationUpdateRequest: func(_ *PfcpConnection, msg message.Message, _ string) (message.Message, bool, error) {
 		calls++
@@ -157,14 +159,14 @@ func TestResponseCacheCapacityRejectsWithoutExecuting(t *testing.T) {
 	_ = readTransaction(t, peer)
 	request.SetSequenceNumber(2)
 	conn.Handle(protocolWire(t, request), peer.LocalAddr().(*net.UDPAddr))
-	response, err := message.Parse(readTransaction(t, peer))
-	if err != nil {
-		t.Fatal(err)
+	_ = peer.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
+	if _, _, err := peer.ReadFromUDP(make([]byte, 1500)); err == nil {
+		t.Fatal("saturated replay budget produced a rejection")
 	}
-	cause, _ := response.(*message.AssociationUpdateResponse).Cause.Cause()
-	if cause != ie.CauseNoResourcesAvailable || calls != 1 {
-		t.Fatalf("cause=%d executions=%d", cause, calls)
+	if calls != 1 {
+		t.Fatalf("executed %d requests without replay capacity", calls)
 	}
+
 }
 func TestLocalRebindCancelsOutstandingTransactions(t *testing.T) {
 	conn := newProtocolConnection(t)
@@ -255,6 +257,7 @@ func TestPendingEncodedByteBudget(t *testing.T) {
 func TestResponseCacheEncodedByteBudget(t *testing.T) {
 	conn := newProtocolConnection(t)
 	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
 	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeAssociationUpdateRequest: func(_ *PfcpConnection, msg message.Message, _ string) (message.Message, bool, error) {
 		calls++
@@ -262,17 +265,14 @@ func TestResponseCacheEncodedByteBudget(t *testing.T) {
 	}}
 	for i := 0; i < 300; i++ {
 		conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(uint32(i+1), ie.NewNodeIDFQDN("synthetic.example"))), peer.LocalAddr().(*net.UDPAddr))
-		reply, err := message.Parse(readTransaction(t, peer))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cause, _ := reply.(*message.AssociationUpdateResponse).Cause.Cause()
-		if cause == ie.CauseNoResourcesAvailable {
-			if calls != i || conn.transport.bytes > 16<<20 {
-				t.Fatal("cache executed beyond its encoded-byte budget")
+		_ = peer.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
+		if _, _, err := peer.ReadFromUDP(make([]byte, 65535)); err != nil {
+			if calls != i || conn.transport.bytes > responseByteBudget {
+				t.Fatal("cache executed beyond its byte budget")
 			}
 			return
 		}
+
 	}
 	t.Fatal("response cache never enforced its encoded-byte budget")
 }
@@ -280,6 +280,7 @@ func TestResponseCacheEncodedByteBudget(t *testing.T) {
 func TestCompletedSequenceCanCarryDifferentRequest(t *testing.T) {
 	conn := newProtocolConnection(t)
 	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
 	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeAssociationUpdateRequest: func(_ *PfcpConnection, msg message.Message, _ string) (message.Message, bool, error) {
 		calls++

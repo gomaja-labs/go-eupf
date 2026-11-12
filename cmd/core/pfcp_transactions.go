@@ -4,6 +4,8 @@
 package core
 
 import (
+	"container/heap"
+	"container/list"
 	"errors"
 	"fmt"
 	"net"
@@ -21,12 +23,14 @@ var errTransactionCapacity = errors.New("PFCP transaction capacity exhausted")
 // under mu. The connection receive loop calls serviceTransactions; it does not
 // create a goroutine or timer for each request. TS 29.244 V20.1.0 clause 6.4.
 type transportState struct {
-	mu           sync.Mutex
-	next         uint32
-	pending      map[uint32]*pendingRequest
-	responses    map[requestKey]cachedResponse
-	bytes        int
-	pendingBytes int
+	mu              sync.Mutex
+	next            uint32
+	pending         map[uint32]*pendingRequest
+	responses       map[requestKey]cachedResponse
+	bytes           int
+	pendingBytes    int
+	responseExpiry  responseHeap
+	responseBudgets map[string]*responseBudget
 }
 type requestKey struct {
 	peer     string
@@ -38,6 +42,7 @@ type cachedResponse struct {
 	wire    []byte
 	expires time.Time
 	entity  string
+	index   *responseIndex
 }
 type pendingRequest struct {
 	wire        []byte
@@ -162,32 +167,122 @@ func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
 		conn.heartbeatFailed(req.peer.IP.String(), req.association)
 	}
 }
+
+// minimumReplayWindow is local policy, not a peer-advertised N1/T1. TS 29.244
+// V20.1.0 clause 6.4 specifies retransmission but no numeric retention window.
+const minimumReplayWindow = 20 * time.Second
+const responseByteBudget = 16 << 20
+
+type responseBudget struct {
+	host    string
+	entries list.List
+	bytes   int
+}
+type responseIndex struct {
+	key              requestKey
+	created, expires time.Time
+	budget           *responseBudget
+	element          *list.Element
+	position         int
+	size             int
+}
+type responseHeap []*responseIndex
+
+func (h responseHeap) Len() int           { return len(h) }
+func (h responseHeap) Less(i, j int) bool { return h[i].expires.Before(h[j].expires) }
+func (h responseHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].position = i; h[j].position = j }
+func (h *responseHeap) Push(v any)        { e := v.(*responseIndex); e.position = len(*h); *h = append(*h, e) }
+func (h *responseHeap) Pop() any {
+	old := *h
+	e := old[len(old)-1]
+	old[len(old)-1] = nil
+	*h = old[:len(old)-1]
+	e.position = -1
+	return e
+}
+
+// removeResponse also handles entries invalidated by association/entity cleanup:
+// that path already removes the wire map entry and accounts for its bytes.
+func (state *transportState) removeResponse(e *responseIndex) {
+	if live, ok := state.responses[e.key]; ok && live.index == e {
+		state.bytes -= len(live.wire)
+		delete(state.responses, e.key)
+	}
+	heap.Remove(&state.responseExpiry, e.position)
+	e.budget.entries.Remove(e.element)
+	e.budget.bytes -= e.size
+	if e.budget.entries.Len() == 0 {
+		delete(state.responseBudgets, e.budget.host)
+	}
+}
 func (conn *PfcpConnection) expireResponsesLocked(now time.Time) {
-	for key, entry := range conn.transport.responses {
-		if !now.Before(entry.expires) {
-			conn.transport.bytes -= len(entry.wire)
-			delete(conn.transport.responses, key)
+	state := &conn.transport
+	// Association cleanup invalidates wire entries without touching this index.
+	// Compact only after enough removals to pay for the scan; stale metadata is
+	// bounded even when a live peer keeps the oldest heap entry unexpired.
+	if len(state.responses) == 0 {
+		clear(state.responseBudgets)
+		state.responseExpiry = nil
+		return
+	}
+	if len(state.responseExpiry) > 2*len(state.responses)+64 {
+		state.compactResponseIndexes()
+	}
+	for len(state.responseExpiry) > 0 {
+		e := state.responseExpiry[0]
+		entry, live := state.responses[e.key]
+		if live && entry.index == e && now.Before(e.expires) {
+			break
 		}
+		state.removeResponse(e)
+	}
+	if len(state.responses) == 0 {
+		clear(state.responseBudgets)
+		clear(state.responseExpiry)
+		state.responseExpiry = nil
 	}
 }
 
-// cachedReply is called while stateMu serializes application execution.
-// Include the request fingerprint: clause 6.4 permits a completed sequence to
-// be reused for another request, while an identical retransmission is replayed.
 func (conn *PfcpConnection) cachedReply(key requestKey, digest [32]byte) ([]byte, bool, error) {
+	return conn.cachedReplyAt(key, digest, time.Now())
+}
+func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now time.Time) ([]byte, bool, error) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	conn.expireResponsesLocked(time.Now())
+	conn.expireResponsesLocked(now)
 	key.digest = digest
 	if entry, ok := state.responses[key]; ok {
 		return entry.wire, true, nil
 	}
-	if len(state.responses) >= conn.transactionLimit() || state.bytes+65535 > 16<<20 {
-		return nil, true, errTransactionCapacity
+	host, _, _ := net.SplitHostPort(key.peer)
+	budget := state.responseBudgets[host]
+	if budget == nil {
+		return nil, false, nil
+	}
+	// Amortized expiry/eviction only visits removed entries. One peer has no
+	// access to another peer's budget, even when it varies UDP source ports.
+	for budget.entries.Len() > 0 {
+		e := budget.entries.Front().Value.(*responseIndex)
+		entry, live := state.responses[e.key]
+		if !live || entry.index != e {
+			state.removeResponse(e)
+			continue
+		}
+		if budget.entries.Len() < conn.transactionLimit() && budget.bytes+65535 <= responseByteBudget {
+			break
+		}
+		if now.Sub(e.created) < minimumReplayWindow {
+			return nil, true, errTransactionCapacity
+		}
+		state.removeResponse(e)
 	}
 	return nil, false, nil
 }
+
+// cachedReply reserves capacity under stateMu before application execution.
+// Saturation inside the minimum replay window drops new work for retransmission;
+// it never invents a Cause 75 or executes work that cannot be safely replayed.
 func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []byte, entities ...string) {
 	state := &conn.transport
 	state.mu.Lock()
@@ -195,8 +290,19 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	if state.responses == nil {
 		state.responses = make(map[requestKey]cachedResponse)
 	}
-	// Retention is local policy: clause 6.4 specifies no numeric lifetime. Never
-	// evict a live response to admit work that could subsequently execute twice.
+	if state.responseBudgets == nil {
+		state.responseBudgets = make(map[string]*responseBudget)
+	}
+	key.digest = digest
+	if old, ok := state.responses[key]; ok {
+		state.removeResponse(old.index)
+	}
+	host, _, _ := net.SplitHostPort(key.peer)
+	budget := state.responseBudgets[host]
+	if budget == nil {
+		budget = &responseBudget{host: host}
+		state.responseBudgets[host] = budget
+	}
 	ttl := conn.responseRetention
 	if ttl <= 0 {
 		ttl = time.Minute
@@ -205,8 +311,12 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	if len(entities) > 0 {
 		entity = entities[0]
 	}
-	key.digest = digest
-	state.responses[key] = cachedResponse{wire: wire, expires: time.Now().Add(ttl), entity: entity}
+	now := time.Now()
+	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: len(wire)}
+	e.element = budget.entries.PushBack(e)
+	heap.Push(&state.responseExpiry, e)
+	budget.bytes += len(wire)
+	state.responses[key] = cachedResponse{wire: wire, expires: e.expires, entity: entity, index: e}
 	state.bytes += len(wire)
 }
 
@@ -260,4 +370,24 @@ func (conn *PfcpConnection) failResponse(typ uint8, seq uint32, peer *net.UDPAdd
 	conn.finishProbeLocked(req)
 	conn.stateMu.Unlock()
 	log.Warn().Err(err).Str("peer", peer.String()).Str("message", message.MessageTypeName(typ)).Msg("Invalid matched PFCP response")
+}
+
+func (state *transportState) compactResponseIndexes() {
+	kept := state.responseExpiry[:0]
+	for _, e := range state.responseExpiry {
+		entry, live := state.responses[e.key]
+		if live && entry.index == e {
+			e.position = len(kept)
+			kept = append(kept, e)
+			continue
+		}
+		e.budget.entries.Remove(e.element)
+		e.budget.bytes -= e.size
+		if e.budget.entries.Len() == 0 {
+			delete(state.responseBudgets, e.budget.host)
+		}
+	}
+	clear(state.responseExpiry[len(kept):])
+	state.responseExpiry = kept
+	heap.Init(&state.responseExpiry)
 }
