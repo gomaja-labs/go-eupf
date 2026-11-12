@@ -68,12 +68,19 @@ func NewConfig() (*Config, error) {
 
 // UpdateFile updates config file values based on provided map
 func (c *Config) UpdateFile(params map[string]interface{}) error {
+	saved := viper.New()
+	saved.SetConfigFile(configFileName)
+	if err := saved.ReadInConfig(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read CLI config: %w", err)
+	}
+	for key, value := range params {
+		saved.Set(key, value)
+	}
+	if err := saved.WriteConfigAs(configFileName); err != nil {
+		return fmt.Errorf("write CLI config: %w", err)
+	}
 	for key, value := range params {
 		cfgViper.Set(key, value)
-	}
-
-	if err := cfgViper.WriteConfigAs(configFileName); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	if err := cfgViper.UnmarshalExact(c); err != nil {
