@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 	"reflect"
+	"slices"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -21,18 +23,44 @@ func unsupportedRuleIE(typ ie.IEType) error {
 // rejectUnsupportedFields audits the codec's complete typed view, including
 // newly added standard fields. OtherIEs remain ignored under clauses 7.6.9 and
 // 7.6.10; they contain unknown/unexpected types and extra singular occurrences.
-func rejectUnsupportedFields(fields interface{}, supported ...string) error {
-	value := reflect.ValueOf(fields).Elem()
+// capabilityFieldPlans holds immutable metadata for the finite set of codec
+// views used below. Wire input cannot introduce a new Go type or field policy.
+// A different policy for an existing type is inspected independently.
+var capabilityFieldPlans sync.Map // reflect.Type -> *capabilityFieldPlan
+
+type capabilityFieldPlan struct {
+	supported []string
+	fields    []int
+}
+
+func capabilityFields(typ reflect.Type, supported []string) *capabilityFieldPlan {
+	if cached, ok := capabilityFieldPlans.Load(typ); ok {
+		plan := cached.(*capabilityFieldPlan)
+		if slices.Equal(plan.supported, supported) {
+			return plan
+		}
+	}
 	allowed := map[string]bool{"OtherIEs": true}
 	for _, name := range supported {
 		allowed[name] = true
 	}
-	for field := range value.Type().Fields() {
+	plan := &capabilityFieldPlan{supported: slices.Clone(supported)}
+	for index := 0; index < typ.NumField(); index++ {
+		field := typ.Field(index)
 		if allowed[field.Name] {
 			continue
 		}
-		entry := value.FieldByIndex(field.Index)
-		switch child := entry.Interface().(type) {
+		if field.Type == reflect.TypeFor[*ie.IE]() || field.Type == reflect.TypeFor[[]*ie.IE]() {
+			plan.fields = append(plan.fields, index)
+		}
+	}
+	capabilityFieldPlans.LoadOrStore(typ, plan)
+	return plan
+}
+func rejectUnsupportedFields(fields interface{}, supported ...string) error {
+	value := reflect.ValueOf(fields).Elem()
+	for _, index := range capabilityFields(value.Type(), supported).fields {
+		switch child := value.Field(index).Interface().(type) {
 		case *ie.IE:
 			if child != nil {
 				return unsupportedRuleIE(child.Type)
