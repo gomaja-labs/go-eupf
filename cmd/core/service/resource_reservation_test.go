@@ -138,3 +138,34 @@ func TestRetiredIPv6PrefixKeepsCollisionClaimUntilGrace(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReservationViewOwnsReturnedAddressesAndPrefixMasks(t *testing.T) {
+	manager, _ := NewResourceManager("192.0.2.0/30", 0)
+	journal := manager.BeginReservation(10)
+	ip, err := journal.View().IPAM.AllocateIP(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(net.IP(nil), ip...)
+	clear(ip)
+	again, err := journal.View().IPAM.AllocateIP(10)
+	if err != nil || !again.Equal(want) {
+		t.Fatal("caller changed a private reservation address")
+	}
+	mask := net.CIDRMask(64, 128)
+	if err := journal.View().IPAM.ReserveIPv6Prefix(10, net.ParseIP("2001:db8:17::1"), mask); err != nil {
+		t.Fatal(err)
+	}
+	clear(mask)
+	reclaim := journal.Commit()
+	if reclaim != nil {
+		if err := reclaim(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, lease := range manager.IPAM.activePrefixes[10] {
+		if bits, _ := lease.Prefix.Mask.Size(); bits != 64 {
+			t.Fatal("caller changed a published prefix mask")
+		}
+	}
+}

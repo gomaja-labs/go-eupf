@@ -116,7 +116,7 @@ func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
 			pool.record(owner, ip)
 			pool.busyIPs[owner] = ip
 		}
-		return ip, err
+		return append(net.IP(nil), ip...), err
 	}
 	pool.Lock()
 	defer pool.Unlock()
@@ -368,7 +368,7 @@ func (pool *IPAM) ReserveIPv6Prefix(owner uint64, ip net.IP, mask net.IPMask) er
 		if pool.prefixLeases == nil {
 			pool.prefixLeases = make(map[string]ipPrefixLease)
 		}
-		pool.prefixLeases[key] = ipPrefixLease{owner, net.IPNet{IP: ip.Mask(mask), Mask: mask}}
+		pool.prefixLeases[key] = ipPrefixLease{owner, net.IPNet{IP: ip.Mask(mask), Mask: append(net.IPMask(nil), mask...)}}
 		pool.record(owner, ip)
 		return nil
 	}
