@@ -26,7 +26,7 @@ def evidence():
     with (directory / "tcpdump.log").open("w") as output:
         capture = subprocess.Popen(
             ["tcpdump", "-U", "--immediate-mode", "-i", "lo", "-w", str(directory / "synthetic.pcap"),
-             "udp", "port", "8805"], stdout=output, stderr=output,
+             "udp port 8805 or udp port 2152 or udp port 4321"], stdout=output, stderr=output,
         )
         try:
             deadline = time.monotonic() + 5
@@ -167,3 +167,47 @@ def peer(request, server):
         yield remote
     finally:
         remote.close()
+
+
+def uplink_far(identifier=1, drop=False):
+    fields = [pfcp.IE_FAR_Id(id=identifier), pfcp.IE_ApplyAction(DROP=1) if drop else pfcp.IE_ApplyAction(FORW=1)]
+    if not drop:
+        fields.append(pfcp.IE_ForwardingParameters(IE_list=[pfcp.IE_DestinationInterface(interface=1)]))
+    return pfcp.IE_CreateFAR(IE_list=fields)
+
+
+def uplink_pdr(identifier=1, precedence=100, teid=None, protocol="udp", far_id=1, qers=(), urrs=()):
+    tunnel = pfcp.IE_FTEID(V4=1, CH=1) if teid is None else pfcp.IE_FTEID(V4=1, TEID=teid, ipv4="127.0.0.1")
+    detection = [pfcp.IE_SourceInterface(interface=0), tunnel,
+                 pfcp.IE_SDF_Filter(FD=1, flow_description=(f"permit out {protocol} from 127.0.0.3 4321 to 127.0.0.2 54321").encode())]
+    return pfcp.IE_CreatePDR(IE_list=[pfcp.IE_PDR_Id(id=identifier), pfcp.IE_Precedence(precedence=precedence),
+        pfcp.IE_PDI(IE_list=detection), pfcp.IE_OuterHeaderRemoval(header=0), pfcp.IE_FAR_Id(id=far_id),
+        *[pfcp.IE_QER_Id(id=value) for value in qers], *[pfcp.IE_URR_Id(id=value) for value in urrs]])
+
+
+class TunnelTraffic:
+    def __init__(self, teid):
+        self.teid = teid
+        self.sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sender.bind(("127.0.0.2", 0))
+        self.receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.receiver.bind(("127.0.0.3", 4321))
+
+    def close(self):
+        self.sender.close()
+        self.receiver.close()
+
+    def send(self, label, delivered=True):
+        from scapy.layers.inet import IP, UDP
+        from scapy.packet import Raw
+        from scapy.contrib.gtp import GTP_U_Header
+        inner = IP(src="127.0.0.2", dst="127.0.0.3") / UDP(sport=54321, dport=4321) / Raw(label.encode())
+        wire = bytes(GTP_U_Header(gtp_type=255, teid=self.teid) / inner)
+        self.receiver.settimeout(2 if delivered else 0.2)
+        self.sender.sendto(wire, ("127.0.0.1", 2152))
+        if delivered:
+            assert self.receiver.recv(2048) == label.encode()
+        else:
+            with pytest.raises(socket.timeout):
+                self.receiver.recv(2048)
+        return len(bytes(inner))

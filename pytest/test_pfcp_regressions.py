@@ -17,7 +17,7 @@ import pytest
 from scapy.contrib import pfcp
 
 
-from conftest import far, pdr, get_json
+from conftest import far, pdr, get_json, uplink_far, uplink_pdr, TunnelTraffic
 
 
 def test_heartbeat_missing_recovery_does_not_crash(peer):
@@ -197,20 +197,27 @@ def test_rule_rejection_details_and_atomicity(peer,case,cause,offending,rule_kin
 
 def test_final_usage_in_modification_and_deletion(peer):
     # TS 29.244 V20.1.0 clauses 5.2.2.3.1, 7.5.5 and 7.5.7.
-    detection=pdr()
-    detection.IE_list += [pfcp.IE_URR_Id(id=11),pfcp.IE_URR_Id(id=22)]
-    usage=lambda identifier:pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=identifier),pfcp.IE_MeasurementMethod(VOLUM=1),pfcp.IE_ReportingTriggers()])
-    response=peer.establish([far(),usage(11),usage(22),detection])
+    detection=uplink_pdr(urrs=(11,22))
+    usage=lambda identifier:pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=identifier),pfcp.IE_MeasurementMethod(VOLUM=1),pfcp.IE_ReportingTriggers(volume_threshold=1),pfcp.IE_VolumeThreshold(TOVOL=1,total=1000)])
+    response=peer.establish([uplink_far(),usage(11),usage(22),detection])
     assert response[pfcp.IE_Cause].cause==1
     seid=response[pfcp.IE_FSEID].seid
-    modification=peer.request(pfcp.PFCPSessionModificationRequest(IE_list=[pfcp.IE_RemoveURR(IE_list=[pfcp.IE_URR_Id(id=11)])]),seid)
-    assert modification[pfcp.IE_Cause].cause==1
-    deletion=peer.request(pfcp.PFCPSessionDeletionRequest(),seid)
-    assert deletion[pfcp.IE_Cause].cause==1
-    for response,expected in [(modification,11),(deletion,22)]:
-        assert response[pfcp.IE_URR_Id].id==expected
-        assert response[pfcp.IE_UR_SEQN].number==0
-        assert response[pfcp.IE_VolumeMeasurement].total==0
+    traffic=TunnelTraffic(response[pfcp.IE_FTEID].TEID)
+    try:
+        first=traffic.send("usage-before-remove")
+        modification=peer.request(pfcp.PFCPSessionModificationRequest(IE_list=[pfcp.IE_RemoveURR(IE_list=[pfcp.IE_URR_Id(id=11)])]),seid)
+        assert modification[pfcp.IE_Cause].cause==1
+        second=traffic.send("usage-before-delete")
+        deletion=peer.request(pfcp.PFCPSessionDeletionRequest(),seid)
+        assert deletion[pfcp.IE_Cause].cause==1
+        for response,expected,volume in [(modification,11,first),(deletion,22,first+second)]:
+            assert response[pfcp.IE_URR_Id].id==expected
+            assert response[pfcp.IE_UR_SEQN].number==0
+            assert response[pfcp.IE_VolumeMeasurement].total==volume
+            assert response[pfcp.IE_VolumeMeasurement].uplink==volume
+            assert response[pfcp.IE_VolumeMeasurement].downlink==0
+    finally:
+        traffic.close()
 
 
 def test_kernel_write_failure_restores_previous_rules(peer,evidence):
@@ -240,3 +247,40 @@ def test_kernel_write_failure_restores_previous_rules(peer,evidence):
     assert response[pfcp.IE_FailedRuleId].qer_id==9
     assert get_json("/api/v1/pfcp_sessions")==before
     assert get_json("/api/v1/far_map/1")==far_before
+
+
+def test_live_precedence_qers_and_unmatched_drop(peer):
+    # TS 29.244 V20.1.0 clauses 5.2.1 and 5.4.4. Capture pairs each
+    # negative packet with delivered controls through the same real XDP hook.
+    qer=lambda identifier:pfcp.IE_CreateQER(IE_list=[pfcp.IE_QER_Id(id=identifier),pfcp.IE_GateStatus(ul=0,dl=0)])
+    response=peer.establish([uplink_far(),qer(1),qer(2),uplink_pdr(qers=(1,2))])
+    assert response[pfcp.IE_Cause].cause==1
+    seid=response[pfcp.IE_FSEID].seid
+    teid=response[pfcp.IE_FTEID].TEID
+    traffic=TunnelTraffic(teid)
+    def modify(*rules):
+        response=peer.request(pfcp.PFCPSessionModificationRequest(IE_list=list(rules)),seid)
+        assert response[pfcp.IE_Cause].cause==1
+    def update_pdi(protocol):
+        create=uplink_pdr(2,10,teid,protocol,2)
+        return pfcp.IE_UpdatePDR(IE_list=[create[pfcp.IE_PDR_Id],create[pfcp.IE_PDI]])
+    try:
+        traffic.send("baseline-delivered")
+        modify(uplink_far(2,True),uplink_pdr(2,10,teid,"tcp",2))
+        traffic.send("additional-tcp-preserves-udp")
+        modify(update_pdi("udp"))
+        traffic.send("higher-priority-drop",False)
+        modify(pfcp.IE_UpdatePDR(IE_list=[pfcp.IE_PDR_Id(id=1),pfcp.IE_Precedence(precedence=5)]))
+        traffic.send("priority-update-delivered")
+        modify(pfcp.IE_UpdateQER(IE_list=[pfcp.IE_QER_Id(id=2),pfcp.IE_GateStatus(ul=1,dl=0)]))
+        traffic.send("second-qer-gate-drop",False)
+        modify(pfcp.IE_UpdateQER(IE_list=[pfcp.IE_QER_Id(id=2),pfcp.IE_GateStatus(ul=0,dl=0)]),
+               pfcp.IE_RemovePDR(IE_list=[pfcp.IE_PDR_Id(id=2)]))
+        replacement=uplink_pdr(1,5,teid,"tcp")
+        modify(pfcp.IE_UpdatePDR(IE_list=[replacement[pfcp.IE_PDR_Id],replacement[pfcp.IE_PDI]]))
+        traffic.send("known-key-unmatched-drop",False)
+        replacement=uplink_pdr(1,5,teid,"udp")
+        modify(pfcp.IE_UpdatePDR(IE_list=[replacement[pfcp.IE_PDR_Id],replacement[pfcp.IE_PDI]]))
+        traffic.send("final-control-delivered")
+    finally:
+        traffic.close()
