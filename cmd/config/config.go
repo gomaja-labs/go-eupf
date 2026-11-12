@@ -31,8 +31,10 @@ var (
 	validate             *validator.Validate
 	commonConfigV        = viper.New()
 	configMu             sync.Mutex
-	pccConfigV           = viper.New()
-	SDFFilterRegex       = regexp.MustCompile(`^permit (out|in) (icmp|ip|tcp|udp|\d+) from (any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))? to (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))?$`)
+	// RFC 9110 section 11.2: token68 excludes whitespace and control bytes.
+	apiTokenRegex  = regexp.MustCompile(`^[A-Za-z0-9._~+/-]+=*$`)
+	pccConfigV     = viper.New()
+	SDFFilterRegex = regexp.MustCompile(`^permit (out|in) (icmp|ip|tcp|udp|\d+) from (any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))? to (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))?$`)
 )
 
 type PCCRulesConfig struct {
@@ -465,8 +467,8 @@ func (c *UpfConfig) ValidateAPIExposure() error {
 	if c.ApiToken == "" && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return fmt.Errorf("api_token is required when api_address binds outside loopback")
 	}
-	if strings.ContainsAny(c.ApiToken, " \t\r\n") {
-		return fmt.Errorf("api_token must not contain whitespace")
+	if c.ApiToken != "" && !apiTokenRegex.MatchString(c.ApiToken) {
+		return fmt.Errorf("api_token must use HTTP token68 characters")
 	}
 	for _, origin := range c.ApiAllowedOrigins {
 		parsed, err := url.Parse(origin)

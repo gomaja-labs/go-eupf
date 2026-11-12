@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/cilium/ebpf/link"
@@ -88,11 +89,15 @@ func (h *ApiHandler) InitRoutes() *gin.Engine {
 		router.Use(cors.New(corsConfig))
 	}
 	token := h.Cfg.ApiToken
-	expected := sha256.Sum256([]byte("Bearer " + token))
+	expected := sha256.Sum256([]byte(token))
 	router.Use(func(c *gin.Context) {
-		if token != "" && !(c.Request.Method == http.MethodGet && c.Request.URL.Path == "/api/v1/health") {
-			supplied := sha256.Sum256([]byte(c.GetHeader("Authorization")))
-			if subtle.ConstantTimeCompare(expected[:], supplied[:]) != 1 {
+		if token != "" && (c.Request.Method != http.MethodGet || c.Request.URL.Path != "/api/v1/health") {
+			// RFC 9110 sections 11.1 and 11.4: scheme names ignore case;
+			// one or more SP characters separate the scheme and credentials.
+			scheme, credential, separated := strings.Cut(c.GetHeader("Authorization"), " ")
+			credential = strings.TrimLeft(credential, " ")
+			supplied := sha256.Sum256([]byte(credential))
+			if !separated || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare(expected[:], supplied[:]) != 1 {
 				c.Header("WWW-Authenticate", "Bearer")
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 				return

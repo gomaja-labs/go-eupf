@@ -13,6 +13,10 @@ func TestAPIExposure(t *testing.T) {
 		{"127.0.0.1:8080", "", false}, {"[::1]:8080", "", false}, {"localhost:8080", "", false},
 		{":8080", "", true}, {"0.0.0.0:8080", "", true}, {"192.0.2.1:8080", "", true},
 		{"192.0.2.1:8080", "test-token", false}, {":8080", " ", true},
+		{":8080", "bad:token", true},
+		{":8080", "=bad", true},
+		{":8080", "bad\x00token", true},
+		{":8080", "allowed_~+/==", false},
 	} {
 		t.Run(tc.address+tc.token, func(t *testing.T) {
 			cfg := UpfConfig{ApiAddress: tc.address, ApiToken: tc.token}

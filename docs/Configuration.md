@@ -196,7 +196,7 @@ eupf \
 
 ## Management API and validation limits
 
-`api_token` / `UPF_API_TOKEN` / `--api-token` sets the administration bearer token. A non-loopback `api_address` requires it. `api_allowed_origins` / `UPF_API_ALLOWED_ORIGINS` / `--api-allowed-origins` supplies explicit HTTP(S) browser origins; the default list is empty. The token is omitted from the REST configuration response and startup logs. See [API security](api.md).
+`api_token` / `UPF_API_TOKEN` / `--api-token` sets the administration bearer token. Nonempty tokens use HTTP token68 characters (`A-Z`, `a-z`, digits, `-._~+/`, with optional trailing `=` padding). A non-loopback `api_address` requires it. `api_allowed_origins` / `UPF_API_ALLOWED_ORIGINS` / `--api-allowed-origins` supplies explicit HTTP(S) browser origins; the default list is empty. The token is omitted from the REST configuration response and startup logs. See [API security](api.md).
 
 `max_sessions` is 1..1048576. Each explicit map size is 0 (derive from max_sessions) or 1..2097152. Association setup and GTP echo timers are 1..1048576 seconds. Heartbeat interval and timeout are 1..86400 seconds; heartbeat retries are 0..86400. Trace file count is 0..1073741824; trace size and packet count are 1..1073741824. Enabled UE-IP pools must be IPv4 /12 or narrower (at most 1048576 addresses); enabled TEID pools contain 1..1048576 entries. These are validation ceilings; provision memory for the actual configured maps and pools.
 

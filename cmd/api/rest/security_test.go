@@ -1,13 +1,14 @@
 package rest
 
 import (
-	"github.com/gin-gonic/gin"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 )
 
 func TestManagementAuthenticationAndCORS(t *testing.T) {
@@ -26,6 +27,8 @@ func TestManagementAuthenticationAndCORS(t *testing.T) {
 		{"/api/v1/health", "", "", 200, ""},
 		{"/swagger/index.html", "", "", 401, ""},
 		{"/api/v1/config", "Bearer test-token", "https://console.example", 200, "https://console.example"},
+		{"/api/v1/config", "bearer test-token", "", 200, ""},
+		{"/api/v1/config", "Bearer   test-token", "", 200, ""},
 		{"/api/v1/config", "Bearer test-token", "https://evil.example", 403, ""},
 	} {
 		req, err := http.NewRequest(http.MethodGet, srv.URL+tc.path, nil)
