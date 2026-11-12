@@ -39,8 +39,8 @@ static __noinline int parse_gtp(struct packet_context *ctx) {
     struct gtpuhdr *gtp = (struct gtpuhdr *)ctx->data;
     if ((const char *)(gtp + 1) > ctx->data_end || !ctx->udp || !ctx->ip4)
         return -1;
-    __u32 length = bpf_ntohs(gtp->message_length);
-    __u32 udp_length = bpf_ntohs(ctx->udp->len);
+    __u32 length = bounded_wire_length(gtp->message_length);
+    __u32 udp_length = bounded_wire_length(ctx->udp->len);
     if (gtp->version != 1 || !gtp->pt || udp_length != length + 16 ||
         (const char *)(gtp + 1) + length > ctx->data_end)
         return -1;
@@ -299,9 +299,9 @@ static __always_inline __u32 add_gtp_over_ip4_headers(struct packet_context *ctx
     // int ip_packet_len = (ctx->xdp_ctx->data_end - ctx->xdp_ctx->data) - sizeof(*eth);
     int ip_packet_len = 0;
     if (ctx->ip4)
-        ip_packet_len = bpf_ntohs(ctx->ip4->tot_len);
+        ip_packet_len = bounded_wire_length(ctx->ip4->tot_len);
     else if (ctx->ip6)
-        ip_packet_len = bpf_ntohs(ctx->ip6->payload_len) + sizeof(struct ipv6hdr);
+        ip_packet_len = bounded_wire_length(ctx->ip6->payload_len) + sizeof(struct ipv6hdr);
     else
         return -1;
 

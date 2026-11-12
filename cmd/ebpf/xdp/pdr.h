@@ -40,6 +40,7 @@ struct pdr {
 #define PDR_LIST_SIZE 4
 #define QFI_LIST_SIZE 8
 struct pdr_entry {
+    __u8 match_mode; // 0: full PDI, 1: any source, 2: Access, 3: Core
     struct pdr pdr;
     struct pdr return_pdr;
     __u8 return_nr_flag;

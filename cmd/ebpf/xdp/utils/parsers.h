@@ -18,6 +18,13 @@
 #define ETH_P_IPV6_BE	0xDD86
 #define ETH_P_IP_BE 	0x0008
 
+static __always_inline __u64 bounded_wire_length(__be16 length) {
+    __u64 value = bpf_ntohs(length);
+    // Linux 5.15 needs an explicit unsigned bound after BPF_END.
+    asm volatile("" : "+r"(value));
+    return value & 0xffff;
+}
+
 static __always_inline int parse_ethernet(struct packet_context *ctx) {
     struct ethhdr *eth = (struct ethhdr *)ctx->data;
     if ((const char *)(eth + 1) > ctx->data_end)
@@ -41,7 +48,7 @@ static __always_inline int parse_ip4(struct packet_context *ctx) {
     // RFC 791 section 3.1: IHL, total length and fragment offsets delimit L4.
     // Fragments stay intact for kernel reassembly; never classify fragment data.
     __u32 ihl = ip4->ihl * 4;
-    __u32 total = bpf_ntohs(ip4->tot_len);
+    __u32 total = bounded_wire_length(ip4->tot_len);
     if (ip4->version != 4 || ihl < sizeof(*ip4) || total < ihl ||
         (const char *)ip4 + ihl > ctx->data_end ||
         (const char *)ip4 + total > ctx->data_end ||
@@ -60,9 +67,10 @@ static __always_inline int parse_ip6(struct packet_context *ctx) {
     
     // RFC 8200 sections 3-4 (updated by RFC 9673): only a direct L4 header
     // is accelerated. Extension headers go to the kernel, without L4 guessing.
-    if (ip6->version != 6 || (const char *)(ip6 + 1) + bpf_ntohs(ip6->payload_len) > ctx->data_end)
+    __u64 payload_len = bounded_wire_length(ip6->payload_len);
+    if (ip6->version != 6 || (const char *)(ip6 + 1) + payload_len > ctx->data_end)
         return -1;
-    ctx->ip_end = (const char *)(ip6 + 1) + bpf_ntohs(ip6->payload_len);
+    ctx->ip_end = (const char *)(ip6 + 1) + payload_len;
 
     ctx->data += sizeof(*ip6);
     ctx->ip6 = ip6;
@@ -75,7 +83,7 @@ static __always_inline int parse_udp(struct packet_context *ctx) {
         return -1;
 
     // RFC 768: UDP Length includes its header and excludes Ethernet padding.
-    __u32 len = bpf_ntohs(udp->len);
+    __u32 len = bounded_wire_length(udp->len);
     if (len < sizeof(*udp) || (const char *)udp + len > ctx->data_end ||
         (ctx->ip_end && (const char *)udp + len > ctx->ip_end))
         return -1;

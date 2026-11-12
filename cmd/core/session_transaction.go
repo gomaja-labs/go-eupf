@@ -12,7 +12,7 @@ import (
 type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 
 // prepareSessionMutation creates the private reservation view under stateMu.
-// Parsing and validation finish before the data plane is quiesced. Commit then
+// Parsing and validation finish before map publication. Commit then
 // reserves every rule slot before applying the first map write.
 func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() error, func(bool) error) {
 	maps, resources := conn.mapOperations, conn.ResourceManager
@@ -56,6 +56,13 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() err
 		}
 		if !commit {
 			return tx.Rollback()
+		}
+		// Detached tunnel IDs and address leases cannot be published as free
+		// until old rule readers have returned, even when there is no URR.
+		if resources.ReleasesComparedWith(reserved, session.LocalSEID) {
+			if err := tx.SynchronizeRules(); err != nil {
+				return errors.Join(err, tx.Rollback())
+			}
 		}
 		if err := tx.Commit(); err != nil {
 			return errors.Join(err, tx.Rollback())

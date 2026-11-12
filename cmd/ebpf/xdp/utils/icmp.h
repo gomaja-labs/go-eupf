@@ -27,7 +27,7 @@ static __always_inline void fill_icmp_header(struct icmphdr *icmp) {
 //     if (!ctx->ip4)
 //         return -1;
 
-//     const __u32 ip_packet_len = bpf_ntohs(ctx->ip4->tot_len);
+//     const __u32 ip_packet_len = bounded_wire_length(ctx->ip4->tot_len);
 
 //     int result = bpf_xdp_adjust_head(ctx->xdp_ctx, (__s32)-icmp_encap_size);
 //     if (result)
@@ -174,7 +174,7 @@ static __noinline int valid_rs_checksum(struct ipv6hdr *ip, const char *end, __u
 // response. The bounded fast path leaves larger messages to the kernel.
 static __noinline int valid_router_solicitation(struct packet_context *ctx) {
     struct ipv6hdr *ip = ctx->ip6;
-    __u32 len = bpf_ntohs(ip->payload_len);
+    __u32 len = bounded_wire_length(ip->payload_len);
     if (len > 256) return -1;
     struct icmp6hdr *icmp = (void *)(ip+1);
     if (ip->hop_limit != 255 || len < 8 || len > 256 || (len & 7) ||

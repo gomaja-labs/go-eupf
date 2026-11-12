@@ -9,21 +9,20 @@ import (
 )
 
 type IpEntrypointObjects struct {
-	UpfIpEntrypointFunc *ebpf.Program
-	UpfRuleControl      *ebpf.Program
-	RuleGate            *ebpf.Map
-	FarMap              *ebpf.Map
-	QerMap              *ebpf.Map
-	UrrMap              *ebpf.Map
-	PdrMapDownlinkIp4   *ebpf.Map
-	PdrMapDownlinkIp6   *ebpf.Map
-	PdrMapTeidIp4       *ebpf.Map
-	SdfNotifyMap        *ebpf.Map
-	TraceMap            *ebpf.Map
-	UpfExtStat          *ebpf.Map
-	UpfPipeline         *ebpf.Map
-	UpfRouteStat        *ebpf.Map
-	GlobalConfig        *ebpf.Variable
+	UpfIpEntrypointFunc       *ebpf.Program
+	UpfRouterSolicitationFunc *ebpf.Program
+	FarMap                    *ebpf.Map
+	QerMap                    *ebpf.Map
+	UrrMap                    *ebpf.Map
+	PdrMapDownlinkIp4         *ebpf.Map
+	PdrMapDownlinkIp6         *ebpf.Map
+	PdrMapTeidIp4             *ebpf.Map
+	SdfNotifyMap              *ebpf.Map
+	TraceMap                  *ebpf.Map
+	UpfExtStat                *ebpf.Map
+	UpfPipeline               *ebpf.Map
+	UpfRouteStat              *ebpf.Map
+	GlobalConfig              *ebpf.Variable
 }
 
 type IpEntrypointDataplaneConfig struct {
@@ -40,7 +39,9 @@ type IpEntrypointDataplaneConfig struct {
 func (o *IpEntrypointObjects) Close() error { return nil }
 
 type IpEntrypointPdrEntry struct {
-	Pdr struct {
+	MatchMode uint8
+	_         [3]byte
+	Pdr       struct {
 		FarId                     uint32
 		QerId                     [4]uint32
 		QerCount                  uint8
@@ -64,7 +65,6 @@ type IpEntrypointPdrEntry struct {
 	_                      [3]byte
 	PdrId                  uint32
 	Precedence             uint32
-	_                      [4]byte
 	Notify                 uint64
 	UeIp4                  uint32
 	UeMask4                uint32
@@ -166,14 +166,6 @@ type IpEntrypointRouteStat struct {
 
 func LoadIpEntrypoint() (*ebpf.CollectionSpec, error) {
 	return nil, errors.New("ebpf generation requires Linux")
-}
-
-type IpEntrypointRuleGate struct {
-	Lock struct {
-		Val uint32
-	}
-	Active uint32
-	Closed uint32
 }
 
 type IpEntrypointIpv6PdrKey struct {

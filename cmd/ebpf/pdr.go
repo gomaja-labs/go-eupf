@@ -135,15 +135,15 @@ func (b *BpfObjects) PutPdrUplink(teid uint32, info PdrInfo) error {
 	return b.PdrMapTeidIp4.Put(teid, &bucket)
 }
 func (b *BpfObjects) PutPdrDownlink(ip net.IP, info PdrInfo) error {
-	return b.putPdrDownlink(ip, info, false)
+	return b.putPdrDownlink(ip, info)
 }
-func (b *BpfObjects) putPdrDownlink(ip net.IP, info PdrInfo, replacing bool) error {
+func (b *BpfObjects) putPdrDownlink(ip net.IP, info PdrInfo) error {
 	m, key, err := b.downlinkRuleMap(ip, info.UEIPv6Mask)
 	if err != nil {
 		return err
 	}
 	if ip.To4() == nil {
-		if err := b.checkIPv6Overlap(key.(IpEntrypointIpv6PdrKey), info.SessionID, replacing); err != nil {
+		if err := b.checkIPv6Overlap(key.(IpEntrypointIpv6PdrKey), info.SessionID); err != nil {
 			return err
 		}
 	}
@@ -465,6 +465,8 @@ type ForwardingPlaneController interface {
 	UpdateUrr(internalId uint32, urrInfo UrrInfo) error
 	GetUrr(internalId uint32) (UrrInfo, error)
 	ResetUrr(internalId uint32) error
+	DetachRule(kind uint8, id uint32) error
+	SynchronizeRules() error
 	DeleteUrr(internalId uint32) (UrrInfo, error)
 }
 
@@ -474,6 +476,17 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 		return entry, ErrRuleCapacity
 	}
 	entry.PdrId, entry.Precedence = info.PdrID, info.Precedence
+	// Common unfiltered PDRs need only one byte from the first cache line.
+	// The full classifier remains authoritative whenever any tuple/QFI/UE
+	// constraint is present.
+	if len(info.SdfFilter) == 0 && len(info.QFIs) == 0 && info.UEIPv4 == nil && info.UEIPv6 == nil {
+		entry.MatchMode = 1
+		if info.SourceInterfacePresent && info.SourceInterface <= 1 {
+			entry.MatchMode = info.SourceInterface + 2
+		} else if info.SourceInterfacePresent {
+			entry.MatchMode = 0
+		}
+	}
 	entry.ReturnPdr.FarId = info.ReturnFarID
 	entry.ReturnPdr.QerCount = uint8(len(info.ReturnQerIDs))
 	copy(entry.ReturnPdr.QerId[:], info.ReturnQerIDs)
@@ -681,7 +694,7 @@ func (b *BpfObjects) LookupDownlinkPDR(ip net.IP) (IpEntrypointPdrInfo, error) {
 	err = m.Lookup(key, &bucket)
 	return bucket, err
 }
-func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64, replacing bool) error {
+func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64) error {
 	var existing IpEntrypointIpv6PdrKey
 	var value IpEntrypointPdrInfo
 	iter := b.PdrMapDownlinkIp6.Iterate()
@@ -695,9 +708,7 @@ func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64, 
 			if value.SessionId != owner {
 				return ErrKeyOwned
 			}
-			if !replacing {
-				return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
-			}
+			return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
 		}
 	}
 	return iter.Err()

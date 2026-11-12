@@ -524,18 +524,19 @@ func (conn *PfcpConnection) bindAssignedAddresses(session *Session) error {
 	}
 	var ip4, ip6 net.IP
 	var mask6 net.IPMask
-	for _, pdr := range session.PDRs {
+	for id, pdr := range session.PDRs {
 		if pdr.Ipv4 != nil {
 			if ip4 != nil && !ip4.Equal(pdr.Ipv4) {
-				return fmt.Errorf("multiple assigned IPv4 addresses: %w", ebpf.ErrUnsupportedRuleContent)
+				return &ruleFailure{ie.RuleIDTypePDR, id, fmt.Errorf("multiple assigned IPv4 addresses: %w", ebpf.ErrUnsupportedRuleContent)}
 			}
 			ip4 = pdr.Ipv4
 		}
 		if pdr.Ipv6 != nil {
-			if ip6 != nil && (!ip6.Equal(pdr.Ipv6) || !bytes.Equal(mask6, pdr.PdrInfo.UEIPv6Mask)) {
-				return fmt.Errorf("multiple assigned IPv6 prefixes: %w", ebpf.ErrUnsupportedRuleContent)
+			candidate := pdr.Ipv6.Mask(pdr.PdrInfo.UEIPv6Mask)
+			if ip6 != nil && (!ip6.Equal(candidate) || !bytes.Equal(mask6, pdr.PdrInfo.UEIPv6Mask)) {
+				return &ruleFailure{ie.RuleIDTypePDR, id, fmt.Errorf("multiple assigned IPv6 prefixes: %w", ebpf.ErrUnsupportedRuleContent)}
 			}
-			ip6, mask6 = pdr.Ipv6, pdr.PdrInfo.UEIPv6Mask
+			ip6, mask6 = candidate, pdr.PdrInfo.UEIPv6Mask
 		}
 	}
 	for id, pdr := range session.PDRs {
@@ -562,3 +563,26 @@ func (conn *PfcpConnection) bindAssignedAddresses(session *Session) error {
 	return nil
 }
 
+// deleteReplacedPDR removes only keys not replaced by the PDR's single-key
+// publication. The old key remains usable until the new key has been installed.
+func (pdrContext *PDRCreationContext) deleteReplacedPDR(old, current SPDRInfo, maps ebpf.ForwardingPlaneController) error {
+	if old.Teid != 0 {
+		if old.Teid == current.Teid {
+			return nil
+		}
+		return maps.DeletePdrUplink(old.Teid, old.PdrInfo.SessionID, old.PdrID)
+	}
+	if old.Ipv4 != nil && (current.Teid != 0 || !old.Ipv4.Equal(current.Ipv4)) {
+		if err := maps.DeletePdrDownlink(old.Ipv4, old.PdrInfo.SessionID, old.PdrID); err != nil {
+			return err
+		}
+	}
+	if old.Ipv6 != nil && (current.Teid != 0 || !old.Ipv6.Equal(current.Ipv6) || !bytes.Equal(old.PdrInfo.UEIPv6Mask, current.PdrInfo.UEIPv6Mask)) {
+		prefix, bits := old.PdrInfo.UEIPv6Mask.Size()
+		if bits != 128 {
+			prefix = 128
+		}
+		return maps.DeleteDownlinkPdrIp6(old.Ipv6, old.PdrInfo.SessionID, old.PdrID, uint32(prefix))
+	}
+	return nil
+}

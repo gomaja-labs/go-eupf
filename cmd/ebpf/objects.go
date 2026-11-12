@@ -30,6 +30,8 @@ import (
 type BpfObjects struct {
 	ruleMutex  sync.Mutex
 	rulePoison error
+	ruleClosed bool
+	grace      *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -132,14 +134,30 @@ func (bpfObjects *BpfObjects) Load() error {
 		return err
 	}
 
+	bpfObjects.grace, err = newRuleGrace()
+	if err != nil {
+		return err
+	}
+	bpfObjects.ruleClosed = false
 	loaded = true
 	return nil
 }
 
 func (bpfObjects *BpfObjects) Close() error {
-	return CloseAllObjects(
+	bpfObjects.ruleMutex.Lock()
+	defer bpfObjects.ruleMutex.Unlock()
+	if bpfObjects.ruleClosed {
+		return nil
+	}
+	bpfObjects.ruleClosed = true
+	var err error
+	if bpfObjects.grace != nil {
+		err = bpfObjects.grace.close()
+		bpfObjects.grace = nil
+	}
+	return errors.Join(err, CloseAllObjects(
 		&bpfObjects.IpEntrypointObjects,
-	)
+	))
 }
 
 type LoaderFunc func(obj interface{}, opts *ebpf.CollectionOptions) error

@@ -12,7 +12,7 @@ import (
 	"github.com/gomaja-labs/go-pfcp/message"
 )
 
-func TestAllMovingPDRsDetachBeforeNewPrefixIsApplied(t *testing.T) {
+func TestAllMovingPDRsPublishNewPrefixBeforeDetachment(t *testing.T) {
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		t.Fatal(err)
 	}

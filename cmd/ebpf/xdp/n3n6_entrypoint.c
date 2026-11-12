@@ -42,15 +42,18 @@
 
 SEC("xdp/upf_ip_entrypoint")
 int upf_ip_entrypoint_func(struct xdp_md *ctx);
+SEC("xdp/upf_router_solicitation")
+int upf_router_solicitation_func(struct xdp_md *ctx);
 
 struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-    __uint(max_entries, 1); // Number of programs in the chain
+    __uint(max_entries, 2); // Local recursion and router-control continuation
     __type(key, __u32);
     __array(values, int (struct xdp_md *));
 } jmp_table SEC(".maps") = {
     .values = {
-        [0] = (void *)&upf_ip_entrypoint_func, // Map index 0 points to itself
+        [0] = (void *)&upf_ip_entrypoint_func,
+        [1] = (void *)&upf_router_solicitation_func,
     },
 };
 
@@ -65,37 +68,6 @@ struct dataplane_config {
     __u128 ip6_ra_prefix;
     __u16  ip6_ra_prefix_length;
 } global_config;
-
-// TS 29.244 V20.1.0 clauses 6.3.2-6.3.4 and 5.2.2.3. A closed
-// gate admits no new rule users; transactions wait for every admitted program
-// to finish before touching runtime state or reusing slots.
-struct rule_gate {
-    struct bpf_spin_lock lock;
-    __u32 active;
-    __u32 closed;
-};
-struct {
-    __uint(type,BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries,1);
-    __type(key,__u32);
-    __type(value,struct rule_gate);
-} rule_gate SEC(".maps");
-
-SEC("xdp/upf_rule_control")
-int upf_rule_control(struct xdp_md *ctx) {
-    __u8 *data=(void *)(long)ctx->data;
-    if ((void *)(data+1)>(void *)(long)ctx->data_end) return XDP_ABORTED;
-    __u32 key=0;struct rule_gate *gate=bpf_map_lookup_elem(&rule_gate,&key);
-    if (!gate) return XDP_ABORTED;
-    __u32 closed=*data?1:0;
-    bpf_spin_lock(&gate->lock);
-    gate->closed=closed;
-    bpf_spin_unlock(&gate->lock);
-    return XDP_PASS;
-}
-static __always_inline void leave_rules(struct rule_gate *gate) {
-    bpf_spin_lock(&gate->lock);gate->active--;bpf_spin_unlock(&gate->lock);
-}
 
 static __always_inline int is_local_ip(__u32 ip)
 {
@@ -133,7 +105,7 @@ struct pdi_packet {
 };
 
 // This scalar metadata helper does not re-parse packet headers for each PDR.
-int output_sdf_event(struct xdp_md *ctx,__u64 session_id,__u32 pdr_id,const struct pdi_packet *packet) {
+__noinline int output_sdf_event(struct xdp_md *ctx,__u64 session_id,__u32 pdr_id,const struct pdi_packet *packet) {
     if (!packet) return 0;
     if (packet->family==1) {
         struct sdf_notify_ip4 meta={.cookie=0x1ea1,.session_id=session_id,.pdr_id=pdr_id};
@@ -207,7 +179,9 @@ static __noinline const struct pdr *select_pdr(struct packet_context *ctx,struct
     for (int i=0;i<PDR_LIST_SIZE;i++) {
         if (i>=session->count) break;
         struct pdr_entry *entry=&session->entries[i];
-        if (!match_pdr_entry(entry,packet)) continue;
+        if (entry->match_mode) {
+            if (entry->match_mode!=1 && entry->match_mode!=packet->source_interface+2) continue;
+        } else if (!match_pdr_entry(entry,packet)) continue;
         ctx->trace=entry->trace_flag;ctx->nr_flag=entry->nr_flag;
         ctx->return_pdr=&entry->return_pdr;ctx->return_nr_flag=entry->return_nr_flag;
         if (entry->notify==1 && __sync_val_compare_and_swap(&entry->notify,1,2)==1)
@@ -220,12 +194,12 @@ static __always_inline void pdi_ports(struct packet_context *ctx,struct pdi_pack
     if (ctx->udp) {tuple->source_port=bpf_ntohs(ctx->udp->source);tuple->destination_port=bpf_ntohs(ctx->udp->dest);}
     else if (ctx->tcp) {tuple->source_port=bpf_ntohs(ctx->tcp->source);tuple->destination_port=bpf_ntohs(ctx->tcp->dest);}
 }
-static __noinline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+static __always_inline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
     struct pdi_packet packet={.source=ctx->ip4->saddr,.destination=ctx->ip4->daddr,.family=1,.protocol=ctx->ip4->protocol,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
     pdi_ports(ctx,&packet);
     return select_pdr(ctx,session,&packet,ref);
 }
-static __noinline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+static __always_inline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
     struct pdi_packet packet={.family=2,.protocol=ctx->ip6->nexthdr,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
     __builtin_memcpy(&packet.source,&ctx->ip6->saddr,16);__builtin_memcpy(&packet.destination,&ctx->ip6->daddr,16);
     pdi_ports(ctx,&packet);
@@ -275,6 +249,13 @@ int apply_qer(struct qer_info *qer, __u64 packet_size, __u32 uplink) {
 }
 int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
     if (!pdr || pdr->qer_count>4) return -1;
+    if (!pdr->qer_count) return 0;
+    if (pdr->qer_count==1) {
+        __u32 id=pdr->qer_id[0];if (!id) return -1;
+        struct qer_info *qer=bpf_map_lookup_elem(&qer_map,&id);
+        int result=apply_qer(qer,packet_size,uplink);
+        return result<0?-1:(result&0xffff);
+    }
     __u32 marking=0;
     for (int i=0;i<4;i++) {
         if (i>=pdr->qer_count) break;
@@ -298,7 +279,6 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
         return DEFAULT_XDP_ACTION;
     }
 
-    if (ctx->rules_blocked) return XDP_DROP;
     ctx->source_interface=1;
     const struct pdr *pdr = check_sdf_filters_ipv4(ctx,session,ip4->daddr);
     if (!pdr || !pdr->far_id) return XDP_DROP;
@@ -324,7 +304,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
     if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
-    const __u64 packet_size=bpf_ntohs(ip4->tot_len);
+    const __u64 packet_size=bounded_wire_length(ip4->tot_len);
     if (packet_size<ip4->ihl*4 || (const char *)ip4+packet_size>ctx->data_end) return XDP_DROP;
     int marking=enforce_qers(pdr,packet_size,0);if (marking<0) return XDP_DROP;
 
@@ -348,24 +328,9 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
     return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
 
-static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *ctx) {
-    if (!ctx->ip6 || (const char *)(ctx->ip6+1) > ctx->data_end) return XDP_ABORTED;
-    struct ipv6hdr *ip6 = ctx->ip6;
-    const struct pdr *pdr=0;
-    if (ctx->locally_generated) {
-        // RFC 4861 sections 4.2 and 6.2.6 choose the IPv6 destination;
-        // TS 29.244 V20.1.0 clause 5.2.1 keeps the return tunnel tied to
-        // the originating PFCP session, including link-local/multicast RAs.
-        pdr=ctx->return_pdr;ctx->nr_flag=ctx->return_nr_flag;
-    } else {
-        struct ipv6_pdr_key key={.prefix_length=128};
-        __builtin_memcpy(key.address,&ip6->daddr,16);
-        struct pdr_info *session=bpf_map_lookup_elem(&pdr_map_downlink_ip6,&key);
-        if (!session) return DEFAULT_XDP_ACTION;
-        if (ctx->rules_blocked) return XDP_DROP;
-        ctx->source_interface=1;
-        pdr=check_sdf_filters_ipv6(ctx,session,0);
-    }
+static __noinline enum xdp_action forward_n6_packet_ipv6(struct packet_context *ctx, const struct pdr *pdr) {
+    if (!ctx->ip6 || (const char *)(ctx->ip6+1)>ctx->data_end) return XDP_ABORTED;
+    struct ipv6hdr *ip6=ctx->ip6;
     if (!pdr || !pdr->far_id) return XDP_DROP;
     if (ctx->trace && global_config.trace_in) trace_packet(ctx,PACKET_DIRECTION_IN);
 
@@ -388,7 +353,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
     if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
-    const __u64 packet_size=bpf_ntohs(ip6->payload_len)+sizeof(*ip6);
+    const __u64 packet_size=bounded_wire_length(ip6->payload_len)+sizeof(*ip6);
     if ((const char *)ip6+packet_size>ctx->data_end) return XDP_DROP;
     int marking=enforce_qers(pdr,packet_size,0);if (marking<0) return XDP_DROP;
 
@@ -410,6 +375,26 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
     return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
 
+static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *ctx) {
+    if (!ctx->ip6 || (const char *)(ctx->ip6+1) > ctx->data_end) return XDP_ABORTED;
+    struct ipv6hdr *ip6 = ctx->ip6;
+    const struct pdr *pdr=0;
+    if (ctx->locally_generated) {
+        // RFC 4861 sections 4.2 and 6.2.6 choose the IPv6 destination;
+        // TS 29.244 V20.1.0 clause 5.2.1 keeps the return tunnel tied to
+        // the originating PFCP session, including link-local/multicast RAs.
+        pdr=ctx->return_pdr;ctx->nr_flag=ctx->return_nr_flag;
+    } else {
+        struct ipv6_pdr_key key={.prefix_length=128};
+        __builtin_memcpy(key.address,&ip6->daddr,16);
+        struct pdr_info *session=bpf_map_lookup_elem(&pdr_map_downlink_ip6,&key);
+        if (!session) return DEFAULT_XDP_ACTION;
+            ctx->source_interface=1;
+        pdr=check_sdf_filters_ipv6(ctx,session,0);
+    }
+    return forward_n6_packet_ipv6(ctx,pdr);
+}
+
 
 static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) {
     if (!ctx->gtp) {
@@ -429,7 +414,6 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
         return UPF_ERROR_INDICATION;
     }
 
-    if (ctx->rules_blocked) return XDP_DROP;
     ctx->source_interface = ctx->ip4->daddr == global_config.n9_ipv4_address && global_config.n9_ipv4_address != global_config.n3_ipv4_address ? 1 : 0;
     const struct pdr *pdr = check_sdf_filters_gtp(ctx,session,teid);
     if (!pdr || !pdr->far_id) return XDP_DROP;
@@ -570,7 +554,7 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
             increment_counter(ctx->counters, rx_gtp_other);
             __u32 teid=bpf_ntohl(ctx->gtp->teid);
             struct pdr_info *pdr=bpf_map_lookup_elem(&pdr_map_teid_ip4,&teid);
-            if (!pdr || ctx->rules_blocked || !pdr->entries[0].pdr.far_id) return XDP_DROP;
+            if (!pdr || !pdr->entries[0].pdr.far_id) return XDP_DROP;
             struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->entries[0].pdr.far_id);
             if (!far || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
             update_gtp_tunnel(ctx,global_config.n9_ipv4_address,far->remoteip,0,far->teid);
@@ -579,7 +563,7 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
 
 }
 
-static __noinline enum xdp_action handle_gtpu(struct packet_context *ctx) {
+static __always_inline enum xdp_action handle_gtpu(struct packet_context *ctx) {
     int pdu_type = parse_gtp(ctx);
     if (pdu_type == -3) return XDP_PASS;
     if (pdu_type < 0) {
@@ -691,6 +675,64 @@ static __always_inline enum xdp_action process_packet(struct packet_context *ctx
     return DEFAULT_XDP_ACTION;
 }
 
+// Router control has a separate verifier budget. The continuation carries
+// only rule IDs and flags in this packet's private headroom, never shared CPU
+// storage or kernel pointers. The kernel RCU reader encloses both tail calls.
+struct router_reply_context {
+    struct pdr pdr;
+    __u32 magic;
+    __u32 nr;
+    __u32 trace;
+};
+#define ROUTER_REPLY_MAGIC 0x52534358
+
+static __always_inline int continue_router_solicitation(struct xdp_md *ctx, struct packet_context *packet) {
+    if (!packet->return_pdr) return XDP_DROP;
+    struct router_reply_context saved={.magic=ROUTER_REPLY_MAGIC,.nr=packet->return_nr_flag,.trace=packet->trace};
+    __builtin_memcpy(&saved.pdr,packet->return_pdr,sizeof(saved.pdr));
+    if (bpf_xdp_adjust_head(ctx,-(int)sizeof(saved))) return XDP_ABORTED;
+    void *data=(void *)(long)ctx->data;
+    if (data+sizeof(saved)>(void *)(long)ctx->data_end) return XDP_ABORTED;
+    __builtin_memcpy(data,&saved,sizeof(saved));
+    bpf_tail_call(ctx,&jmp_table,1);
+    return XDP_ABORTED;
+}
+
+SEC("xdp/upf_router_solicitation")
+int upf_router_solicitation_func(struct xdp_md *ctx) {
+    void *data=(void *)(long)ctx->data;
+    if (data+sizeof(struct router_reply_context)>(void *)(long)ctx->data_end) return XDP_ABORTED;
+    struct router_reply_context saved;
+    __builtin_memcpy(&saved,data,sizeof(saved));
+    if (saved.magic!=ROUTER_REPLY_MAGIC) return XDP_ABORTED;
+    if (bpf_xdp_adjust_head(ctx,sizeof(saved))) return XDP_ABORTED;
+    __u32 key=0;
+    struct upf_statistic *statistic=bpf_map_lookup_elem(&upf_ext_stat,&key);
+    if (!statistic) return XDP_ABORTED;
+    struct packet_context packet={
+        .data=(void *)(long)ctx->data,.data_end=(void *)(long)ctx->data_end,.xdp_ctx=ctx,
+        .counters=&statistic->upf_counters,.n3_n6_counter=&statistic->upf_n3_n6_counter,
+        .return_pdr=&saved.pdr,.return_nr_flag=saved.nr,.trace=saved.trace,
+    };
+    if (parse_ethernet(&packet)!=ETH_P_IPV6 || parse_ip6(&packet)!=IPPROTO_ICMPV6) return XDP_DROP;
+    int action=handle_router_solicitation(&packet);
+    if (action==UPF_DOWNLINK_IP6) {
+        packet.locally_generated=1;
+        packet.nr_flag=packet.return_nr_flag;
+        action=forward_n6_packet_ipv6(&packet,&saved.pdr);
+    }
+    if (action==UPF_LOCAL_TUNNEL) {
+        bpf_tail_call(ctx,&jmp_table,0);
+        return XDP_ABORTED;
+    }
+    statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK]++;
+    if (global_config.trace_out && packet.trace && (action==XDP_TX || action==XDP_REDIRECT))
+        trace_packet(&packet,PACKET_DIRECTION_OUT);
+    else if (global_config.trace_blocked && action!=XDP_TX && action!=XDP_REDIRECT)
+        trace_packet(&packet,PACKET_DIRECTION_BLOCKED);
+    return action;
+}
+
 // Combined N3 & N6 entrypoint. Use for "on-a-stick" interfaces
 SEC("xdp/upf_ip_entrypoint")
 int upf_ip_entrypoint_func(struct xdp_md *ctx) {
@@ -698,13 +740,6 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     const __u32 key = 0;
     struct upf_statistic *statistic = bpf_map_lookup_elem(&upf_ext_stat, &key);
     if (!statistic) return XDP_ABORTED;
-    struct rule_gate *gate=bpf_map_lookup_elem(&rule_gate,&key);
-    if (!gate) return XDP_ABORTED;
-    bpf_spin_lock(&gate->lock);
-    int blocked=gate->closed;
-    gate->active++;
-    bpf_spin_unlock(&gate->lock);
-
     // Calculate how short the packet is compared to a physical 64-byte frame
     __u32 current_len = (void *)(long)ctx->data_end - (void *)(long)ctx->data;
     if (current_len < 60) {
@@ -720,7 +755,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
         .xdp_ctx = ctx,
         .counters = &statistic->upf_counters,
         .n3_n6_counter = &statistic->upf_n3_n6_counter,
-        .trace = 0, .rules_blocked=blocked};
+        .trace = 0};
 
     enum xdp_action action = process_packet(&context);
     if (action == UPF_ERROR_INDICATION)
@@ -732,7 +767,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     else if (action == UPF_END_MARKER)
         action = handle_end_marker(&context);
     if (action == UPF_ROUTER_SOLICITATION)
-        action = handle_router_solicitation(&context);
+        return continue_router_solicitation(ctx,&context);
     if (action == UPF_DOWNLINK_IP4)
         action = handle_n6_packet_ipv4(&context);
     else if (action == UPF_DOWNLINK_IP6)
@@ -740,7 +775,6 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     // Dispatch local tunnel recursion only from the entry frame. This keeps
     // bounded kernel tail calls independent of ordinary BPF subprogram stacks.
     if (action == UPF_LOCAL_TUNNEL) {
-        leave_rules(gate);
         bpf_tail_call(ctx, &jmp_table, 0);
         return XDP_ABORTED;
     }
@@ -752,7 +786,6 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
         trace_packet(&context, PACKET_DIRECTION_BLOCKED);
     }
 
-    leave_rules(gate);
     return action;
 }
 

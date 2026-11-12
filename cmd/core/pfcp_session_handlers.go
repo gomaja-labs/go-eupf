@@ -99,6 +99,12 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	pdrContext.Restoration = req.PFCPSEReqFlags.HasRESTI()
 	operationPool := NewOperationPool()
 	operationPool.Before = start
+	operationPool.Publish = func() error {
+		if err := conn.bindAssignedAddresses(session); err != nil {
+			return err
+		}
+		return conn.bindSessionReplies(session)
+	}
 
 	err = processEstablishmentRequestRules(conn, logger, req, operationPool, pdrContext, session, &createdPDRs)
 	if err != nil {
@@ -123,12 +129,6 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 
 	logger.Debug().Msgf("session rules arter commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
 
-	if err := conn.bindAssignedAddresses(session); err != nil {
-		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
-	}
-	if err := conn.bindSessionReplies(session); err != nil {
-		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
-	}
 	conn.reconcileSessionResources(session)
 	if err := finish(true); err != nil {
 		return message.NewSessionEstablishmentResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), isTraced, nil
@@ -299,6 +299,12 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 	operationPool := NewOperationPool()
 	operationPool.Before = start
+	operationPool.Publish = func() error {
+		if err := conn.bindAssignedAddresses(session); err != nil {
+			return err
+		}
+		return conn.bindSessionReplies(session)
+	}
 
 	err := processModificationRequestRules(conn, logger, operationPool, pdrContext, req, &createdPDRs, &updatedPDRs, &removedURRs, session)
 	if err != nil {
@@ -313,12 +319,6 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
-	if err := conn.bindAssignedAddresses(session); err != nil {
-		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
-	}
-	if err := conn.bindSessionReplies(session); err != nil {
-		return sessionFailureResponse(req, session.RemoteSEID, err), session.Traced, nil
-	}
 	conn.reconcileSessionResources(session)
 	if err := finish(true); err != nil {
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
@@ -749,7 +749,8 @@ func processDeletionRequestRules(
 
 	for farID, far := range session.FARs {
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
-			Apply: func(far SFarInfo) func() error {
+			Detach: func() error { return mapOperations.DetachRule(1, far.GlobalId) },
+			Retire: func(far SFarInfo) func() error {
 				return func() error {
 					return mapOperations.DeleteFar(far.GlobalId)
 				}
@@ -759,7 +760,8 @@ func processDeletionRequestRules(
 
 	for qerID, qer := range session.QERs {
 		operationPool.AddRule(ie.RuleIDTypeQER, qerID, Operation{
-			Apply: func(qer SQerInfo) func() error {
+			Detach: func() error { return mapOperations.DetachRule(2, qer.GlobalId) },
+			Retire: func(qer SQerInfo) func() error {
 				return func() error {
 					return mapOperations.DeleteQer(qer.GlobalId)
 				}
@@ -769,7 +771,8 @@ func processDeletionRequestRules(
 
 	for urrID, urr := range session.URRs {
 		operationPool.AddRule(ie.RuleIDTypeURR, urrID, Operation{
-			Apply: func(urrID uint32, urr SUrrInfo) func() error {
+			Detach: func() error { return mapOperations.DetachRule(3, urr.GlobalId) },
+			Retire: func(urrID uint32, urr SUrrInfo) func() error {
 				return func() error {
 					data, err := mapOperations.DeleteUrr(urr.GlobalId)
 					if err != nil {
@@ -1230,7 +1233,7 @@ func updatePDRs(
 
 		session.PutPDR(newInfo.PdrID, newInfo)
 		operationPool.AddRule(ie.RuleIDTypePDR, uint32(pdrID), Operation{
-			Detach: func() error { return pdrContext.deletePDR(oldInfo, mapOperations) },
+			Detach: func() error { return pdrContext.deleteReplacedPDR(oldInfo, newInfo, mapOperations) },
 			Apply: func(pdrID uint32, newInfo *SPDRInfo) func() error {
 				return func() error {
 					if err := resolvePDRSlots(newInfo, session); err != nil {
@@ -1277,7 +1280,8 @@ func removeFARs(
 		removeSessionRuleReferences(session, "far", farID, oldFar.GlobalId)
 
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
-			Apply: func() error {
+			Detach: func() error { return mapOperations.DetachRule(1, oldFar.GlobalId) },
+			Retire: func() error {
 				return mapOperations.DeleteFar(oldFar.GlobalId)
 			},
 		})
@@ -1308,7 +1312,8 @@ func removeQERs(
 		removeSessionRuleReferences(session, "qer", qerID, oldQer.GlobalId)
 
 		operationPool.AddRule(ie.RuleIDTypeQER, qerID, Operation{
-			Apply: func() error {
+			Detach: func() error { return mapOperations.DetachRule(2, oldQer.GlobalId) },
+			Retire: func() error {
 				return mapOperations.DeleteQer(oldQer.GlobalId)
 			},
 		})
@@ -1341,7 +1346,8 @@ func removeURRs(
 		removeSessionRuleReferences(session, "urr", urrID, oldUrr.GlobalId)
 
 		operationPool.AddRule(ie.RuleIDTypeURR, urrID, Operation{
-			Apply: func() error {
+			Detach: func() error { return mapOperations.DetachRule(3, oldUrr.GlobalId) },
+			Retire: func() error {
 				newReport, err := mapOperations.DeleteUrr(oldUrr.GlobalId)
 				if err != nil {
 					return err

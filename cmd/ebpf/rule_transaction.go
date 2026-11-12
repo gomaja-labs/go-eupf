@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"time"
 
 	cilium "github.com/cilium/ebpf"
 )
 
-// RuleTransaction quiesces rule users until Commit or Rollback. The caller
+// RuleTransaction journals rule changes through Commit or Rollback. The caller
 // holds the control-plane state lock for its lifetime.
 type RuleTransaction interface {
 	ForwardingPlaneController
@@ -19,76 +18,45 @@ type RuleTransaction interface {
 
 type ruleTransaction struct {
 	ForwardingPlaneController
-	objects        *BpfObjects
-	sessionID      uint64
-	releases       []func()
-	undo           []func() error
-	far, qer, urr  *IdTracker
-	newQER, newURR map[uint32]bool
-	finished       bool
-	beforeWrite    func() error
+	objects                                  *BpfObjects
+	sessionID                                uint64
+	releases                                 []func()
+	retired                                  []func() error
+	dirty                                    bool
+	retiredKey                               bool
+	graced                                   bool
+	undo                                     []func() error
+	allocatedFAR, allocatedQER, allocatedURR []uint32
+	newQER, newURR                           map[uint32]bool
+	finished                                 bool
+	beforeWrite                              func() error
+	pdrs                                     map[pdrMutationKey]*pdrMutation
+	pdrOrder                                 []*pdrMutation
 }
 
-func (b *BpfObjects) setRuleGate(closed bool) error {
-	packet := make([]byte, 64)
-	if closed {
-		packet[0] = 1
-	}
-	action, _, err := b.UpfRuleControl.Test(packet)
-	if err != nil {
-		return fmt.Errorf("set rule gate: %w", err)
-	}
-	if action != 2 {
-		return fmt.Errorf("rule gate control returned %d", action)
-	}
-	return nil
-}
-
-// BeginRuleTransaction blocks new user-plane rule users and drains admitted
-// program invocations. Non-user-plane traffic keeps its ordinary path. A local
-// tunnel tail call releases its reference before entering the next invocation.
-// TS 29.244 V20.1.0 clauses 6.3.3.3 and 5.2.2.3.1.
+// BeginRuleTransaction serializes control-plane journals without stopping packet
+// processing. TS 29.244 V20.1.0 clauses 6.3.2.3 and 6.3.3.3 require a final
+// all-or-nothing outcome; they do not require packet-level atomicity across keys.
 func (b *BpfObjects) BeginRuleTransaction(sessionID uint64) (RuleTransaction, error) {
 	b.ruleMutex.Lock()
-	if b.rulePoison != nil {
+	if b.ruleClosed || b.grace == nil {
 		b.ruleMutex.Unlock()
-		return nil, fmt.Errorf("rule state requires recovery: %w", b.rulePoison)
+		return nil, fmt.Errorf("rule maps are not loaded")
 	}
-	if err := b.setRuleGate(true); err != nil {
+	if b.rulePoison != nil || b.grace.failure() != nil {
 		b.ruleMutex.Unlock()
-		return nil, err
+		return nil, fmt.Errorf("rule state requires recovery: %w", errors.Join(b.rulePoison, b.grace.failure()))
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		var gate IpEntrypointRuleGate
-		if err := b.RuleGate.LookupWithFlags(uint32(0), &gate, cilium.LookupLock); err != nil {
-			openErr := b.setRuleGate(false)
-			b.ruleMutex.Unlock()
-			return nil, errors.Join(err, openErr)
-		}
-		if gate.Active == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			openErr := b.setRuleGate(false)
-			b.ruleMutex.Unlock()
-			return nil, errors.Join(fmt.Errorf("rule users did not quiesce"), openErr)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	b.farMutex.Lock()
-	defer b.farMutex.Unlock()
-	b.qerMutex.Lock()
-	defer b.qerMutex.Unlock()
-	b.urrMutex.Lock()
-	defer b.urrMutex.Unlock()
-	clone := func(t *IdTracker) *IdTracker { return &IdTracker{bitmap: t.bitmap.Clone(), maxSize: t.maxSize} }
-	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID, newQER: make(map[uint32]bool), newURR: make(map[uint32]bool), far: clone(b.farIdTracker), qer: clone(b.qerIdTracker), urr: clone(b.urrIdTracker)}, nil
+	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID, newQER: make(map[uint32]bool), newURR: make(map[uint32]bool)}, nil
 }
 
 func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, change func() error) error {
+	if m == tx.objects.PdrMapTeidIp4 || m == tx.objects.PdrMapDownlinkIp4 || m == tx.objects.PdrMapDownlinkIp6 {
+		tx.dirty = true
+		tx.graced = false
+	}
 	var previous T
-	err := m.Lookup(key, &previous)
+	err := lookupRuleValue(m, key, &previous)
 	present := err == nil
 	if err != nil && !isKeyAbsent(err) {
 		return err
@@ -118,9 +86,15 @@ func (tx *ruleTransaction) Commit() error {
 	if tx.finished {
 		return fmt.Errorf("rule transaction already finished")
 	}
-	if err := tx.objects.setRuleGate(false); err != nil {
+	if err := tx.publishPDRs(); err != nil {
 		return err
 	}
+	if tx.retiredKey {
+		if err := tx.synchronize(); err != nil {
+			return err
+		}
+	}
+	tx.objects.grace.retire(tx.retired, tx.graced && !tx.dirty)
 	for _, release := range tx.releases {
 		release()
 	}
@@ -137,21 +111,18 @@ func (tx *ruleTransaction) Rollback() error {
 		result = errors.Join(result, tx.undo[i]())
 	}
 	b := tx.objects
-	b.farMutex.Lock()
-	b.farIdTracker = tx.far
-	b.farMutex.Unlock()
-	b.qerMutex.Lock()
-	b.qerIdTracker = tx.qer
-	b.qerMutex.Unlock()
-	b.urrMutex.Lock()
-	b.urrIdTracker = tx.urr
-	b.urrMutex.Unlock()
-	// A failed restore must remain closed; reopening would expose partial
-	// state. The error is returned to the control plane for explicit recovery.
+	result = errors.Join(result, b.grace.wait())
 	if result == nil {
-		result = b.setRuleGate(false)
-	}
-	if result != nil {
+		for _, id := range tx.allocatedFAR {
+			b.ReleaseFAR(id)
+		}
+		for _, id := range tx.allocatedQER {
+			b.ReleaseQER(id)
+		}
+		for _, id := range tx.allocatedURR {
+			b.ReleaseURR(id)
+		}
+	} else {
 		b.rulePoison = result
 	}
 	tx.finished = true
@@ -159,14 +130,14 @@ func (tx *ruleTransaction) Rollback() error {
 	return result
 }
 func (tx *ruleTransaction) PutPdrUplink(key uint32, info PdrInfo) error {
-	return journalRule[IpEntrypointPdrInfo](tx, tx.objects.PdrMapTeidIp4, key, func() error { return tx.objects.PutPdrUplink(key, info) })
+	return tx.stagePDR(tx.objects.PdrMapTeidIp4, key, info)
 }
 func (tx *ruleTransaction) PutPdrDownlink(ip net.IP, info PdrInfo) error {
 	m, key, err := tx.objects.downlinkRuleMap(ip, info.UEIPv6Mask)
 	if err != nil {
 		return err
 	}
-	return journalRule[IpEntrypointPdrInfo](tx, m, key, func() error { return tx.objects.PutPdrDownlink(ip, info) })
+	return tx.stagePDR(m, key, info)
 }
 func (tx *ruleTransaction) PutDownlinkPdrIp6(ip net.IP, info PdrInfo) error {
 	return tx.PutPdrDownlink(ip, info)
@@ -181,25 +152,25 @@ func (tx *ruleTransaction) UpdateDownlinkPdrIp6(ip net.IP, info PdrInfo) error {
 	return tx.PutPdrDownlink(ip, info)
 }
 func (tx *ruleTransaction) DeletePdrUplink(key uint32, sessionID uint64, id uint32) error {
-	return journalRule[IpEntrypointPdrInfo](tx, tx.objects.PdrMapTeidIp4, key, func() error { return tx.objects.DeletePdrUplink(key, sessionID, id) })
+	return tx.stagePDRDelete(tx.objects.PdrMapTeidIp4, key, sessionID, id)
 }
 func (tx *ruleTransaction) DeletePdrDownlink(ip net.IP, sessionID uint64, id uint32) error {
 	m, key, err := tx.objects.downlinkMap(ip)
 	if err != nil {
 		return err
 	}
-	return journalRule[IpEntrypointPdrInfo](tx, m, key, func() error { return tx.objects.DeletePdrDownlink(ip, sessionID, id) })
+	return tx.stagePDRDelete(m, key, sessionID, id)
 }
 func (tx *ruleTransaction) DeleteDownlinkPdrIp6(ip net.IP, sessionID uint64, id uint32, prefixLength uint32) error {
 	m, key, err := tx.objects.downlinkRuleMap(ip, net.CIDRMask(int(prefixLength), 128))
 	if err != nil {
 		return err
 	}
-	return journalRule[IpEntrypointPdrInfo](tx, m, key, func() error { return tx.objects.DeleteDownlinkPdrIp6(ip, sessionID, id, prefixLength) })
+	return tx.stagePDRDelete(m, key, sessionID, id)
 }
 func (tx *ruleTransaction) NewFar(info FarInfo) (uint32, error) {
 	b := tx.objects
-	id, err := b.GetNextFAR()
+	id, err := tx.GetNextFAR()
 	if err != nil {
 		return 0, err
 	}
@@ -212,7 +183,7 @@ func (tx *ruleTransaction) NewFar(info FarInfo) (uint32, error) {
 }
 func (tx *ruleTransaction) NewQer(info QerInfo) (uint32, error) {
 	b := tx.objects
-	id, err := b.GetNextQER()
+	id, err := tx.GetNextQER()
 	if err != nil {
 		return 0, err
 	}
@@ -226,7 +197,7 @@ func (tx *ruleTransaction) NewQer(info QerInfo) (uint32, error) {
 }
 func (tx *ruleTransaction) NewUrr(info UrrInfo) (uint32, error) {
 	b := tx.objects
-	id, err := b.GetNextURR()
+	id, err := tx.GetNextURR()
 	if err != nil {
 		return 0, err
 	}
@@ -254,7 +225,7 @@ func (tx *ruleTransaction) UpdateUrr(id uint32, info UrrInfo) error {
 		value := IpEntrypointUrrInfo{}
 		return journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.UrrMap.Put(id, &value) })
 	}
-	return journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.UpdateUrr(id, info) })
+	return tx.objects.UpdateUrr(id, info)
 }
 func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	if id == 0 {
@@ -263,11 +234,16 @@ func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	if err := tx.detach(1, id); err != nil {
 		return err
 	}
-	err := journalRule[IpEntrypointFarInfo](tx, tx.objects.FarMap, id, func() error { return tx.objects.FarMap.Put(id, &IpEntrypointFarInfo{}) })
-	if err == nil {
-		tx.releases = append(tx.releases, func() { tx.objects.ReleaseFAR(id) })
-	}
-	return err
+	// The detached slot remains reserved until every old reader has returned.
+	// Clearing an unreachable value is reclamation, not a rule-plan write.
+	tx.retired = append(tx.retired, func() error {
+		if err := tx.objects.FarMap.Put(id, &IpEntrypointFarInfo{}); err != nil {
+			return err
+		}
+		tx.objects.ReleaseFAR(id)
+		return nil
+	})
+	return nil
 }
 func (tx *ruleTransaction) DeleteQer(id uint32) error {
 	if id == 0 {
@@ -276,12 +252,16 @@ func (tx *ruleTransaction) DeleteQer(id uint32) error {
 	if err := tx.detach(2, id); err != nil {
 		return err
 	}
-	err := journalRule[IpEntrypointQerInfo](tx, tx.objects.QerMap, id, func() error { return tx.objects.QerMap.Put(id, &IpEntrypointQerInfo{}) })
-	if err == nil {
-		tx.releases = append(tx.releases, func() { tx.objects.ReleaseQER(id) })
-	}
-	return err
+	tx.retired = append(tx.retired, func() error {
+		if err := tx.objects.QerMap.Put(id, &IpEntrypointQerInfo{}); err != nil {
+			return err
+		}
+		tx.objects.ReleaseQER(id)
+		return nil
+	})
+	return nil
 }
+
 func (tx *ruleTransaction) DeleteUrr(id uint32) (UrrInfo, error) {
 	if id == 0 {
 		return UrrInfo{}, fmt.Errorf("reserved URR slot")
@@ -289,7 +269,7 @@ func (tx *ruleTransaction) DeleteUrr(id uint32) (UrrInfo, error) {
 	if err := tx.detach(3, id); err != nil {
 		return UrrInfo{}, err
 	}
-	result, err := tx.objects.GetUrr(id)
+	result, err := tx.GetUrr(id)
 	if err != nil {
 		return UrrInfo{}, err
 	}
@@ -311,12 +291,23 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 		if bucket.SessionId != tx.sessionID {
 			continue
 		}
+		if _, err := tx.pdrDraft(m, key); err != nil {
+			return err
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	for _, draft := range tx.pdrOrder {
+		if draft.m != m {
+			continue
+		}
 		changed := false
-		for i := 0; i < int(min(bucket.Count, uint32(MaxPDRsPerKey))); i++ {
+		for i := 0; i < len(draft.entries); i++ {
 			for variant := 0; variant < 2; variant++ {
-				pdr := &bucket.Entries[i].Pdr
+				pdr := &draft.entries[i].Pdr
 				if variant == 1 {
-					pdr = &bucket.Entries[i].ReturnPdr
+					pdr = &draft.entries[i].ReturnPdr
 				}
 				switch kind {
 				case 1:
@@ -350,22 +341,23 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 				}
 			}
 		}
-		if changed {
-			savedKey := key
-			value := bucket
-			if err := journalRule[IpEntrypointPdrInfo](tx, m, savedKey, func() error { return m.Put(savedKey, &value) }); err != nil {
-				return err
-			}
-		}
+		draft.changed = draft.changed || changed
 	}
-	return iter.Err()
+	return nil
 }
 
-func (tx *ruleTransaction) GetNextFAR() (uint32, error) { return tx.objects.GetNextFAR() }
+func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
+	id, err := tx.objects.GetNextFAR()
+	if err == nil {
+		tx.allocatedFAR = append(tx.allocatedFAR, id)
+	}
+	return id, err
+}
 func (tx *ruleTransaction) GetNextQER() (uint32, error) {
 	id, err := tx.objects.GetNextQER()
 	if err == nil {
 		tx.newQER[id] = true
+		tx.allocatedQER = append(tx.allocatedQER, id)
 	}
 	return id, err
 }
@@ -373,6 +365,7 @@ func (tx *ruleTransaction) GetNextURR() (uint32, error) {
 	id, err := tx.objects.GetNextURR()
 	if err == nil {
 		tx.newURR[id] = true
+		tx.allocatedURR = append(tx.allocatedURR, id)
 	}
 	return id, err
 }
@@ -382,5 +375,36 @@ func (tx *ruleTransaction) GetNextURR() (uint32, error) {
 func (b *BpfObjects) LockRuleSnapshot() func() { b.ruleMutex.Lock(); return b.ruleMutex.Unlock }
 
 func (tx *ruleTransaction) ResetUrr(id uint32) error {
+	if err := tx.synchronize(); err != nil {
+		return err
+	}
 	return journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.ResetUrr(id) })
 }
+
+func (tx *ruleTransaction) synchronize() error {
+	if err := tx.publishPDRs(); err != nil {
+		return err
+	}
+	if tx.graced && !tx.dirty {
+		return nil
+	}
+	if err := tx.objects.grace.wait(); err != nil {
+		return err
+	}
+	tx.dirty = false
+	tx.graced = true
+	return nil
+}
+func (tx *ruleTransaction) GetUrr(id uint32) (UrrInfo, error) {
+	if err := tx.synchronize(); err != nil {
+		return UrrInfo{}, err
+	}
+	return tx.objects.GetUrr(id)
+}
+func (tx *ruleTransaction) DetachRule(kind uint8, id uint32) error { return tx.detach(kind, id) }
+func (b *BpfObjects) DetachRule(uint8, uint32) error {
+	return fmt.Errorf("rule detachment requires a transaction")
+}
+
+func (tx *ruleTransaction) SynchronizeRules() error { return tx.synchronize() }
+func (b *BpfObjects) SynchronizeRules() error       { return b.grace.wait() }

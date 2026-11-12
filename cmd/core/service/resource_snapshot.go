@@ -63,3 +63,45 @@ func (manager *ResourceManager) CommitReservations(reserved *ResourceManager) {
 		manager.FTEIDM.Unlock()
 	}
 }
+
+// ReleasesComparedWith reports whether publishing reserved would make an old
+// tunnel ID or address lease available for reuse. The caller holds the shared
+// reservation lock; reserved is the private request view.
+func (manager *ResourceManager) ReleasesComparedWith(reserved *ResourceManager, owner uint64) bool {
+	if manager == nil {
+		return false
+	}
+	if reserved == nil {
+		return true
+	}
+	if manager.FTEIDM != nil {
+		manager.FTEIDM.RLock()
+		defer manager.FTEIDM.RUnlock()
+		if reserved.FTEIDM == nil {
+			return len(manager.FTEIDM.busyTEIDs[owner]) != 0
+		}
+		for id, allocatedOwner := range manager.FTEIDM.reservedTEIDs {
+			if allocatedOwner == owner && reserved.FTEIDM.reservedTEIDs[id] != owner {
+				return true
+			}
+		}
+	}
+	if manager.IPAM != nil {
+		manager.IPAM.RLock()
+		defer manager.IPAM.RUnlock()
+		if reserved.IPAM == nil {
+			return len(manager.IPAM.ownerIPs[owner]) != 0
+		}
+		for key, allocatedOwner := range manager.IPAM.reservedIPs {
+			if allocatedOwner == owner && reserved.IPAM.reservedIPs[key] != owner {
+				return true
+			}
+		}
+		for key, lease := range manager.IPAM.prefixLeases {
+			if lease.Owner == owner && reserved.IPAM.prefixLeases[key].Owner != owner {
+				return true
+			}
+		}
+	}
+	return false
+}

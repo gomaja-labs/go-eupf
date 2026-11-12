@@ -16,7 +16,7 @@ func TestOperationPoolReservesBeforeAnyWrite(t *testing.T) {
 	if err := p.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(order, []string{"begin", "reserve1", "reserve2", "detach1", "detach2", "write1", "write2"}) {
+	if !reflect.DeepEqual(order, []string{"begin", "reserve1", "reserve2", "write1", "write2", "detach1", "detach2"}) {
 		t.Fatal(order)
 	}
 }

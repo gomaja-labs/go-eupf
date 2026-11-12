@@ -34,7 +34,6 @@ struct packet_context {
     __u8 unknown_extensions;
     __u8 trace;
     __u8 locally_generated;
-    __u8 rules_blocked;
     __u8 source_interface;
     __u8 nr_flag;
 };

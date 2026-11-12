@@ -42,7 +42,7 @@ func TestKernelPDRPlanChecksOwnershipCapacityAndPrefixes(t *testing.T) {
 	check("key_map_capacity", 9, []PDRKey{{ID: 1, TEID: 3}}, ErrRuleCapacity)
 	check("replacement_final_capacity", 101, []PDRKey{{ID: 1, TEID: 3}}, nil)
 	var crowded []PDRKey
-	for id := uint32(1); id <= 5; id++ {
+	for id := uint32(1); id <= MaxPDRsPerKey+1; id++ {
 		crowded = append(crowded, PDRKey{ID: id, TEID: 1})
 	}
 	check("per_key_capacity", 101, crowded, ErrRuleCapacity)
