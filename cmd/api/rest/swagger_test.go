@@ -32,3 +32,36 @@ func TestSwaggerDocumentsManagementRequests(t *testing.T) {
 		t.Fatalf("schemes=%v", document.Schemes)
 	}
 }
+
+func TestSwaggerRequiresCompleteConfigSections(t *testing.T) {
+	h := &ApiHandler{Cfg: validEditConfigPtr()}
+	out := httptest.NewRecorder()
+	h.InitRoutes().ServeHTTP(out, httptest.NewRequest("GET", "http://localhost/swagger/doc.json", nil))
+	if out.Code != 200 {
+		t.Fatalf("status=%d", out.Code)
+	}
+	var doc struct {
+		Definitions map[string]struct {
+			Required   []string       `json:"required"`
+			Properties map[string]any `json:"properties"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"LoggingLevelConfig", "LoggingCallerConfig", "DataPlaneEbpfConfig", "DataPlaneAddressesConfig", "PFCPN4Config", "PFCPSxaConfig", "PFCPSxbConfig", "PFCPTimersConfig", "GTPPathConfig"} {
+		schema, ok := doc.Definitions["rest."+name]
+		if !ok || len(schema.Properties) == 0 {
+			t.Fatalf("missing %s", name)
+		}
+		required := make(map[string]bool)
+		for _, key := range schema.Required {
+			required[key] = true
+		}
+		for key := range schema.Properties {
+			if !required[key] {
+				t.Errorf("%s.%s is not required", name, key)
+			}
+		}
+	}
+}

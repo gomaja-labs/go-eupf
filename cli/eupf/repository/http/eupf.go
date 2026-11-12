@@ -159,6 +159,15 @@ func (r *EupfHttpRepository) sendRestoreRequest(ctx context.Context, baseURL, pa
 
 	return nil
 }
+
+// configList sends an explicit empty list when no entries are configured.
+func configList(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
 func (r *EupfHttpRepository) RestoreConfigLoggingLevel(ctx context.Context, logLevel string, baseURL string) error {
 	body := models.LoggingLevelConfig{
 		LoggingLevel: logLevel,
@@ -178,7 +187,7 @@ func (r *EupfHttpRepository) RestoreConfigLoggingCaller(ctx context.Context, log
 
 func (r *EupfHttpRepository) RestoreConfigDataPlaneEbpf(ctx context.Context, interfaceName []string, xdpAttachMode string, baseURL string) error {
 	body := models.DataPlaneEbpfConfig{
-		InterfaceName: interfaceName,
+		InterfaceName: configList(interfaceName),
 		XDPAttachMode: xdpAttachMode,
 	}
 
@@ -200,7 +209,7 @@ func (r *EupfHttpRepository) RestoreConfigPFCPN4(ctx context.Context, pfcpAddres
 	body := models.PFCPN4Config{
 		PFCPAddress:    pfcpAddress,
 		PFCPNodeID:     pfcpNodeId,
-		PFCPRemoteNode: pfcpRemoteNode,
+		PFCPRemoteNode: configList(pfcpRemoteNode),
 	}
 
 	return r.sendRestoreRequest(ctx, baseURL, "/config/pfcp_n4", body)
@@ -211,7 +220,7 @@ func (r *EupfHttpRepository) RestoreConfigPFCPSxa(ctx context.Context, sxaAddres
 	body := models.PFCPSxaConfig{
 		SXAAddress:    sxaAddress,
 		SXANodeID:     sxaNodeId,
-		SXARemoteNode: sxaRemoteNode,
+		SXARemoteNode: configList(sxaRemoteNode),
 	}
 
 	return r.sendRestoreRequest(ctx, baseURL, "/config/pfcp_sxa", body)
@@ -222,7 +231,7 @@ func (r *EupfHttpRepository) RestoreConfigPFCPSxb(ctx context.Context, sxbAddres
 	body := models.PFCPSxbConfig{
 		SXBAddress:    sxbAddress,
 		SXBNodeID:     sxbNodeId,
-		SXBRemoteNode: sxbRemoteNode,
+		SXBRemoteNode: configList(sxbRemoteNode),
 	}
 
 	return r.sendRestoreRequest(ctx, baseURL, "/config/pfcp_sxb", body)
@@ -240,7 +249,7 @@ func (r *EupfHttpRepository) RestoreConfigPFCPTimers(ctx context.Context, associ
 
 func (r *EupfHttpRepository) RestoreConfigGTPPath(ctx context.Context, gtpPeer []string, gtpEchoInterval uint32, baseURL string) error {
 	body := models.GTPPathConfig{
-		GtpPeer:         gtpPeer,
+		GtpPeer:         configList(gtpPeer),
 		GtpEchoInterval: gtpEchoInterval,
 	}
 

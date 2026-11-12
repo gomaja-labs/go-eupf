@@ -5,7 +5,9 @@
 package rest
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -46,7 +48,7 @@ func (h *ApiHandler) displayConfig(c *gin.Context) {
 //	@Router /config/logging_level [post]
 func (h *ApiHandler) editLoggingLevelConfig(c *gin.Context) {
 	var config LoggingLevelConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -82,7 +84,7 @@ func (h *ApiHandler) editLoggingLevelConfig(c *gin.Context) {
 //	@Router /config/logging_caller [post]
 func (h *ApiHandler) editLoggingCallerConfig(c *gin.Context) {
 	var config LoggingCallerConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -115,7 +117,7 @@ func (h *ApiHandler) editLoggingCallerConfig(c *gin.Context) {
 //	@Router /config/dataplane_ebpf [post]
 func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 	var config DataPlaneEbpfConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -160,7 +162,7 @@ func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 //	@Router /config/dataplane_addresses [post]
 func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 	var config DataPlaneAddressesConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -227,7 +229,7 @@ func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 //	@Router /config/pfcp_n4 [post]
 func (h *ApiHandler) editPFCPN4Config(c *gin.Context) {
 	var config PFCPN4Config
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -275,7 +277,7 @@ func (h *ApiHandler) editPFCPN4Config(c *gin.Context) {
 //	@Router /config/pfcp_sxa [post]
 func (h *ApiHandler) editPFCPSxaConfig(c *gin.Context) {
 	var config PFCPSxaConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -323,7 +325,7 @@ func (h *ApiHandler) editPFCPSxaConfig(c *gin.Context) {
 //	@Router /config/pfcp_sxb [post]
 func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 	var config PFCPSxbConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -371,7 +373,7 @@ func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 //	@Router /config/pfcp_timers [post]
 func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 	var config PFCPTimersConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -407,7 +409,7 @@ func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 //	@Router /config/gtp_path [post]
 func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 	var config GTPPathConfig
-	if err := c.ShouldBindJSON(&config); err != nil {
+	if err := bindConfigSection(c, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1): " + err.Error()})
 		return
 	}
@@ -424,6 +426,24 @@ func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
+}
+
+// bindConfigSection distinguishes omitted and null fields from explicit zero
+// values. Each edit replaces a complete section; [] explicitly clears a list.
+func bindConfigSection(c *gin.Context, data any) error {
+	var fields map[string]json.RawMessage
+	if err := c.ShouldBindBodyWithJSON(&fields); err != nil {
+		return err
+	}
+	typ := reflect.TypeOf(data).Elem()
+	for i := 0; i < typ.NumField(); i++ {
+		key := typ.Field(i).Tag.Get("json")
+		raw, present := fields[key]
+		if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("%s is required and must not be null", key)
+		}
+	}
+	return c.ShouldBindBodyWithJSON(data)
 }
 
 // validatedEdit applies only submitted keys to a separate configuration, then

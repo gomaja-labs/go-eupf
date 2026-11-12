@@ -216,3 +216,16 @@ for cache budgets, replay windows and request-rate sizing.
 For direct management HTTPS, set `api_tls_cert_file` / `UPF_API_TLS_CERT_FILE` /
 `--api-tls-cert-file` and `api_tls_key_file` / `UPF_API_TLS_KEY_FILE` /
 `--api-tls-key-file` together. These are startup settings. See [API security](api.md).
+
+## Runtime configuration edits
+
+Each `POST /api/v1/config/<section>` replaces a complete section. Supply every
+field listed in the Swagger schema; missing fields and JSON `null` return HTTP
+400 naming the field. Values are checked with the startup validator before any
+runtime or file change. A rejected candidate leaves the current configuration
+and selected configuration file unchanged.
+
+Use `[]` to remove all interfaces, GTP peers or PFCP remote nodes. Use `false`
+to disable `logging_caller`, and an explicit `heartbeat_timeout: 0` to disable
+heartbeat probing. Omitting those fields does not disable them. The CLI sends
+complete sections, including empty lists and explicit zero values.
