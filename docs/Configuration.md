@@ -19,7 +19,7 @@ API address `Optional`                        | Local address for serving [REST 
 PFCP address `Optional`                       | Local address that PFCP server will listen to                                                                                                                                                                                               | `pfcp_address`              | `UPF_PFCP_ADDRESS`              | `--paddr`             | `127.0.0.1:8805`
 PFCP NodeID `Optional`                        | Local NodeID for PFCP protocol. Format is a hostname or IP address.                                                                                                                                                                                     | `pfcp_node_id`              | `UPF_PFCP_NODE_ID`              | `--nodeid`            | `127.0.0.1`
 GTP peer `Optional`                           | List of gtp peer's address to send echo requests to. Format is `[hostnameA:portA, hostnameB:portB, ...]`.                                                                                                                                   | `gtp_peer`                  | `UPF_GTP_PEER`                  | `--peer`              | `-`
-Echo request iterval `Optional`               | Echo request sending interval. Format is seconds.                                                                                                                                                                                           | `gtp_echo_interval`         | `UPF_GTP_ECHO_INTERVAL`         | `--echo`              | `10`
+Echo request interval `Optional`               | Echo request sending interval in seconds; minimum 60 (TS 29.281 V19.2.0 clause 7.2.1).                                                                                                                                                                                           | `gtp_echo_interval`         | `UPF_GTP_ECHO_INTERVAL`         | `--echo`              | `60`
 Metrics address `Optional`                    | Local address for serving Prometheus metrics endpoint.                                                                                                                                                                                      | `metrics_address`           | `UPF_METRICS_ADDRESS`           | `--maddr`             | `:9090`
 QER map size `Optional`                       | Size of the QER eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `qer_map_size`              | `UPF_QER_MAP_SIZE`              | `--qersize`           | `0` (derived from max_sessions)
 FAR map size `Optional`                       | Size of the FAR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `far_map_size`              | `UPF_FAR_MAP_SIZE`              | `--farsize`           | `0` (derived from max_sessions)
@@ -142,7 +142,7 @@ heartbeat_retries: 3
 heartbeat_interval: 5
 heartbeat_timeout: 5
 gtp_peer: []
-gtp_echo_interval: 10
+gtp_echo_interval: 60
 logging_level: info
 logging_caller: false
 pfcp_profile: default

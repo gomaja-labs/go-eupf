@@ -223,6 +223,9 @@ func (r *EupfHttpRepository) RestoreConfigGTPPath(ctx context.Context, gtpPeer [
 		GtpEchoInterval: gtpEchoInterval,
 	}
 
+	if err := body.Validate(); err != nil {
+		return err
+	}
 	return r.sendRestoreRequest(ctx, baseURL, "/config/gtp_path", body)
 }
 

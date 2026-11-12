@@ -43,5 +43,5 @@ type PFCPTimersConfig struct {
 
 type GTPPathConfig struct {
 	GtpPeer         []string `json:"gtp_peer" binding:"required"`
-	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required,gte=1"`
+	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required,gte=60"`
 }

@@ -105,7 +105,7 @@ type UpfConfig struct {
 	S5S8Address             string         `mapstructure:"s5s8_address" validate:"omitempty,ipv4" json:"s5s8_address"`
 	PAAddress               string         `mapstructure:"pa_address" validate:"omitempty,ipv4" json:"pa_address"`
 	GtpPeer                 []string       `mapstructure:"gtp_peer" validate:"omitempty,dive,hostname_port" json:"gtp_peer"`
-	GtpEchoInterval         uint32         `mapstructure:"gtp_echo_interval" validate:"min=1" json:"gtp_echo_interval"`
+	GtpEchoInterval         uint32         `mapstructure:"gtp_echo_interval" validate:"min=60" json:"gtp_echo_interval"`
 	QerMapSize              uint32         `mapstructure:"qer_map_size" json:"qer_map_size"`
 	FarMapSize              uint32         `mapstructure:"far_map_size" json:"far_map_size"`
 	UrrMapSize              uint32         `mapstructure:"urr_map_size" json:"urr_map_size"`
@@ -169,7 +169,7 @@ func defineFlags() {
 	pflag.String("s5s8addr", "127.0.0.1", "Address for communication over S5/S8 interface")
 	pflag.String("paaddr", "127.0.0.1", "Address for communication over PA interface")
 	pflag.StringArray("peer", []string{}, "Address of GTP peer")
-	pflag.Uint32("echo", 10, "Interval of sending echo requests in seconds")
+	pflag.Uint32("echo", 60, "gtp_echo_interval in seconds (minimum 60; TS 29.281 V19.2.0 clause 7.2.1)")
 	pflag.Uint32("qersize", 0, "Size of the QER ebpf map")
 	pflag.Uint32("farsize", 0, "Size of the FAR ebpf map")
 	pflag.Uint32("urrsize", 0, "Size of the URR ebpf map")
@@ -337,6 +337,10 @@ func (c *UpfConfig) GetN3AdvertisedAddress5G() net.IP {
 }
 
 func (c *UpfConfig) Validate() error {
+	// TS 29.281 V19.2.0 clause 7.2.1 limits new Echo Requests per path.
+	if c.GtpEchoInterval < 60 {
+		return fmt.Errorf("gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1)")
+	}
 	if err := c.ValidatePFCP(); err != nil {
 		return err
 	}

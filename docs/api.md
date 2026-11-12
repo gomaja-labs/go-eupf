@@ -142,7 +142,7 @@ Method | URL                                  | Description                     
     "10.100.200.30:2152",
     "10.100.200.31:2152"
   ],
-  "gtp_echo_interval": 10
+  "gtp_echo_interval": 60
 }
 ```
 

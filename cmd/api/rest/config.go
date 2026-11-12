@@ -388,7 +388,7 @@ func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 	var config GTPPathConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1): " + err.Error()})
 		return
 	}
 

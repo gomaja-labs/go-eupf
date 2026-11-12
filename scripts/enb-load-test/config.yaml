@@ -256,6 +256,6 @@ gtp_peer:
   - "10.0.0.252:2152"
   - "10.0.0.253:2152"
   - "10.0.0.254:2152"
-gtp_echo_interval: 1
+gtp_echo_interval: 60
 
 logging_level: "trace"

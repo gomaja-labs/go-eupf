@@ -9,7 +9,7 @@ func validLimitsConfig() UpfConfig {
 		MetricsAddress: "127.0.0.1:9090", N3Address: "192.0.2.1", N9Address: "192.0.2.1",
 		N3AdvertisedAddress: "192.0.2.1", N3AdvertisedAddress5G: "192.0.2.1", N9AdvertisedAddress: "192.0.2.1",
 		HeartbeatInterval: 5, HeartbeatTimeout: 5,
-		GtpEchoInterval: 10, MaxSessions: 1024, AssociationSetupTimeout: 5,
+		GtpEchoInterval: 60, MaxSessions: 1024, AssociationSetupTimeout: 5,
 		LoggingLevel: "info", UEIPPool: "192.0.2.0/30", Ip6RaPrefix: "2001:db8::/64",
 		TraceMaxDumpFiles: 1, TraceMaxDumpSize: 1024, TraceMaxDumpPackets: 10,
 	}

@@ -362,9 +362,9 @@ func (cli *CLI) newSetGTPPath() *cobra.Command {
 		Use:   "path",
 		Short: "Configure GTP path parameters",
 		Long: `Set GTP peers and echo interval for path management
-Requires at least one GTP peer and echo interval ≥1 second.
+Requires at least one GTP peer and echo interval ≥60 seconds (TS 29.281 V19.2.0 clause 7.2.1).
 Examples:
-  gtp path --peers 10.0.0.1 --echo-interval 30
+  gtp path --peers 10.0.0.1 --echo-interval 60
   gtp path -p 192.168.1.1 -p 192.168.1.2 --echo-interval 60
 
 Overrides configuration parameters:
@@ -385,7 +385,7 @@ Overrides configuration parameters:
 
 	cmd.Flags().StringArrayVarP(&gtpPeer, "peers", "p", nil, "GTP peer addresses (required)")
 	cmd.MarkFlagsOneRequired("peers")
-	cmd.Flags().Uint32Var(&gtpEchoInterval, "echo-interval", 1, "GTP echo interval in seconds (required)")
+	cmd.Flags().Uint32Var(&gtpEchoInterval, "echo-interval", 60, "GTP echo interval in seconds (required)")
 	cmd.MarkFlagsOneRequired("echo-interval")
 	cmd.Flags().StringVar(&baseURL, "baseurl", "", "Optional base URL to override eupf API address")
 

@@ -1,5 +1,7 @@
 package models
 
+import "fmt"
+
 type LoggingLevelConfig struct {
 	LoggingLevel string `json:"logging_level" binding:"required"`
 }
@@ -43,5 +45,13 @@ type PFCPTimersConfig struct {
 
 type GTPPathConfig struct {
 	GtpPeer         []string `json:"gtp_peer" binding:"required"`
-	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required,gte=1"`
+	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required,gte=60"`
+}
+
+// Validate enforces the new-request spacing required by TS 29.281 V19.2.0 clause 7.2.1.
+func (c GTPPathConfig) Validate() error {
+	if c.GtpEchoInterval < 60 {
+		return fmt.Errorf("gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1)")
+	}
+	return nil
 }

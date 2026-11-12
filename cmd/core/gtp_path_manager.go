@@ -16,6 +16,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var errEchoRateLimited = errors.New("GTP Echo path is within the 60-second minimum interval (TS 29.281 V19.2.0 clause 7.2.1)")
+
 type GtpPathManager struct {
 	mu            sync.Mutex // Owns configuration, peers and sequence state; never held for I/O.
 	runOnce       sync.Once
@@ -24,6 +26,7 @@ type GtpPathManager struct {
 	localAddress  string
 	peers         map[string]uint16
 	checkInterval time.Duration
+	lastEcho      map[string]time.Time
 	ctx           context.Context
 	cancelCtx     context.CancelFunc
 
@@ -35,6 +38,7 @@ func NewGtpPathManager(localAddress string, interval time.Duration) *GtpPathMana
 	return &GtpPathManager{
 		localAddress:  localAddress,
 		peers:         map[string]uint16{},
+		lastEcho:      map[string]time.Time{},
 		checkInterval: interval,
 		ctx:           ctx,
 		cancelCtx:     cancelCtx,
@@ -54,6 +58,12 @@ func (gtpPathManager *GtpPathManager) AddGtpPath(gtpPeerAddress string) {
 func (gtpPathManager *GtpPathManager) UpdateGtpPath(gtpPeerAddresses []string) {
 	gtpPathManager.mu.Lock()
 	defer gtpPathManager.mu.Unlock()
+	// Keep recent sends across removal and re-addition, but discard expired history.
+	for peer, sent := range gtpPathManager.lastEcho {
+		if time.Since(sent) >= time.Minute {
+			delete(gtpPathManager.lastEcho, peer)
+		}
+	}
 	newPeers := make(map[string]uint16, len(gtpPeerAddresses))
 
 	for _, peerAddress := range gtpPeerAddresses {
@@ -130,7 +140,9 @@ func (manager *GtpPathManager) run() {
 				default:
 				}
 				if _, err := manager.sendEcho(peer, seq); err != nil {
-					log.Warn().Err(err).Msg("GTP path probe failed")
+					if !errors.Is(err, errEchoRateLimited) {
+						log.Warn().Err(err).Msg("GTP path probe failed")
+					}
 					continue
 				}
 				manager.mu.Lock()
@@ -187,6 +199,17 @@ func (gtpPathManager *GtpPathManager) sendEcho(gtpPeerAddress string, seq uint16
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 
 	sendTime := time.Now()
+	// TS 29.281 V19.2.0 clause 7.2.1: enforce spacing on each path,
+	// including failed probes and ticks queued before a runtime interval edit.
+	// No T3-RESPONSE retransmissions are scheduled by this manager.
+	path := udpRemoteAddr.String()
+	gtpPathManager.mu.Lock()
+	if previous, exists := gtpPathManager.lastEcho[path]; exists && sendTime.Sub(previous) < time.Minute {
+		gtpPathManager.mu.Unlock()
+		return 0, errEchoRateLimited
+	}
+	gtpPathManager.lastEcho[path] = sendTime
+	gtpPathManager.mu.Unlock()
 	if _, err := conn.Write(gtpEchoRequest.Bytes()); err != nil {
 		return 0, fmt.Errorf("can't send echo request: %w", err)
 	}
