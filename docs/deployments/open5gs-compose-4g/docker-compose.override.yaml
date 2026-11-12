@@ -46,6 +46,7 @@ services:
   eupf-cli:
     image: ghcr.io/gomaja-labs/go-eupf-cli:main
     environment:
+      CLI_EUPF_ADDR: http://upf:8081/api/v1
       CLI_API_TOKEN: ${UPF_API_TOKEN:?Set UPF_API_TOKEN before starting the example}
     build:
       context: ../../../

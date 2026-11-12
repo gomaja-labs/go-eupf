@@ -11,7 +11,7 @@ Generate local test TLS credentials with OpenSSL before the first start:
 export UPF_API_TOKEN="$(openssl rand -hex 32)"
 ```
 
-Keep the token in the environment for Compose and the CLI. The generated private keys and certificates are ignored by Git. Regeneration requires explicitly removing the existing credentials and restarting all Diameter peers together. The script discards the signing key after issuing these local certificates.
+Keep the token in the environment for Compose and the CLI. The CLI container targets `http://upf:8081/api/v1`; use `--eupf_addr http://sgwu:8081/api/v1` to administer the SGW-U instead. The generated private keys and certificates are ignored by Git. Regeneration requires explicitly removing the existing credentials and restarting all Diameter peers together. The script discards the signing key after issuing these local certificates.
 
 Before starting services, ensure your host system has loaded required kernel modules:
 
