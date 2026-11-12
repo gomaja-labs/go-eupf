@@ -40,3 +40,43 @@ func TestValidUnsupportedSDFFilterIsRejected(t *testing.T) {
 		t.Fatalf("unsupported filter must reject: %v", err)
 	}
 }
+
+func FuzzSdfFlowDescription(f *testing.F) {
+	for _, seed := range []string{
+		"", "invalid", "permit out ip from any to assigned",
+		"permit out 17 from 198.51.100.0/24 1000-2000 to assigned",
+		"permit in udp from assigned to 2001:db8::/64 53",
+		"permit out udp from 192.0.2.1/99 to any",
+		"permit out udp from any 2000-1000 to any",
+		"deny out ip from !192.0.2.1 to any", "permit out 132 from any to any",
+		"permit out tcp from any to any established",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, description string) {
+		filter, err := ParseSdfFilter(description)
+		if err != nil {
+			return
+		}
+		if filter.Protocol > 4 || filter.SrcPortRange.LowerBound > filter.SrcPortRange.UpperBound || filter.DstPortRange.LowerBound > filter.DstPortRange.UpperBound {
+			t.Fatal("accepted a classifier tuple outside its representable bounds")
+		}
+		for _, address := range []ebpf.IpWMask{filter.SrcAddress, filter.DstAddress} {
+			switch address.Type {
+			case 0, 3:
+			case 1:
+				_, bits := address.Mask.Size()
+				if address.Ip.To4() == nil || bits != 32 {
+					t.Fatal("accepted an invalid IPv4 constraint")
+				}
+			case 2:
+				_, bits := address.Mask.Size()
+				if address.Ip.To16() == nil || address.Ip.To4() != nil || bits != 128 {
+					t.Fatal("accepted an invalid IPv6 constraint")
+				}
+			default:
+				t.Fatal("accepted an unknown address kind")
+			}
+		}
+	})
+}
