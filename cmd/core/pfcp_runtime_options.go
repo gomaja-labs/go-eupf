@@ -4,8 +4,9 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-pfcp/message"
 	"time"
+
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // SetHeartbeatTimeout changes the timeout policy without exposing a timer owned
@@ -22,7 +23,7 @@ func (conn *PfcpConnection) SetHeartbeatTimeout(seconds uint32) {
 	}
 	for seq, req := range conn.transport.pending {
 		if req.typ == message.MsgTypeHeartbeatRequest {
-			delete(conn.transport.pending, seq)
+			conn.transport.deletePending(seq)
 		}
 	}
 }

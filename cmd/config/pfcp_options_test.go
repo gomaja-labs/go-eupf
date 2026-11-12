@@ -1,9 +1,10 @@
 package config
 
 import (
-	"github.com/spf13/viper"
 	"strings"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestPFCPOptionsDecodeAndValidate(t *testing.T) {

@@ -32,6 +32,7 @@ type AssociationConnector interface {
 var pfcpHandlers = PfcpHandlerMap{
 	message.MsgTypeHeartbeatRequest:            HandlePfcpHeartbeatRequest,
 	message.MsgTypeHeartbeatResponse:           HandlePfcpHeartbeatResponse,
+	message.MsgTypeVersionNotSupportedResponse: HandlePfcpVersionNotSupportedResponse,
 	message.MsgTypeAssociationSetupRequest:     HandlePfcpAssociationSetupRequest,
 	message.MsgTypeAssociationSetupResponse:    HandlePfcpAssociationSetupResponse,
 	message.MsgTypeAssociationUpdateRequest:    HandlePfcpAssociationUpdateRequest,
@@ -177,6 +178,9 @@ func (connection *PfcpConnection) Update(
 	pfcpAddress string,
 	pfcpNodeId string,
 ) error {
+	if connection.isClosed() {
+		return net.ErrClosed
+	}
 	if err := validateLocalNodeID(connection.profile, pfcpNodeId); err != nil {
 		return err
 	}
@@ -186,31 +190,48 @@ func (connection *PfcpConnection) Update(
 		return err
 	}
 
+	var replacement *net.UDPConn
 	if connection.socket().LocalAddr().String() != udpAddr.String() {
-		newUdpConn, err := net.ListenUDP("udp", udpAddr)
+		replacement, err = net.ListenUDP("udp", udpAddr)
 		if err != nil {
-			log.Warn().Msgf("Can't listen UDP address: %s", err.Error())
-			return err
+			return fmt.Errorf("listen updated PFCP endpoint: %w", err)
 		}
-
-		log.Info().Msgf("Starting new PFCP connection: %v", udpAddr)
-
-		connection.socketMu.Lock()
-		oldUDPConn := connection.udpConn
-		connection.udpConn = newUdpConn
-		connection.socketMu.Unlock()
-
-		if err = oldUDPConn.Close(); err != nil {
-			log.Error().Msgf("Can't close old UDP connection: %s", err.Error())
-		}
-
-		log.Info().Msgf("Delete old PFCP connection: %v", udpAddr)
-
 	}
-
 	connection.stateMu.Lock()
+	if connection.isClosed() {
+		connection.stateMu.Unlock()
+		if replacement != nil {
+			_ = replacement.Close()
+		}
+		return net.ErrClosed
+	}
+	var old *net.UDPConn
+	if replacement != nil {
+		// A retransmission may never migrate to another local endpoint (clause 6.4).
+		// Cancel old transactions instead of transmitting them from the new socket.
+		connection.transport.mu.Lock()
+		connection.socketMu.Lock()
+		old = connection.udpConn
+		connection.udpConn = replacement
+		connection.socketMu.Unlock()
+		clear(connection.transport.pending)
+		clear(connection.transport.responses)
+		connection.transport.bytes = 0
+		connection.transport.pendingBytes = 0
+		connection.transport.mu.Unlock()
+		connection.nodeAddrV4 = replacement.LocalAddr().(*net.UDPAddr).AddrPort()
+		for _, assoc := range connection.NodeAssociations {
+			assoc.heartbeatInFlight = false
+			assoc.failedAt = time.Time{}
+		}
+	}
 	connection.nodeId = pfcpNodeId
 	connection.stateMu.Unlock()
+	if old != nil {
+		if err := old.Close(); err != nil {
+			return fmt.Errorf("close previous PFCP endpoint: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -384,21 +405,42 @@ func (connection *PfcpConnection) socket() *net.UDPConn {
 	defer connection.socketMu.RUnlock()
 	return connection.udpConn
 }
+func (connection *PfcpConnection) isClosed() bool {
+	select {
+	case <-connection.done:
+		return true
+	default:
+		return false
+	}
+}
 func (connection *PfcpConnection) Close() {
 	connection.closeOnce.Do(func() {
+		connection.stateMu.Lock()
 		if connection.done != nil {
 			close(connection.done)
 		}
-		_ = connection.socket().Close()
+		if connection.AssociationSetupTicker != nil {
+			connection.AssociationSetupTicker.Stop()
+		}
+		socket := connection.socket()
+		connection.stateMu.Unlock()
+		_ = socket.Close()
 		connection.DeleteAllAssociations()
+		connection.transport.mu.Lock()
+		clear(connection.transport.pending)
+		clear(connection.transport.responses)
+		connection.transport.bytes = 0
+		connection.transport.pendingBytes = 0
+		connection.transport.mu.Unlock()
 	})
 }
+
 func (connection *PfcpConnection) Receive(b []byte) (int, *net.UDPAddr, error) {
 	return connection.socket().ReadFromUDP(b)
 }
 
 func (connection *PfcpConnection) Handle(b []byte, addr *net.UDPAddr) {
-	if addr == nil || len(b) > 65535 || !connection.admitPeer(addr.IP) {
+	if connection.isClosed() || addr == nil || len(b) > 65535 || !connection.admitPeer(addr.IP) {
 		return
 	}
 
@@ -454,8 +496,9 @@ func (connection *PfcpConnection) SendMessageWithTrace(msg message.Message, addr
 func (connection *PfcpConnection) sendMessageWithTrace(msg message.Message, addr *net.UDPAddr, trace bool) error {
 	var responseBytes []byte
 	var err error
+	socket := connection.socket()
 	if msg.IsRequest() {
-		responseBytes, err = connection.prepareRequest(msg, addr, trace)
+		responseBytes, err = connection.prepareRequest(msg, addr, trace, socket)
 	} else {
 		responseBytes = make([]byte, msg.MarshalLen())
 		err = msg.MarshalTo(responseBytes)
@@ -463,14 +506,17 @@ func (connection *PfcpConnection) sendMessageWithTrace(msg message.Message, addr
 	if err != nil {
 		return err
 	}
-	return connection.sendEncoded(responseBytes, msg.MessageType(), addr, trace)
+	return connection.sendEncodedAtSocket(responseBytes, msg.MessageType(), addr, trace, socket)
 }
 
 func (connection *PfcpConnection) sendEncoded(wire []byte, typ uint8, addr *net.UDPAddr, trace bool) error {
+	return connection.sendEncodedAtSocket(wire, typ, addr, trace, connection.socket())
+}
+func (connection *PfcpConnection) sendEncodedAtSocket(wire []byte, typ uint8, addr *net.UDPAddr, trace bool, socket *net.UDPConn) error {
 	if trace && IsMessageTraceable(typ) {
 		connection.TraceMessage(wire, addr, false)
 	}
-	if _, err := connection.Send(wire, addr); err != nil {
+	if _, err := socket.WriteToUDP(wire, addr); err != nil {
 		return err
 	}
 	// Message names come from the finite codec type catalogue, never peer values.
@@ -482,10 +528,13 @@ func (connection *PfcpConnection) TraceMessage(b []byte, addr *net.UDPAddr, rx b
 	if connection.dumper == nil {
 		return
 	}
+	connection.stateMu.RLock()
+	local := connection.nodeAddrV4
+	connection.stateMu.RUnlock()
 	if rx {
-		connection.dumper.DumpRawIn(addr.AddrPort(), connection.nodeAddrV4, b)
+		connection.dumper.DumpRawIn(addr.AddrPort(), local, b)
 	} else {
-		connection.dumper.DumpRawOut(addr.AddrPort(), connection.nodeAddrV4, b)
+		connection.dumper.DumpRawOut(addr.AddrPort(), local, b)
 	}
 }
 
@@ -593,8 +642,8 @@ func (connection *PfcpConnection) SendReports() {
 	var outgoing []queuedMessage
 	defer func() { connection.stateMu.Unlock(); connection.sendQueued(outgoing) }()
 
-	for _, assocaition := range connection.NodeAssociations {
-		for _, session := range assocaition.Sessions {
+	for _, association := range connection.NodeAssociations {
+		for _, session := range association.Sessions {
 			for urrid, urr := range session.URRs {
 
 				newReport, err := connection.mapOperations.GetUrr(urr.GlobalId)
@@ -609,7 +658,7 @@ func (connection *PfcpConnection) SendReports() {
 					if urr.UrrInfo.VolumeThreshold > 0 && urr.UrrInfo.VolumeThreshold <= uplink+downlink {
 						urr.ReportSeqNumber += 1
 						session.URRSequence += 1
-						outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, uplink, downlink)...), assocaition.endpoint, session.IsSessionTraced()})
+						outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, uplink, downlink)...), association.endpoint, session.IsSessionTraced()})
 					}
 
 					urr.UrrInfo.UplinkVolume = newReport.UplinkVolume
@@ -640,7 +689,7 @@ func (connection *PfcpConnection) SendReports() {
 
 					traced := session.IsSessionTraced()
 					session.URRSequence++
-					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), assocaition.endpoint, traced})
+					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), association.endpoint, traced})
 				}
 			}
 		}
@@ -659,8 +708,8 @@ func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter s
 		return
 	}
 
-	for _, assocaition := range connection.NodeAssociations {
-		for _, session := range assocaition.Sessions {
+	for _, association := range connection.NodeAssociations {
+		for _, session := range association.Sessions {
 
 			for _, pdr := range session.PDRs {
 				if pdr.Teid != referenceID /*|| pdr.Ipv4 != referenceID*/ { //FIXME: add IPv4 reference
@@ -675,7 +724,7 @@ func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter s
 
 				urr.ReportSeqNumber += 1
 				session.URRSequence += 1
-				outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportADCIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, sdfFilter)...), assocaition.endpoint, session.IsSessionTraced()})
+				outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportADCIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, sdfFilter)...), association.endpoint, session.IsSessionTraced()})
 
 				return
 			}
@@ -684,8 +733,8 @@ func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter s
 }
 
 func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
-	for _, assocaition := range connection.AssociationSnapshots() {
-		if session, ok := assocaition.Sessions[seid]; ok {
+	for _, association := range connection.AssociationSnapshots() {
+		if session, ok := association.Sessions[seid]; ok {
 			pdrList := []uint16{}
 			for pdrID := range session.PDRs {
 				pdrList = append(pdrList, uint16(pdrID))
@@ -694,7 +743,7 @@ func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
 				connection,
 				session.RemoteSEID,
 				0,
-				assocaition.Addr,
+				association.Addr,
 				session.IsSessionTraced(),
 				pdrList)
 
@@ -706,8 +755,8 @@ func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
 }
 
 func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn string) bool {
-	for _, assocaition := range connection.AssociationSnapshots() {
-		for _, session := range assocaition.Sessions {
+	for _, association := range connection.AssociationSnapshots() {
+		for _, session := range association.Sessions {
 			if session.IMSI == imsi || session.MSISDN == msisdn {
 				pdrList := []uint16{}
 				for pdrID := range session.PDRs {
@@ -717,7 +766,7 @@ func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn str
 					connection,
 					session.RemoteSEID,
 					0,
-					assocaition.Addr,
+					association.Addr,
 					session.IsSessionTraced(),
 					pdrList)
 				return true
@@ -728,6 +777,8 @@ func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn str
 }
 
 func (connection *PfcpConnection) GetConnAddr() string {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return connection.nodeAddrV4.String()
 }
 

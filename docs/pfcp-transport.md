@@ -44,7 +44,7 @@ TS 29.244 clause 6.4 requires identical retransmissions and endpoint/sequence
 matching. Originated sequence numbers are allocated across the local endpoint
 and are never reused while outstanding. Duplicate requests replay their encoded
 response without repeating session operations. Cache retention is local policy;
-clause 6.4 specifies no numeric lifetime. The response cache also has a 16 MiB
+clause 6.4 specifies no numeric lifetime. The response cache and the outbound queue each also have a 16 MiB
 encoded-payload ceiling. Live entries are not evicted to admit new work.
 
 TS 23.527 V20.0.0 clauses 4.2, 4.4.2.1 and 4.4.3.1 require ignoring Association
@@ -61,3 +61,15 @@ PFCP receives use a 65535-byte buffer so reassembled UDP datagrams larger than a
 link MTU are not truncated. Unknown message types and unmatched responses are
 discarded (clauses 7.6.4 and 7.6.5). Valid heartbeats from admitted, unknown peers
 are answered without allocating an association (clause 6.2.2.2).
+
+Monitor `upf_pfcp_retransmissions`, `upf_pfcp_request_timeouts` and
+`upf_pfcp_association_prunes` alongside session counts. Set the retry budget and
+grace period for the deployment's tolerated disruption, and reserve processing
+capacity for PFCP while forwarding traffic. A delayed receive loop sends each
+configured retry before declaring failure; it does not consume the entire
+budget merely because several timer intervals elapsed during local overload.
+
+The session index currently admits one Node ID per peer IP address. Setup for a
+different Node ID at an occupied address is rejected instead of deleting the
+existing node's sessions. Multiple nodes behind the same translated IP require
+separate peer IPs; transaction response matching still includes the UDP port.

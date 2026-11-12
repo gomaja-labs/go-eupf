@@ -59,4 +59,9 @@ Metric Name                 | Description                                       
 upf_pfcp_sessions           | Number of currently established sessions               | -
 upf_pfcp_associations_total | The total number of currently established associations | -
 
-Packet and route counters add only the increase since the preceding scrape; concurrent scrapes share one snapshot. A dataplane counter reset starts a new increment. Association metrics expose aggregate counts only, so peer-controlled Node IDs do not create metric labels.
+Packet and route counters add only the increase since the preceding scrape; concurrent scrapes share one snapshot. An observed counter decrease is treated as a reset. Association metrics expose aggregate counts only, so peer-controlled Node IDs do not create metric labels.
+
+`upf_pfcp_retransmissions` counts retry attempts and `upf_pfcp_request_timeouts`
+counts exhausted budgets, each with the finite `message_name` label.
+`upf_pfcp_association_prunes` counts association removals after the unreachable
+period, including any configured grace. These counters do not use peer labels.

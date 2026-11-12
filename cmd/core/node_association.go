@@ -18,13 +18,14 @@ type NodeAssociation struct {
 	CPFeatures        []byte
 	endpoint          string
 	sessionEntities   map[uint64]string
+	recoveries        map[string]time.Time
 	nextHeartbeat     time.Time
 	heartbeatInFlight bool
 	failedAt          time.Time
 }
 
 func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {
-	return &NodeAssociation{ID: remoteNodeID, Addr: addr, NextSessionID: 1, Sessions: make(map[uint64]*Session), sessionEntities: make(map[uint64]string)}
+	return &NodeAssociation{ID: remoteNodeID, Addr: addr, NextSessionID: 1, Sessions: make(map[uint64]*Session), sessionEntities: make(map[uint64]string), recoveries: make(map[string]time.Time)}
 }
 func (association *NodeAssociation) NewLocalSEID() uint64 {
 	association.NextSessionID++

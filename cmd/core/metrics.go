@@ -16,6 +16,10 @@ import (
 )
 
 var (
+	PfcpRequestRetransmissions = promauto.NewCounterVec(prometheus.CounterOpts{Name: "upf_pfcp_retransmissions", Help: "PFCP request retransmission attempts"}, []string{"message_name"})
+	PfcpRequestTimeouts        = promauto.NewCounterVec(prometheus.CounterOpts{Name: "upf_pfcp_request_timeouts", Help: "PFCP requests that exhausted the retransmission budget"}, []string{"message_name"})
+	PfcpAssociationPrunes      = promauto.NewCounter(prometheus.CounterOpts{Name: "upf_pfcp_association_prunes", Help: "PFCP associations removed after the configured unreachable period"})
+
 	PfcpMessageRx = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "upf_pfcp_rx",
 		Help: "The total number of received PFCP messages",

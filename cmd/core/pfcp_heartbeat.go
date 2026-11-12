@@ -23,7 +23,7 @@ func HandlePfcpHeartbeatRequest(conn *PfcpConnection, msg message.Message, addr 
 	}
 
 	// TS 29.244 V20.1.0 clause 6.2.2.2: answer even unknown peers.
-	if !conn.observeRecovery(addr, ts) {
+	if !conn.observeEntityRecovery(addr, conn.incomingEntity(msg, addr), ts) {
 		return nil, true, nil
 	}
 
@@ -50,15 +50,12 @@ func HandlePfcpHeartbeatResponse(conn *PfcpConnection, msg message.Message, addr
 	return nil, true, nil
 }
 
-func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) {
+func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) error {
 	hbreq := message.NewHeartbeatRequest(sequenceID, append([]*ie.IE{ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)}, conn.profile.HeartbeatRequestAdditionalIEs()...)...)
 	log.Debug().Msgf("Sent Heartbeat Request to: %s", associationAddr)
 	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
-	if err == nil {
-		if err := conn.SendMessageWithTrace(hbreq, udpAddr, true); err != nil {
-			log.Warn().Msgf("Failed to send Heartbeat Request: %s\n", err.Error())
-		}
-	} else {
-		log.Warn().Msgf("Failed to send Heartbeat Request: %s\n", err.Error())
+	if err != nil {
+		return err
 	}
+	return conn.SendMessageWithTrace(hbreq, udpAddr, true)
 }

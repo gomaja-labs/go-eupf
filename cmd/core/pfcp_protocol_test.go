@@ -612,3 +612,17 @@ func TestProtocolLocalNodeIDValidation(t *testing.T) {
 		t.Fatalf("invalid identity update changed the connection: %v", err)
 	}
 }
+
+func TestUnknownPeerSessionResponseUsesPeerSEID(t *testing.T) {
+	conn := newProtocolConnection(t)
+	request := message.NewSessionModificationRequest(17, 99)
+	reply := exchangeProtocolDatagram(t, conn, protocolWire(t, request))
+	if reply == nil {
+		t.Fatal("unknown peer request went unanswered")
+	}
+	response := reply.(*message.SessionModificationResponse)
+	cause, _ := response.Cause.Cause()
+	if cause != ie.CauseNoEstablishedPFCPAssociation || response.SEID() != 0 {
+		t.Fatalf("unknown-peer cause=%d SEID=%d", cause, response.SEID())
+	}
+}

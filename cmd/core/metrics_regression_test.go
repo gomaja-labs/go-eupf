@@ -13,17 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-func counterValue(t *testing.T, c prometheus.Counter) float64 {
-	t.Helper()
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(c)
-	metrics, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return metrics[0].GetMetric()[0].GetCounter().GetValue()
-}
-
 func TestGatherMetricsDoesNotCountPacketsTwice(t *testing.T) {
 	bpf := dataplane.NewBpfObjects()
 	ncpu, err := ebpf.PossibleCPU()

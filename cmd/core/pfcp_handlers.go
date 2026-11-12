@@ -30,7 +30,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		results = append(results, parseErr)
 		for _, failure := range datagramFailures(parseErr) {
 			if h := failure.Header; h != nil {
-				conn.matchResponse(h.Type, h.Sequence(), addr)
+				conn.failResponse(h.Type, h.Sequence(), addr, failure.Err)
 			}
 			var version *message.UnsupportedVersionError
 			var decode *ie.DecodeError
@@ -95,9 +95,14 @@ func datagramFailures(err error) []*message.DatagramError {
 
 func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr) error {
 	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: discard unmatched responses.
-	if !incomingMsg.IsRequest() && !conn.matchResponse(incomingMsg.MessageType(), incomingMsg.Sequence(), addr) {
-		return nil
+	var completed *pendingRequest
+	if !incomingMsg.IsRequest() {
+		completed = conn.takeResponse(incomingMsg.MessageType(), incomingMsg.Sequence(), addr)
+		if completed == nil {
+			return nil
+		}
 	}
+
 	handler, ok := handlerMap[incomingMsg.MessageType()]
 	if !ok {
 		return nil
@@ -109,14 +114,61 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	if err := incomingMsg.MarshalTo(requestWire); err != nil {
 		return err
 	}
-	key := requestKey{addr.String(), incomingMsg.Sequence(), incomingMsg.MessageType()}
+	key := requestKey{peer: addr.String(), sequence: incomingMsg.Sequence(), typ: incomingMsg.MessageType()}
 	digest := sha256.Sum256(requestWire)
 	startTime := time.Now()
 	conn.stateMu.Lock()
+	if conn.isClosed() {
+		conn.stateMu.Unlock()
+		return net.ErrClosed
+	}
+	if completed != nil {
+		current := conn.GetAssociation(addr.IP.String())
+		if (completed.association != nil || completed.typ == message.MsgTypeHeartbeatRequest) && current != completed.association {
+			conn.stateMu.Unlock()
+			return nil
+		}
+		conn.finishProbeLocked(completed)
+	}
+	var outgoing message.Message
+	var trace bool
+	var handlerErr error
+	if !incomingMsg.IsRequest() {
+		handlerErr = validateIncomingResponse(incomingMsg)
+	}
+
 	if incomingMsg.IsRequest() {
+		if failure := validateIncomingRequest(incomingMsg); failure != nil {
+			handlerErr = failure
+			outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
+		}
+	}
+
+	if handlerErr == nil && incomingMsg.IsRequest() {
+		switch incomingMsg.MessageType() {
+		case message.MsgTypeSessionEstablishmentRequest, message.MsgTypeSessionModificationRequest, message.MsgTypeSessionDeletionRequest:
+			if conn.GetAssociation(addr.IP.String()) == nil {
+				handlerErr = errNoEstablishedAssociation
+				outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoEstablishedPFCPAssociation, nil)
+			}
+		}
+	}
+	entity := conn.incomingEntity(incomingMsg, addr.IP.String())
+	// Heartbeat responses are deterministic from the immutable local timestamp.
+	// They must remain answerable even when the bounded response cache is full
+	// (clause 6.2.2.2), and unknown peers must not consume cache entries.
+	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil
+	if cacheable {
 		wire, found, err := conn.cachedReply(key, digest)
 		if found {
+			var rejected message.Message
+			if errors.Is(err, errTransactionCapacity) {
+				rejected = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoResourcesAvailable, nil)
+			}
 			conn.stateMu.Unlock()
+			if rejected != nil {
+				return errors.Join(err, conn.SendMessage(rejected, addr))
+			}
 			if err != nil {
 				return err
 			}
@@ -126,29 +178,16 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			return conn.sendEncoded(wire, incomingMsg.MessageType()+1, addr, false)
 		}
 	}
-	var outgoing message.Message
-	var trace bool
-	var handlerErr error
-	if !incomingMsg.IsRequest() {
-		handlerErr = validateIncomingResponse(incomingMsg)
-		if incomingMsg.MessageType() == message.MsgTypeHeartbeatResponse {
-			if assoc := conn.GetAssociation(addr.IP.String()); assoc != nil {
-				assoc.heartbeatInFlight = false
-				assoc.nextHeartbeat = time.Now().Add(conn.heartbeatInterval())
-			}
-		}
-	}
-
-	if incomingMsg.IsRequest() {
-		if failure := validateIncomingRequest(incomingMsg); failure != nil {
-			handlerErr = failure
-			outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
-		}
-	}
 	if handlerErr == nil {
 		outgoing, trace, handlerErr = handler(conn, incomingMsg, addr.IP.String())
 		if handlerErr == nil {
 			conn.rememberEndpoint(incomingMsg, addr)
+			conn.rememberSessionEntity(incomingMsg, outgoing, addr.IP.String())
+		}
+	}
+	if _, deleted := incomingMsg.(*message.SessionDeletionRequest); deleted {
+		if assoc := conn.GetAssociation(addr.IP.String()); assoc != nil {
+			conn.pruneEntityMetadata(assoc)
 		}
 	}
 	var wire []byte
@@ -167,8 +206,8 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			}
 		}
 	}
-	if incomingMsg.IsRequest() {
-		conn.cacheReply(key, digest, wire)
+	if cacheable {
+		conn.cacheReply(key, digest, wire, entity)
 	}
 	conn.stateMu.Unlock()
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
@@ -195,7 +234,15 @@ func HandlePfcpAssociationReleaseRequest(conn *PfcpConnection, msg message.Messa
 	request := msg.(*message.AssociationReleaseRequest)
 	// Clause 6.2.8.3: the UP function always accepts Release, including a retry
 	// after the association has already gone. The response identifies this UPF.
-	conn.deleteAssociation(addr)
+	if failure := validateIncomingRequest(request); failure != nil {
+		return conn.errorResponse(message.MsgTypeAssociationReleaseResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
+	}
+	node, _ := request.NodeID.NodeID()
+	for peer, assoc := range conn.NodeAssociations {
+		if assoc.ID == nodeIDText(node) {
+			conn.deleteAssociation(peer)
+		}
+	}
 	return message.NewAssociationReleaseResponse(request.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRequestAccepted)), true, nil
 }
 func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
@@ -206,7 +253,11 @@ func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message
 	node, _ := request.NodeID.NodeID()
 	retained, err := conn.replaceAssociation(nodeIDText(node), addr, request.PFCPSessionRetentionInformation, request.CPFunctionFeatures)
 	if err != nil {
-		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, err
+		if errors.Is(err, errTransactionCapacity) {
+			return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, err
+		}
+		failure := invalidRequestIE(ie.PFCPSessionRetentionInformation, err)
+		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
 	ies := []*ie.IE{conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRequestAccepted), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp), ie.NewUPFunctionFeatures(conn.featuresOctets...)}
 	if retained {
@@ -303,4 +354,8 @@ func requireIEsError(fields ...requiredIE) error {
 		return failure
 	}
 	return nil
+}
+
+func HandlePfcpVersionNotSupportedResponse(_ *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
+	return nil, true, fmt.Errorf("PFCP peer %s rejected the protocol version (highest supported %d)", addr, msg.Version())
 }

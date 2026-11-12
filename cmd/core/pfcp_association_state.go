@@ -5,11 +5,12 @@ package core
 
 import (
 	"fmt"
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"maps"
 	"net"
 	"slices"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -19,6 +20,13 @@ import (
 // Node ID, even when Setup arrives from a different PFCP entity/IP address.
 // TS 29.244 V20.1.0 clause 6.2.6.2.2 and Table 7.4.4.1-2.
 func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, features *ie.IE) (bool, error) {
+	// The current session index admits one Node ID per peer IP. Reject an
+	// occupied-address conflict; it must never tear down a different node's
+	// sessions. Supporting several nodes behind one NAT IP needs a port-aware
+	// session index as well as endpoint-aware reliable delivery.
+	if existing := conn.GetAssociation(addr); existing != nil && existing.ID != id {
+		return false, errTransactionCapacity
+	}
 	var retainedEntities []string
 	if retention != nil {
 		fields, err := retention.PFCPSessionRetentionInformation()
@@ -28,7 +36,7 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 		for _, entity := range fields.CPPFCPEntityIPAddress {
 			fields, err := entity.CPPFCPEntityIPAddress()
 			if err != nil {
-				return false, fmt.Errorf("retention entity: %w", err)
+				continue // Clause 7.6.8: ignore a semantically invalid optional child.
 			}
 			if fields.IPv4Address != nil {
 				retainedEntities = append(retainedEntities, fields.IPv4Address.String())
@@ -75,6 +83,12 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 			}
 			if keep {
 				fresh.Sessions[seid] = session
+				if stamp := old.recoveries[entity]; !stamp.IsZero() {
+					fresh.recoveries[entity] = stamp
+				}
+				if entity == addr {
+					fresh.RecoveryTimestamp = old.RecoveryTimestamp
+				}
 				fresh.sessionEntities[seid] = entity
 				if seid > fresh.NextSessionID {
 					fresh.NextSessionID = seid
@@ -98,17 +112,40 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 // explicitly ignored. A smaller value is a reordered stale message, not another
 // restart. TS 23.007 V19.2.0 clause 19A; TS 23.527 V20.0.0 clauses 4.2 and 4.4.2.
 func (conn *PfcpConnection) observeRecovery(addr string, stamp time.Time) bool {
+	return conn.observeEntityRecovery(addr, addr, stamp)
+}
+func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp time.Time) bool {
 	assoc := conn.GetAssociation(addr)
 	if assoc == nil {
 		return true
 	}
-	if stamp.Before(assoc.RecoveryTimestamp) {
+	known := entity == addr
+	for _, candidate := range assoc.sessionEntities {
+		if candidate == entity {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return true
+	} // Unknown entities receive replies without allocating state.
+	if assoc.recoveries == nil {
+		assoc.recoveries = make(map[string]time.Time)
+	}
+	previous := assoc.recoveries[entity]
+	if entity == addr && !assoc.RecoveryTimestamp.IsZero() {
+		previous = assoc.RecoveryTimestamp
+	}
+	if stamp.Before(previous) {
 		return false
 	}
-	if !assoc.RecoveryTimestamp.IsZero() && stamp.After(assoc.RecoveryTimestamp) {
+	if !previous.IsZero() && stamp.After(previous) {
 		for seid, session := range assoc.Sessions {
-			entity := assoc.sessionEntities[seid]
-			if entity != "" && entity != addr {
+			origin := assoc.sessionEntities[seid]
+			if origin == "" {
+				origin = addr
+			}
+			if origin != entity {
 				continue
 			}
 			conn.DeleteSession(session)
@@ -116,12 +153,17 @@ func (conn *PfcpConnection) observeRecovery(addr string, stamp time.Time) bool {
 			delete(assoc.Sessions, seid)
 			delete(assoc.sessionEntities, seid)
 		}
-		conn.forgetPeer(addr)
+		conn.forgetEntityTransactions(addr, entity)
 	}
-	assoc.RecoveryTimestamp = stamp
+	conn.pruneEntityMetadata(assoc)
+	assoc.recoveries[entity] = stamp
+	if entity == addr {
+		assoc.RecoveryTimestamp = stamp
+	}
 	assoc.failedAt = time.Time{}
 	return true
 }
+
 func (conn *PfcpConnection) heartbeatInterval() time.Duration {
 	if conn.heartbeatEvery <= 0 {
 		return 5 * time.Second
@@ -133,6 +175,7 @@ func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 	var peers []string
 	for addr, assoc := range conn.NodeAssociations {
 		if !assoc.failedAt.IsZero() && now.Sub(assoc.failedAt) >= conn.heartbeatGrace {
+			PfcpAssociationPrunes.Inc()
 			conn.deleteAssociation(addr)
 			continue
 		}
@@ -145,38 +188,51 @@ func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 	}
 	conn.stateMu.Unlock()
 	for _, peer := range peers {
-		SendHeartbeatRequest(conn, 0, peer)
+		if err := SendHeartbeatRequest(conn, 0, peer); err != nil {
+			conn.stateMu.Lock()
+			if assoc := conn.GetAssociation(peer); assoc != nil {
+				assoc.heartbeatInFlight = false
+			}
+			conn.stateMu.Unlock()
+		}
 	}
 }
-func (conn *PfcpConnection) heartbeatFailed(addr string) {
+func (conn *PfcpConnection) heartbeatFailed(addr string, expected ...*NodeAssociation) {
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
 	if assoc := conn.GetAssociation(addr); assoc != nil {
+		if conn.heartbeatTimeout <= 0 && len(expected) > 0 {
+			return
+		}
+		if len(expected) > 0 && assoc != expected[0] {
+			return
+		}
 		assoc.heartbeatInFlight = false
 		if assoc.failedAt.IsZero() {
 			assoc.failedAt = time.Now()
 		}
 		if conn.heartbeatGrace <= 0 {
+			PfcpAssociationPrunes.Inc()
 			conn.deleteAssociation(addr)
 		}
 	}
 }
-func (conn *PfcpConnection) forgetPeer(addr string) { conn.forgetPeerTransactions(addr, false) }
+func (conn *PfcpConnection) forgetPeer(addr string) { conn.forgetPeerTransactions(addr, false, "") }
 func (conn *PfcpConnection) forgetPeerExceptSetup(addr string) {
-	conn.forgetPeerTransactions(addr, true)
+	conn.forgetPeerTransactions(addr, true, "")
 }
-func (conn *PfcpConnection) forgetPeerTransactions(addr string, keepSetup bool) {
+func (conn *PfcpConnection) forgetPeerTransactions(addr string, keepSetup bool, entity string) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for seq, request := range state.pending {
-		if request.peer.IP.String() == addr {
-			delete(state.pending, seq)
+		if request.peer.IP.String() == addr && (entity == "" || request.entity == entity) {
+			state.deletePending(seq)
 		}
 	}
 	for key, entry := range state.responses {
 		host, _, _ := net.SplitHostPort(key.peer)
-		if host == addr && (!keepSetup || key.typ != message.MsgTypeAssociationSetupRequest) {
+		if host == addr && (!keepSetup || key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entry.entity == entity) {
 			state.bytes -= len(entry.wire)
 			delete(state.responses, key)
 		}
@@ -202,6 +258,7 @@ func (conn *PfcpConnection) AssociationSnapshots() map[string]*NodeAssociation {
 		copy := *assoc
 		copy.CPFeatures = append([]byte(nil), assoc.CPFeatures...)
 		copy.sessionEntities = nil
+		copy.recoveries = nil
 		copy.Sessions = make(map[uint64]*Session, len(assoc.Sessions))
 		for seid, session := range assoc.Sessions {
 			copy.Sessions[seid] = cloneSession(session)
@@ -277,4 +334,104 @@ func cloneSdfFilter(filter ebpf.SdfFilter) ebpf.SdfFilter {
 	filter.DstAddress.Ip = append(net.IP(nil), filter.DstAddress.Ip...)
 	filter.DstAddress.Mask = append(net.IPMask(nil), filter.DstAddress.Mask...)
 	return filter
+}
+
+// A session belongs to the CP PFCP entity in its CP F-SEID, not necessarily the
+// source IP of a NATed datagram. TS 29.244 Table 7.4.4.1-2; TS 23.007 clause 19A.
+func sessionEntity(request *message.SessionEstablishmentRequest, fallback string) string {
+	fields, err := request.CPFSEID.FSEID()
+	if err != nil {
+		return fallback
+	}
+	if fields.IPv4Address != nil {
+		return fields.IPv4Address.String()
+	}
+	if fields.IPv6Address != nil {
+		return fields.IPv6Address.String()
+	}
+	return fallback
+}
+func (conn *PfcpConnection) rememberSessionEntity(request, response message.Message, peer string) {
+	if deleted, ok := request.(*message.SessionDeletionRequest); ok {
+		if assoc := conn.GetAssociation(peer); assoc != nil && assoc.Sessions[deleted.SEID()] == nil {
+			delete(assoc.sessionEntities, deleted.SEID())
+			conn.pruneEntityMetadata(assoc)
+		}
+		return
+	}
+	req, ok := request.(*message.SessionEstablishmentRequest)
+	if !ok {
+		return
+	}
+	reply, ok := response.(*message.SessionEstablishmentResponse)
+	if !ok {
+		return
+	}
+	cause, err := reply.Cause.Cause()
+	if err != nil || cause != ie.CauseRequestAccepted {
+		return
+	}
+	fields, err := reply.UPFSEID.FSEID()
+	if err != nil {
+		return
+	}
+	if assoc := conn.GetAssociation(peer); assoc != nil && assoc.Sessions[fields.SEID] != nil {
+		assoc.sessionEntities[fields.SEID] = sessionEntity(req, peer)
+	}
+}
+
+func (conn *PfcpConnection) forgetEntityTransactions(addr, entity string) {
+	conn.forgetPeerTransactions(addr, false, entity)
+}
+func (conn *PfcpConnection) incomingEntity(msg message.Message, peer string) string {
+	switch request := msg.(type) {
+	case *message.SessionEstablishmentRequest:
+		return sessionEntity(request, peer)
+	case *message.HeartbeatRequest:
+		fields, err := request.SourceIPAddress.SourceIPAddress()
+		if err == nil {
+			if fields.IPv4Address != nil {
+				return fields.IPv4Address.String()
+			}
+			if fields.IPv6Address != nil {
+				return fields.IPv6Address.String()
+			}
+		}
+	}
+	if assoc := conn.GetAssociation(peer); assoc != nil {
+		if entity := assoc.sessionEntities[msg.SEID()]; entity != "" {
+			return entity
+		}
+	}
+	return peer
+}
+func (conn *PfcpConnection) outgoingContext(msg message.Message, peer string) (string, *NodeAssociation) {
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	if assoc := conn.GetAssociation(peer); assoc != nil {
+		for seid, session := range assoc.Sessions {
+			if msg.SEID() != 0 && session.RemoteSEID == msg.SEID() {
+				if entity := assoc.sessionEntities[seid]; entity != "" {
+					return entity, assoc
+				}
+			}
+		}
+	}
+	return peer, conn.GetAssociation(peer)
+}
+
+func (conn *PfcpConnection) pruneEntityMetadata(assoc *NodeAssociation) {
+	active := map[string]bool{assoc.Addr: true}
+	for seid, entity := range assoc.sessionEntities {
+		if assoc.Sessions[seid] == nil {
+			delete(assoc.sessionEntities, seid)
+		} else {
+			active[entity] = true
+		}
+	}
+	for entity := range assoc.recoveries {
+		if !active[entity] {
+			delete(assoc.recoveries, entity)
+		}
+	}
 }

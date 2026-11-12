@@ -1,12 +1,13 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/config"
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 func TestConnectionRunLargeDatagramAndClose(t *testing.T) {
@@ -38,5 +39,19 @@ func TestConnectionRunLargeDatagramAndClose(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not terminate after Close")
+	}
+}
+
+func TestClosedConnectionRejectsTrafficAndRebind(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.Close()
+	peer := transactionPeer(t)
+	conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(7, ie.NewNodeIDFQDN("synthetic.example"), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp))), peer.LocalAddr().(*net.UDPAddr))
+	if conn.GetAssiciationCount() != 0 {
+		t.Error("closed connection processed traffic")
+	}
+	if err := conn.Update("127.0.0.1:0", "127.0.0.1"); err == nil {
+		_ = conn.socket().Close()
+		t.Error("closed connection reopened a socket")
 	}
 }

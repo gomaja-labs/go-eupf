@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gomaja-labs/go-pfcp/message"
+	"github.com/rs/zerolog/log"
 )
 
 var errTransactionCapacity = errors.New("PFCP transaction capacity exhausted")
@@ -20,30 +21,35 @@ var errTransactionCapacity = errors.New("PFCP transaction capacity exhausted")
 // under mu. The connection receive loop calls serviceTransactions; it does not
 // create a goroutine or timer for each request. TS 29.244 V20.1.0 clause 6.4.
 type transportState struct {
-	mu        sync.Mutex
-	next      uint32
-	pending   map[uint32]*pendingRequest
-	responses map[requestKey]cachedResponse
-	bytes     int
+	mu           sync.Mutex
+	next         uint32
+	pending      map[uint32]*pendingRequest
+	responses    map[requestKey]cachedResponse
+	bytes        int
+	pendingBytes int
 }
 type requestKey struct {
 	peer     string
 	sequence uint32
 	typ      uint8
+	digest   [32]byte
 }
 type cachedResponse struct {
-	digest  [32]byte
 	wire    []byte
 	expires time.Time
+	entity  string
 }
 type pendingRequest struct {
-	wire      []byte
-	peer      *net.UDPAddr
-	typ       uint8
-	retryAt   time.Time
-	interval  time.Duration
-	remaining uint32
-	trace     bool
+	wire        []byte
+	peer        *net.UDPAddr
+	typ         uint8
+	retryAt     time.Time
+	interval    time.Duration
+	remaining   uint32
+	trace       bool
+	entity      string
+	association *NodeAssociation
+	socket      *net.UDPConn
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -56,14 +62,21 @@ func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
 	}
 	return interval, retries
 }
-func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAddr, trace bool) ([]byte, error) {
+func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn) ([]byte, error) {
+	entity, association := conn.outgoingContext(msg, peer.IP.String())
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if conn.isClosed() {
+		return nil, net.ErrClosed
+	}
 	if state.pending == nil {
 		state.pending = make(map[uint32]*pendingRequest)
 	}
-	if len(state.pending) >= conn.transactionLimit() {
+	if socket != conn.socket() {
+		return nil, fmt.Errorf("PFCP local endpoint changed")
+	}
+	if len(state.pending) >= conn.transactionLimit() || state.pendingBytes+msg.MarshalLen() > 16<<20 {
 		return nil, errTransactionCapacity
 	}
 	// Sequence numbers are unique across the entire local endpoint, including
@@ -85,7 +98,8 @@ func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAdd
 	interval, retries := conn.requestPolicy(msg.MessageType())
 	copied := *peer
 	copied.IP = append(net.IP(nil), peer.IP...)
-	state.pending[state.next] = &pendingRequest{wire: wire, peer: &copied, typ: msg.MessageType(), retryAt: time.Now().Add(interval), interval: interval, remaining: retries, trace: trace}
+	state.pending[state.next] = &pendingRequest{wire: wire, peer: &copied, typ: msg.MessageType(), retryAt: time.Now().Add(interval), interval: interval, remaining: retries, trace: trace, entity: entity, association: association, socket: socket}
+	state.pendingBytes += len(wire)
 	return wire, nil
 }
 func (conn *PfcpConnection) transactionLimit() int {
@@ -98,15 +112,18 @@ func (conn *PfcpConnection) transactionLimit() int {
 // matchResponse removes only a response for the same remote endpoint, sequence
 // and procedure. Malformed matched responses also stop retries (clause 7.6.1).
 func (conn *PfcpConnection) matchResponse(typ uint8, seq uint32, peer *net.UDPAddr) bool {
+	return conn.takeResponse(typ, seq, peer) != nil
+}
+func (conn *PfcpConnection) takeResponse(typ uint8, seq uint32, peer *net.UDPAddr) *pendingRequest {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	req := state.pending[seq]
 	if req == nil || req.peer.String() != peer.String() || (typ != req.typ+1 && typ != message.MsgTypeVersionNotSupportedResponse) {
-		return false
+		return nil
 	}
-	delete(state.pending, seq)
-	return true
+	state.deletePending(seq)
+	return req
 }
 func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 	state := &conn.transport
@@ -118,7 +135,7 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 			continue
 		}
 		if req.remaining == 0 {
-			delete(state.pending, seq)
+			state.deletePending(seq)
 			failed = append(failed, req)
 			continue
 		}
@@ -129,15 +146,20 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 	conn.expireResponsesLocked(now)
 	state.mu.Unlock()
 	for _, req := range resend {
-		_ = conn.sendEncoded(req.wire, req.typ, req.peer, req.trace)
+		PfcpRequestRetransmissions.WithLabelValues(message.MessageTypeName(req.typ)).Inc()
+		if err := conn.sendEncodedAtSocket(req.wire, req.typ, req.peer, req.trace, req.socket); err != nil {
+			log.Warn().Err(err).Str("peer", req.peer.String()).Str("message", message.MessageTypeName(req.typ)).Msg("PFCP retransmission failed")
+		}
 	}
 	for _, req := range failed {
 		conn.requestFailed(req)
 	}
 }
 func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
+	PfcpRequestTimeouts.WithLabelValues(message.MessageTypeName(req.typ)).Inc()
+	log.Warn().Str("peer", req.peer.String()).Str("message", message.MessageTypeName(req.typ)).Msg("PFCP request retry budget exhausted")
 	if req.typ == message.MsgTypeHeartbeatRequest {
-		conn.heartbeatFailed(req.peer.IP.String())
+		conn.heartbeatFailed(req.peer.IP.String(), req.association)
 	}
 }
 func (conn *PfcpConnection) expireResponsesLocked(now time.Time) {
@@ -149,17 +171,16 @@ func (conn *PfcpConnection) expireResponsesLocked(now time.Time) {
 	}
 }
 
-// cachedReply is called while stateMu serializes application execution. A reused
-// transaction ID with different content is discarded rather than re-executed.
+// cachedReply is called while stateMu serializes application execution.
+// Include the request fingerprint: clause 6.4 permits a completed sequence to
+// be reused for another request, while an identical retransmission is replayed.
 func (conn *PfcpConnection) cachedReply(key requestKey, digest [32]byte) ([]byte, bool, error) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	conn.expireResponsesLocked(time.Now())
+	key.digest = digest
 	if entry, ok := state.responses[key]; ok {
-		if entry.digest != digest {
-			return nil, true, fmt.Errorf("PFCP transaction ID reused with different content")
-		}
 		return entry.wire, true, nil
 	}
 	if len(state.responses) >= conn.transactionLimit() || state.bytes+65535 > 16<<20 {
@@ -167,7 +188,7 @@ func (conn *PfcpConnection) cachedReply(key requestKey, digest [32]byte) ([]byte
 	}
 	return nil, false, nil
 }
-func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []byte) {
+func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []byte, entities ...string) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -180,7 +201,12 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	if ttl <= 0 {
 		ttl = time.Minute
 	}
-	state.responses[key] = cachedResponse{digest: digest, wire: wire, expires: time.Now().Add(ttl)}
+	entity := ""
+	if len(entities) > 0 {
+		entity = entities[0]
+	}
+	key.digest = digest
+	state.responses[key] = cachedResponse{wire: wire, expires: time.Now().Add(ttl), entity: entity}
 	state.bytes += len(wire)
 }
 
@@ -205,4 +231,33 @@ func (conn *PfcpConnection) admitPeer(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+func (state *transportState) deletePending(seq uint32) {
+	if req := state.pending[seq]; req != nil {
+		state.pendingBytes -= len(req.wire)
+		delete(state.pending, seq)
+	}
+}
+
+func (conn *PfcpConnection) finishProbeLocked(req *pendingRequest) {
+	if req == nil || req.typ != message.MsgTypeHeartbeatRequest {
+		return
+	}
+	assoc := conn.GetAssociation(req.peer.IP.String())
+	if assoc == nil || assoc != req.association {
+		return
+	}
+	assoc.heartbeatInFlight = false
+	assoc.nextHeartbeat = time.Now().Add(conn.heartbeatInterval())
+}
+func (conn *PfcpConnection) failResponse(typ uint8, seq uint32, peer *net.UDPAddr, err error) {
+	req := conn.takeResponse(typ, seq, peer)
+	if req == nil {
+		return
+	}
+	conn.stateMu.Lock()
+	conn.finishProbeLocked(req)
+	conn.stateMu.Unlock()
+	log.Warn().Err(err).Str("peer", peer.String()).Str("message", message.MessageTypeName(typ)).Msg("Invalid matched PFCP response")
 }

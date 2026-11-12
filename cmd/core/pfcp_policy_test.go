@@ -9,7 +9,19 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(c)
+	metrics, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return metrics[0].GetMetric()[0].GetCounter().GetValue()
+}
 
 func policyConnection(t *testing.T, options config.UpfConfig) *PfcpConnection {
 	t.Helper()
@@ -74,6 +86,9 @@ func TestMalformedMatchedHeartbeatResponseReleasesProbe(t *testing.T) {
 }
 
 func TestTransportPolicyAndHeartbeatGrace(t *testing.T) {
+	prunesBefore := counterValue(t, PfcpAssociationPrunes)
+	timeoutsBefore := counterValue(t, PfcpRequestTimeouts.WithLabelValues("Heartbeat Request"))
+	retriesBefore := counterValue(t, PfcpRequestRetransmissions.WithLabelValues("Heartbeat Request"))
 	conn := policyConnection(t, config.UpfConfig{PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxTransactions: 128, PfcpMaxAssociations: 16, HeartbeatTimeout: 1, HeartbeatRetries: 1, HeartbeatInterval: 1, HeartbeatFailureGrace: 3})
 	if conn.requestTimeout != 2*time.Second || conn.requestRetries != 4 || conn.responseRetention != 30*time.Second || conn.maxTransactions != 128 || conn.maxAssociations != 16 || conn.heartbeatGrace != 3*time.Second {
 		t.Fatal("configuration not applied to transport")
@@ -114,5 +129,51 @@ func TestTransportPolicyAndHeartbeatGrace(t *testing.T) {
 	conn.serviceHeartbeats(failure.Add(3 * time.Second))
 	if conn.GetAssiciationCount() != 0 {
 		t.Fatal("unreachable association survived full grace")
+	}
+	if counterValue(t, PfcpAssociationPrunes)-prunesBefore != 1 {
+		t.Fatal("heartbeat pruning was not counted exactly once")
+	}
+	if counterValue(t, PfcpRequestTimeouts.WithLabelValues("Heartbeat Request"))-timeoutsBefore != 1 {
+		t.Fatal("exhausted heartbeat budget was not counted exactly once")
+	}
+	if counterValue(t, PfcpRequestRetransmissions.WithLabelValues("Heartbeat Request"))-retriesBefore != 1 {
+		t.Fatal("heartbeat retransmission was not counted exactly once")
+	}
+
+}
+
+func TestVersionRejectionCompletesHeartbeatProbe(t *testing.T) {
+	conn := policyConnection(t, config.UpfConfig{HeartbeatTimeout: 1, HeartbeatInterval: 1})
+	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 1)
+	assoc := conn.GetAssociation("127.0.0.1")
+	assoc.endpoint = peer.LocalAddr().String()
+	conn.serviceHeartbeats(time.Now().Add(2 * time.Second))
+	request, err := message.Parse(readTransaction(t, peer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Handle(protocolWire(t, message.NewVersionNotSupportedResponse(request.Sequence())), peer.LocalAddr().(*net.UDPAddr))
+	if assoc.heartbeatInFlight || len(conn.transport.pending) != 0 {
+		t.Fatal("Version Not Supported left a stuck heartbeat probe")
+	}
+}
+func TestMalformedFramingCompletesHeartbeatProbe(t *testing.T) {
+	conn := policyConnection(t, config.UpfConfig{HeartbeatTimeout: 1, HeartbeatInterval: 1})
+	peer := transactionPeer(t)
+	associationSetup(t, conn, "127.0.0.1", 1)
+	assoc := conn.GetAssociation("127.0.0.1")
+	assoc.endpoint = peer.LocalAddr().String()
+	conn.serviceHeartbeats(time.Now().Add(2 * time.Second))
+	request, err := message.Parse(readTransaction(t, peer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := protocolWire(t, message.NewHeartbeatResponse(request.Sequence(), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)))
+	wire = append(wire, 0, byte(ie.NodeID), 0, 8, 0)
+	wire[2], wire[3] = byte((len(wire)-4)>>8), byte(len(wire)-4)
+	conn.Handle(wire, peer.LocalAddr().(*net.UDPAddr))
+	if assoc.heartbeatInFlight || len(conn.transport.pending) != 0 {
+		t.Fatal("malformed matched response framing left a stuck heartbeat probe")
 	}
 }
