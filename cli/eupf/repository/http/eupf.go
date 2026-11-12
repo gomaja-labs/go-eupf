@@ -25,6 +25,7 @@ func NewEupfHttpRepository(baseURL string, cfg *config.Config) (*EupfHttpReposit
 		SetBaseURL(baseURL).
 		SetAuthToken(cfg.ApiToken)
 
+	// RFC 9110 section 4.3.4 and Errata 7105: retain SAN identity checks.
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // RFC 8996 sections 4 and 5
 	if cfg.ApiCABundle != "" {
 		data, err := os.ReadFile(cfg.ApiCABundle)
