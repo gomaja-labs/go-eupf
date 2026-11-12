@@ -32,10 +32,7 @@ func NewEupfHttpRepository(baseURL string, cfg *config.Config) (*EupfHttpReposit
 		if err != nil {
 			return nil, fmt.Errorf("api_ca_bundle: %w", err)
 		}
-		roots, err := x509.SystemCertPool()
-		if err != nil {
-			return nil, fmt.Errorf("load system CAs: %w", err)
-		}
+		roots := x509.NewCertPool()
 		if !roots.AppendCertsFromPEM(data) {
 			return nil, fmt.Errorf("api_ca_bundle contains no CA certificates")
 		}

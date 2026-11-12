@@ -317,3 +317,10 @@ Cobra provides `eupf completion bash`, `eupf completion zsh`, `eupf completion f
 `eupf show` prints the full server configuration as JSON, including PFCP transport policy. Backups preserve these fields using the server YAML key names. Restore first reads the current configuration and rejects differences in startup-only settings, listing the keys requiring a configuration file update and restart before applying any edits. When startup-only settings agree, restore continues through each runtime configuration section and returns an error containing every failed section. Partial restore is not atomic; inspect the error before retrying. Backup names must be filenames in the configured backup directory. Restore accepts at most 32 ZIP members, 4 MiB per expanded member, 16 MiB expanded in total and 16 MiB of archive data. Oversized entries are rejected before YAML parsing.
 
 Restore skips an Sxa/Sxb section only when both the backup and server disable that listener. Enabling or disabling one requires a configuration-file update and restart; restore lists `sxa_address` or `sxb_address` and applies no edits in that case. `set logging caller` accepts only `true` or `false`. Use `https://` management URLs and `api_ca_bundle` / `CLI_API_CA_BUNDLE` / `--api_ca_bundle` for a private CA.
+
+
+When `api_ca_bundle` is set, its PEM certificates **replace** the system trust
+store. The CLI sends the bearer token only after verifying the server against
+that bundle and its URL hostname. A server trusted only by a system CA is
+rejected. With no bundle, the normal system trust store applies. Include every
+CA needed for the selected management endpoint in the bundle.
