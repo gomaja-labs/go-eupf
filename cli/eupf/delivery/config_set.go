@@ -100,7 +100,15 @@ Examples:
   eupf set logging caller false  # Disable caller info
 
 Overrides configuration parameter: logging_caller`,
-		Args: cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+				return err
+			}
+			if args[0] != "true" && args[0] != "false" {
+				return fmt.Errorf("logging_caller must be true or false")
+			}
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
