@@ -5,6 +5,7 @@
 package core
 
 import (
+	"crypto/sha256"
 	"errors"
 	"net"
 	"net/netip"
@@ -88,47 +89,78 @@ func datagramFailures(err error) []*message.DatagramError {
 }
 
 func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr) error {
+	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: discard unmatched responses.
+	if !incomingMsg.IsRequest() && !conn.matchResponse(incomingMsg.MessageType(), incomingMsg.Sequence(), addr) {
+		return nil
+	}
+	handler, ok := handlerMap[incomingMsg.MessageType()]
+	if !ok {
+		return nil
+	} // Clause 7.6.4: discard unknown types before creating labels.
 	PfcpMessageRx.WithLabelValues(incomingMsg.MessageTypeName()).Inc()
+	// Canonical standalone framing makes a bundled retransmission independent of
+	// its siblings; retained IE ordering/content still distinguishes requests.
+	requestWire := make([]byte, incomingMsg.MarshalLen())
+	if err := incomingMsg.MarshalTo(requestWire); err != nil {
+		return err
+	}
+	key := requestKey{addr.String(), incomingMsg.Sequence(), incomingMsg.MessageType()}
+	digest := sha256.Sum256(requestWire)
+	startTime := time.Now()
+	conn.stateMu.Lock()
 	if incomingMsg.IsRequest() {
-		if failure := validateIncomingRequest(incomingMsg); failure != nil {
-			PfcpMessageRxErrors.WithLabelValues(incomingMsg.MessageTypeName(), causeToString(failure.cause)).Inc()
-			response := conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
-			if response != nil {
-				return errors.Join(failure, conn.SendMessage(response, addr))
+		wire, found, err := conn.cachedReply(key, digest)
+		if found {
+			conn.stateMu.Unlock()
+			if err != nil {
+				return err
 			}
-			return failure
+			if wire == nil {
+				return nil
+			}
+			return conn.sendEncoded(wire, incomingMsg.MessageType()+1, addr, false)
 		}
 	}
-
-	if handler, ok := handlerMap[incomingMsg.MessageType()]; ok {
-		startTime := time.Now()
-		// TODO: Trim port as a workaround for NAT changing the port. Explore proper solutions.
-		stringIpAddr := addr.IP.String()
-		outgoingMsg, trace, handlerErr := handler(conn, incomingMsg, stringIpAddr)
-		if handlerErr != nil {
-			log.Warn().Msgf("Error handling PFCP message: %s", handlerErr.Error())
+	var outgoing message.Message
+	var trace bool
+	var handlerErr error
+	if incomingMsg.IsRequest() {
+		if failure := validateIncomingRequest(incomingMsg); failure != nil {
+			handlerErr = failure
+			outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
 		}
-		if trace && IsMessageTraceable(incomingMsg.MessageType()) {
-			conn.TraceMessage(buf, addr, true)
-		}
-		duration := time.Since(startTime)
-		UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(float64(duration.Microseconds()))
-		// Now assumption that all handlers will return a message to send is not true.
-		// Always transmit the handler's response when non-nil, even if the handler
-		// reported an error: the response may carry the error cause the peer awaits.
-		if outgoingMsg != nil {
-			if sendErr := conn.SendMessageWithTrace(outgoingMsg, addr, trace); sendErr != nil {
-				log.Warn().Msgf("Failed to send PFCP response: %s", sendErr.Error())
-				if handlerErr == nil {
-					return sendErr
+	}
+	if handlerErr == nil {
+		outgoing, trace, handlerErr = handler(conn, incomingMsg, addr.IP.String())
+	}
+	var wire []byte
+	if outgoing != nil {
+		wire = make([]byte, outgoing.MarshalLen())
+		if err := outgoing.MarshalTo(wire); err != nil {
+			handlerErr = errors.Join(handlerErr, err)
+			fallback := conn.errorResponse(outgoing.MessageType(), outgoing.SEID(), outgoing.Sequence(), ie.CauseSystemFailure, nil)
+			wire = nil
+			if fallback != nil {
+				wire = make([]byte, fallback.MarshalLen())
+				if err := fallback.MarshalTo(wire); err != nil {
+					wire = nil
+					handlerErr = errors.Join(handlerErr, err)
 				}
 			}
 		}
-		return handlerErr
-	} else {
-		log.Warn().Msgf("Got unexpected message %s: %s, from: %s", incomingMsg.MessageTypeName(), incomingMsg, addr)
 	}
-	return nil
+	if incomingMsg.IsRequest() {
+		conn.cacheReply(key, digest, wire)
+	}
+	conn.stateMu.Unlock()
+	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
+		conn.TraceMessage(buf, addr, true)
+	}
+	UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(float64(time.Since(startTime).Microseconds()))
+	if wire != nil {
+		handlerErr = errors.Join(handlerErr, conn.sendEncoded(wire, outgoing.MessageType(), addr, trace))
+	}
+	return handlerErr
 }
 
 func setBit(n uint8, pos uint) uint8 {

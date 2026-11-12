@@ -44,6 +44,19 @@ var pfcpHandlers = PfcpHandlerMap{
 }
 
 type PfcpConnection struct {
+	socketMu  sync.RWMutex
+	closeOnce sync.Once
+	done      chan struct{}
+
+	stateMu           sync.RWMutex // Owns all associations, sessions and their indexes.
+	transport         transportState
+	requestTimeout    time.Duration
+	requestRetries    uint32
+	heartbeatTimeout  time.Duration
+	heartbeatRetries  uint32
+	responseRetention time.Duration
+	maxTransactions   uint32
+
 	udpConn                *net.UDPConn
 	pfcpHandlerMap         PfcpHandlerMap
 	associationMutex       *sync.Mutex
@@ -123,6 +136,7 @@ func NewPfcpConnection(
 
 	return &PfcpConnection{
 		udpConn:               udpConn,
+		done:                  make(chan struct{}),
 		pfcpHandlerMap:        pfcpHandlers,
 		associationMutex:      &sync.Mutex{},
 		NodeAssociations:      map[string]*NodeAssociation{},
@@ -143,6 +157,8 @@ func NewPfcpConnection(
 		PCCRules:              pccRule,
 		PCCRulesNameLinkURRID: pccRulesNameLinkURRID,
 		profile:               profile,
+		requestTimeout:        5 * time.Second, requestRetries: 3,
+		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
 	}, nil
 }
 
@@ -159,7 +175,7 @@ func (connection *PfcpConnection) Update(
 		return err
 	}
 
-	if connection.udpConn.LocalAddr().String() != udpAddr.String() {
+	if connection.socket().LocalAddr().String() != udpAddr.String() {
 		newUdpConn, err := net.ListenUDP("udp", udpAddr)
 		if err != nil {
 			log.Warn().Msgf("Can't listen UDP address: %s", err.Error())
@@ -168,8 +184,10 @@ func (connection *PfcpConnection) Update(
 
 		log.Info().Msgf("Starting new PFCP connection: %v", udpAddr)
 
+		connection.socketMu.Lock()
 		oldUDPConn := connection.udpConn
 		connection.udpConn = newUdpConn
+		connection.socketMu.Unlock()
 
 		if err = oldUDPConn.Close(); err != nil {
 			log.Error().Msgf("Can't close old UDP connection: %s", err.Error())
@@ -185,7 +203,7 @@ func (connection *PfcpConnection) Update(
 }
 
 func (connection *PfcpConnection) GetLocalAddr() string {
-	return connection.udpConn.LocalAddr().String()
+	return connection.socket().LocalAddr().String()
 }
 
 func (connection *PfcpConnection) UpdateN3Address(n3addr net.IP) {
@@ -290,47 +308,75 @@ func (connection *PfcpConnection) SendAssociationReleaseRequest() {
 }
 
 func (connection *PfcpConnection) Run() {
-	connection.AssociationSetupTicker = time.NewTicker(time.Duration(config.Conf.AssociationSetupTimeout) * time.Second)
-	reportTicker := time.NewTicker(time.Duration(5) * time.Second)
-	buf := make([]byte, 1500)
-
+	interval := time.Duration(config.Conf.AssociationSetupTimeout) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	connection.AssociationSetupTicker = time.NewTicker(interval)
+	defer connection.AssociationSetupTicker.Stop()
+	reportTicker := time.NewTicker(5 * time.Second)
+	defer reportTicker.Stop()
+	// A reassembled UDP payload can exceed the link MTU. Reading the maximum
+	// non-jumbo UDP size avoids silently truncating valid PFCP messages.
+	buf := make([]byte, 65535)
 	for {
 		select {
+		case <-connection.done:
+			return
 		case <-connection.AssociationSetupTicker.C:
-			log.Debug().Msgf("pfcp address: %s", connection.GetLocalAddr())
 			connection.RefreshAssociations()
 		case associationAddr := <-connection.heartbeatFailedC:
 			connection.DeleteAssociation(associationAddr)
 		case <-reportTicker.C:
 			connection.SendReports()
-		case notification := <-connection.sdfNotifyC:
-			connection.SendReportsSDF(notification.GetURRID(), notification.GetSdfFilter())
+		case notification, ok := <-connection.sdfNotifyC:
+			if ok {
+				connection.SendReportsSDF(notification.GetURRID(), notification.GetSdfFilter())
+			} else {
+				connection.sdfNotifyC = nil
+			}
 		default:
-			_ = connection.udpConn.SetReadDeadline(time.Now().Add(time.Second))
-			n, addr, err := connection.Receive(buf)
-			if err != nil {
-				if err.(*net.OpError).Timeout() {
-					continue
-				}
-				log.Warn().Msgf("Error reading from UDP socket: %s", err.Error())
-				time.Sleep(1 * time.Second)
+		}
+		connection.serviceTransactions(time.Now())
+		socket := connection.socket()
+		_ = socket.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		n, addr, err := socket.ReadFromUDP(buf)
+		if err != nil {
+			select {
+			case <-connection.done:
+				return
+			default:
+			}
+			var networkError net.Error
+			if errors.As(err, &networkError) && networkError.Timeout() {
 				continue
 			}
-			log.Debug().Msgf("Received %d bytes from %s", n, addr)
-			connection.Handle(buf[:n], addr)
+			if errors.Is(err, net.ErrClosed) {
+				continue
+			}
+			log.Warn().Err(err).Msg("Error reading PFCP socket")
+			continue
 		}
+		connection.Handle(buf[:n], addr)
 	}
 }
 
+func (connection *PfcpConnection) socket() *net.UDPConn {
+	connection.socketMu.RLock()
+	defer connection.socketMu.RUnlock()
+	return connection.udpConn
+}
 func (connection *PfcpConnection) Close() {
-	err := connection.udpConn.Close()
-	if err != nil {
-		log.Error().Msgf("Error closing UDP socket: %s", err.Error())
-	}
+	connection.closeOnce.Do(func() {
+		if connection.done != nil {
+			close(connection.done)
+		}
+		_ = connection.socket().Close()
+		connection.DeleteAllAssociations()
+	})
 }
-
-func (connection *PfcpConnection) Receive(b []byte) (n int, addr *net.UDPAddr, err error) {
-	return connection.udpConn.ReadFromUDP(b)
+func (connection *PfcpConnection) Receive(b []byte) (int, *net.UDPAddr, error) {
+	return connection.socket().ReadFromUDP(b)
 }
 
 func (connection *PfcpConnection) Handle(b []byte, addr *net.UDPAddr) {
@@ -340,7 +386,7 @@ func (connection *PfcpConnection) Handle(b []byte, addr *net.UDPAddr) {
 }
 
 func (connection *PfcpConnection) Send(b []byte, addr *net.UDPAddr) (int, error) {
-	return connection.udpConn.WriteTo(b, addr)
+	return connection.socket().WriteTo(b, addr)
 }
 
 func (connection *PfcpConnection) SendMessage(msg message.Message, addr *net.UDPAddr) error {
@@ -384,27 +430,43 @@ func (connection *PfcpConnection) SendMessageWithTrace(msg message.Message, addr
 }
 
 func (connection *PfcpConnection) sendMessageWithTrace(msg message.Message, addr *net.UDPAddr, trace bool) error {
-	responseBytes := make([]byte, msg.MarshalLen())
-	if err := msg.MarshalTo(responseBytes); err != nil {
-		log.Warn().Err(err).Str("peer", addr.String()).Str("message", msg.MessageTypeName()).Msg("Cannot encode PFCP message")
+	var responseBytes []byte
+	var err error
+	if msg.IsRequest() {
+		responseBytes, err = connection.prepareRequest(msg, addr, trace)
+	} else {
+		responseBytes = make([]byte, msg.MarshalLen())
+		err = msg.MarshalTo(responseBytes)
+	}
+	if err != nil {
 		return err
 	}
+	return connection.sendEncoded(responseBytes, msg.MessageType(), addr, trace)
+}
 
-	if trace && IsMessageTraceable(msg.MessageType()) {
-		connection.TraceMessage(responseBytes, addr, false)
+func (connection *PfcpConnection) sendEncoded(wire []byte, typ uint8, addr *net.UDPAddr, trace bool) error {
+	if trace && IsMessageTraceable(typ) {
+		connection.TraceMessage(wire, addr, false)
 	}
-
-	if _, err := connection.Send(responseBytes, addr); err != nil {
-		log.Warn().Msg(err.Error())
+	if _, err := connection.Send(wire, addr); err != nil {
 		return err
 	}
-
-	PfcpMessageTx.WithLabelValues(msg.MessageTypeName()).Inc()
-
+	// Message names come from the finite codec type catalogue, never peer values.
+	PfcpMessageTx.WithLabelValues(messageTypeName(typ)).Inc()
 	return nil
+}
+func messageTypeName(typ uint8) string {
+	msg := message.NewHeartbeatResponse(0)
+	if typ == message.MsgTypeHeartbeatResponse {
+		return msg.MessageTypeName()
+	}
+	return message.NewGeneric(typ, 0, 0).MessageTypeName()
 }
 
 func (connection *PfcpConnection) TraceMessage(b []byte, addr *net.UDPAddr, rx bool) {
+	if connection.dumper == nil {
+		return
+	}
 	if rx {
 		connection.dumper.DumpRawIn(addr.AddrPort(), connection.nodeAddrV4, b)
 	} else {
