@@ -54,7 +54,7 @@ smoke)
 			sleep .1
 		done
 		grep -q 'listening on lo' "ci-results/capture-$ueip.log"
-		sudo env UPF_MAX_SESSIONS=1024 UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
+		sudo env UPF_MAX_SESSIONS=1024 UPF_FEATURE_FTUP=true UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
 		app_pid=$!
 		python3 - <<'PY'
 import socket, time
@@ -73,6 +73,13 @@ PY
 			timeout 90 sudo /opt/py/bin/pytest -v ./pytest/test_session.py::test_create_association ./pytest/test_session.py::test_create_session_ueip
 		fi
 		cleanup
+	done
+	go build -o bin/mapfault ./cmd/core/testtools/mapfault
+	go build -race -o bin/eupf-race ./cmd
+	for binary in eupf eupf-race; do
+		timeout 180 sudo env EUPF_REGRESSION_BINARY="/src/bin/$binary" \
+			EUPF_REGRESSION_EVIDENCE="/src/ci-results/$binary-regressions" \
+			/opt/py/bin/pytest -v ./pytest/test_pfcp_regressions.py ./pytest/test_pfcp_transport.py
 	done
 	;;
 *)

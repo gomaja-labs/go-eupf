@@ -8,12 +8,7 @@ or subscriber data are used. Expected baseline failures are not marked xfail.
 """
 
 import concurrent.futures
-import json
-import os
-from pathlib import Path
-import signal
 import socket
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -22,137 +17,7 @@ import pytest
 from scapy.contrib import pfcp
 
 
-@pytest.fixture(scope="session")
-def evidence():
-    directory = Path(os.environ.get("EUPF_REGRESSION_EVIDENCE", "/tmp/pfcp-regressions"))
-    directory.mkdir(parents=True, exist_ok=True)
-    with (directory / "tcpdump.log").open("w") as output:
-        capture = subprocess.Popen(
-            ["tcpdump", "-U", "--immediate-mode", "-i", "lo", "-w", str(directory / "synthetic.pcap"),
-             "udp", "port", "8805"], stdout=output, stderr=output,
-        )
-        try:
-            deadline = time.monotonic() + 5
-            while "listening on lo" not in (directory / "tcpdump.log").read_text():
-                assert capture.poll() is None, "tcpdump failed to start"
-                assert time.monotonic() < deadline, "tcpdump did not become ready"
-                time.sleep(0.02)
-            yield directory
-        finally:
-            if capture.poll() is None:
-                capture.send_signal(signal.SIGINT)
-            capture.wait(timeout=5)
-
-
-
-class Peer:
-    def __init__(self, process):
-        self.process = process
-        self.sequence = 0
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("127.0.0.2", 0))
-        self.sock.settimeout(1)
-
-    def request(self, payload, seid=None):
-        self.sequence += 1
-        packet = pfcp.PFCP(version=1, S=int(seid is not None),
-                           seid=seid or 0, seq=self.sequence) / payload
-        self.sock.sendto(bytes(packet), ("127.0.0.1", 8805))
-        try:
-            data, _ = self.sock.recvfrom(65535)
-        except socket.timeout:
-            assert self.process.poll() is None, "eupf terminated on synthetic PFCP input"
-            pytest.fail("no PFCP response within one second")
-        response = pfcp.PFCP(data)
-        assert response.seq == self.sequence
-        assert response.message_type == packet.message_type + 1
-        return response
-
-    def associate(self):
-        response = self.request(pfcp.PFCPAssociationSetupRequest(IE_list=[
-            pfcp.IE_NodeId(id_type=0, ipv4="127.0.0.2"),
-            pfcp.IE_RecoveryTimeStamp(timestamp=3900000000),
-        ]))
-        assert response[pfcp.IE_Cause].cause == 1
-
-    def establish(self, extra=None):
-        self.sequence += 1
-        response = self.request(pfcp.PFCPSessionEstablishmentRequest(IE_list=[
-            pfcp.IE_NodeId(id_type=0, ipv4="127.0.0.2"),
-            pfcp.IE_FSEID(v4=1, seid=self.sequence, ipv4="127.0.0.2"),
-        ] + (extra or [])), seid=0)
-        return response
-
-    def session(self):
-        response = self.establish([far(), pdr()])
-        assert response[pfcp.IE_Cause].cause == 1
-        return response[pfcp.IE_FSEID].seid
-
-
-def far(identifier=1, outer=None):
-    forward = [pfcp.IE_DestinationInterface(interface=1)]
-    if outer is not None:
-        forward.append(outer)
-    return pfcp.IE_CreateFAR(IE_list=[
-        pfcp.IE_FAR_Id(id=identifier), pfcp.IE_ApplyAction(FORW=1),
-        pfcp.IE_ForwardingParameters(IE_list=forward),
-    ])
-
-
-def pdr(identifier=1, source=True, address=True, sdf=None):
-    detection = []
-    if source:
-        detection.append(pfcp.IE_SourceInterface(interface=1))
-    if address:
-        detection.append(pfcp.IE_UE_IP_Address(V4=1, ipv4="192.0.2.10"))
-    if sdf is not None:
-        detection.append(sdf)
-    return pfcp.IE_CreatePDR(IE_list=[
-        pfcp.IE_PDR_Id(id=identifier), pfcp.IE_Precedence(precedence=100),
-        pfcp.IE_PDI(IE_list=detection), pfcp.IE_FAR_Id(id=1),
-    ])
-
-
-def get_json(path):
-    with urllib.request.urlopen("http://127.0.0.1:18080" + path, timeout=2) as response:
-        return json.load(response)
-
-
-@pytest.fixture
-def peer(request, evidence):
-    binary = os.environ.get("EUPF_REGRESSION_BINARY")
-    if not binary:
-        pytest.skip("set EUPF_REGRESSION_BINARY to run socket regressions")
-    with (evidence / (request.node.name.replace("/", "_") + ".log")).open("w") as output:
-        process = subprocess.Popen([
-            binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "16",
-            "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
-            "--n3addr", "127.0.0.1", "--aaddr", "127.0.0.1:18080",
-            "--maddr", "127.0.0.1:19090", "--hbinterval", "3600", "--loglvl", "debug",
-            "--pfcp_profile", getattr(request, "param", "default"),
-        ], stdout=output, stderr=output,
-           env={**os.environ, "GORACE": "halt_on_error=1"})
-        try:
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                assert process.poll() is None, "eupf failed during startup; inspect log"
-                try:
-                    get_json("/api/v1/health")
-                    break
-                except (OSError, ValueError):
-                    time.sleep(0.05)
-            else:
-                pytest.fail("eupf did not become ready")
-            remote = Peer(process)
-            try:
-                remote.associate()
-                yield remote
-            finally:
-                remote.sock.close()
-        finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=5)
+from conftest import far, pdr, get_json
 
 
 def test_heartbeat_missing_recovery_does_not_crash(peer):
@@ -269,8 +134,9 @@ def test_session_creation_is_safe_during_http_reads(peer, endpoint):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         readers = [executor.submit(read_repeatedly) for _ in range(2)]
         for _ in range(40):
-            response = peer.establish()
-            assert response[pfcp.IE_Cause].cause == 1
+            seid=peer.session()
+            response=peer.request(pfcp.PFCPSessionDeletionRequest(),seid)
+            assert response[pfcp.IE_Cause].cause==1
         for reader in readers:
             reader.result()
     assert peer.process.poll() is None
@@ -279,7 +145,7 @@ def test_session_creation_is_safe_during_http_reads(peer, endpoint):
 @pytest.mark.parametrize("peer", ["huawei"], indirect=True)
 def test_empty_huawei_subscriber_value_does_not_crash(peer):
     empty_subscriber = pfcp.IE_EnterpriseSpecific(ietype=32769, enterprise_id=2011, data=b"")
-    response = peer.establish([far(), pdr(), empty_subscriber])
+    response = peer.establish([pfcp.IE_CreateFAR(IE_list=[pfcp.IE_FAR_Id(id=1),pfcp.IE_ApplyAction(DROP=1)]), pdr(), empty_subscriber])
     assert response[pfcp.IE_Cause].cause == 1
     assert peer.process.poll() is None
 
@@ -293,3 +159,84 @@ def test_unknown_predefined_rule_is_rejected(peer):
     assert response[pfcp.IE_FailedRuleId].type == 0
     assert response[pfcp.IE_FailedRuleId].pdr_id == 1
     assert (get_json("/api/v1/pfcp_sessions") or []) == before
+
+
+@pytest.mark.parametrize("case,cause,offending,rule_kind,rule_id", [
+    ("conditional",67,31,3,9),
+    ("gate",69,25,2,9),
+    ("policy",70,41,1,1),
+    ("allocation",71,21,0,1),
+    ("capacity",75,None,0,1),
+    ("unsupported",76,62,3,9),
+])
+def test_rule_rejection_details_and_atomicity(peer,case,cause,offending,rule_kind,rule_id):
+    # TS 29.244 V20.1.0 Table 8.2.1-1, clauses 8.2.22 and 8.2.80.
+    rules=[far(),pdr()]
+    if case=="conditional":
+        rules.append(pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=9),pfcp.IE_MeasurementMethod(VOLUM=1),pfcp.IE_ReportingTriggers(volume_threshold=1)]))
+    elif case=="gate":
+        rules.append(pfcp.IE_CreateQER(IE_list=[pfcp.IE_QER_Id(id=9),pfcp.IE_GateStatus(ul=2,dl=0)]))
+    elif case=="policy":
+        rules[0][pfcp.IE_ForwardingParameters].IE_list.append(pfcp.IE_ForwardingPolicy(policy_identifier=b"undefined"))
+    elif case=="allocation":
+        rules[1][pfcp.IE_PDI].IE_list.append(pfcp.IE_FTEID(V4=1,TEID=100,ipv4="127.0.0.1"))
+    elif case=="capacity":
+        rules[1][pfcp.IE_PDI].IE_list += [pfcp.IE_SDF_Filter(FD=1,flow_description=b"permit out udp from any to any") for _ in range(3)]
+    elif case=="unsupported":
+        rules.append(pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=9),pfcp.IE_MeasurementMethod(DURAT=1),pfcp.IE_ReportingTriggers()]))
+    before=get_json("/api/v1/pfcp_sessions") or []
+    response=peer.establish(rules)
+    assert response[pfcp.IE_Cause].cause==cause
+    assert response[pfcp.IE_FailedRuleId].type==rule_kind
+    field={0:"pdr_id",1:"far_id",2:"qer_id",3:"urr_id"}[rule_kind]
+    assert getattr(response[pfcp.IE_FailedRuleId],field)==rule_id
+    if offending is not None:
+        assert response[pfcp.IE_OffendingIE].type==offending
+    assert (get_json("/api/v1/pfcp_sessions") or [])==before
+
+
+def test_final_usage_in_modification_and_deletion(peer):
+    # TS 29.244 V20.1.0 clauses 5.2.2.3.1, 7.5.5 and 7.5.7.
+    detection=pdr()
+    detection.IE_list += [pfcp.IE_URR_Id(id=11),pfcp.IE_URR_Id(id=22)]
+    usage=lambda identifier:pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=identifier),pfcp.IE_MeasurementMethod(VOLUM=1),pfcp.IE_ReportingTriggers()])
+    response=peer.establish([far(),usage(11),usage(22),detection])
+    assert response[pfcp.IE_Cause].cause==1
+    seid=response[pfcp.IE_FSEID].seid
+    modification=peer.request(pfcp.PFCPSessionModificationRequest(IE_list=[pfcp.IE_RemoveURR(IE_list=[pfcp.IE_URR_Id(id=11)])]),seid)
+    assert modification[pfcp.IE_Cause].cause==1
+    deletion=peer.request(pfcp.PFCPSessionDeletionRequest(),seid)
+    assert deletion[pfcp.IE_Cause].cause==1
+    for response,expected in [(modification,11),(deletion,22)]:
+        assert response[pfcp.IE_URR_Id].id==expected
+        assert response[pfcp.IE_UR_SEQN].number==0
+        assert response[pfcp.IE_VolumeMeasurement].total==0
+
+
+def test_kernel_write_failure_restores_previous_rules(peer,evidence):
+    # A real kernel EPERM occurs after a successful FAR update. The saved FAR
+    # and session state must be restored; Cause 77 identifies the system failure.
+    import os
+    from pathlib import Path
+    import subprocess
+    binary=Path(os.environ["EUPF_REGRESSION_BINARY"])
+    helper=binary.parent/"mapfault"
+    assert helper.is_file(), "build cmd/core/testtools/mapfault before this suite"
+    detection=pdr()
+    detection.IE_list.append(pfcp.IE_QER_Id(id=9))
+    response=peer.establish([far(),pfcp.IE_CreateQER(IE_list=[pfcp.IE_QER_Id(id=9),pfcp.IE_GateStatus(ul=0,dl=0)]),detection])
+    assert response[pfcp.IE_Cause].cause==1
+    seid=response[pfcp.IE_FSEID].seid
+    before=get_json("/api/v1/pfcp_sessions")
+    far_before=get_json("/api/v1/far_map/1")
+    fault=subprocess.run([str(helper),str(peer.process.pid),str(binary),"qer_map"],check=True,capture_output=True,text=True)
+    (evidence/"kernel-map-fault.json").write_text(fault.stdout)
+    response=peer.request(pfcp.PFCPSessionModificationRequest(IE_list=[
+        pfcp.IE_UpdateFAR(IE_list=[pfcp.IE_FAR_Id(id=1),pfcp.IE_ApplyAction(DROP=1)]),
+        pfcp.IE_UpdateQER(IE_list=[pfcp.IE_QER_Id(id=9),pfcp.IE_GateStatus(ul=1,dl=1)]),
+    ]),seid)
+    assert response[pfcp.IE_Cause].cause==77
+    assert response[pfcp.IE_FailedRuleId].type==2
+    assert response[pfcp.IE_FailedRuleId].qer_id==9
+    assert get_json("/api/v1/pfcp_sessions")==before
+    assert get_json("/api/v1/far_map/1")==far_before

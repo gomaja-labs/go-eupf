@@ -30,7 +30,7 @@ session_establish = PFCP(version=1, S=1, seq=2, seid=0, spare_oct=0) / \
                             IE_FAR_Id(id=1),
                             IE_OuterHeaderRemoval(header="GTP-U/UDP/IPv4"),
                             IE_PDI(IE_list=[
-                                IE_FTEID(V4=1, TEID=0x104c9033, ipv4="172.18.1.2"),
+                                IE_FTEID(V4=1, CH=1),
                                 IE_NetworkInstance(instance="access"),
                                 IE_SourceInterface(interface="Access"),
                             ]),
@@ -51,10 +51,6 @@ session_modification = PFCP(version=1, S=1, seq=2, seid=2, spare_oct=0) / \
                                    IE_NetworkInstance(instance="access"),
                                    IE_OuterHeaderCreation(GTPUUDPIPV4=1, TEID=0x01000001, ipv4="10.23.118.69"),
                                ])
-                           ]),
-                           IE_RemoveFAR(IE_list=[
-                               IE_ApplyAction(DROP=1),
-                               IE_FAR_Id(id=2)
                            ]),
                            IE_UpdatePDR(IE_list=[
                                IE_FAR_Id(id=1),
@@ -86,7 +82,7 @@ heartbeat_response = PFCP(version=1, S=0, seq=1, seid=2, spare_oct=0) / \
 # TS 29.244 V20.1.0 clause 8.2.62 and keeps those bits in "spare": spare=2 sets
 # octet 5 bit 5, CHV4, so the UP function allocates the IPv4 address.
 # https://github.com/secdev/scapy/issues/5282
-ue_ip_address = IE_UE_IP_Address(spare=2, SD=0, V4=0)
+ue_ip_address = IE_UE_IP_Address(spare=2, SD=1, V4=0)
 # Create FAR is mandatory in a Session Establishment Request (TS 29.244
 # V20.1.0 table 7.5.2.1-1); the PDR forwards uplink traffic to the core.
 session_establish_ueip = PFCP(version=1, S=1, seq=2, seid=0, spare_oct=0) / \
@@ -95,16 +91,16 @@ session_establish_ueip = PFCP(version=1, S=1, seq=2, seid=0, spare_oct=0) / \
                                  IE_ApplyAction(FORW=1),
                                  IE_FAR_Id(id=1),
                                  IE_ForwardingParameters(IE_list=[
-                                     IE_DestinationInterface(interface="Core"),
+                                     IE_DestinationInterface(interface="Access"),
+                                     IE_OuterHeaderCreation(GTPUUDPIPV4=1,TEID=100,ipv4="198.51.100.20"),
                                  ])
                              ]),
                              IE_CreatePDR(IE_list=[
                                  IE_FAR_Id(id=1),
-                                 IE_OuterHeaderRemoval(header="GTP-U/UDP/IPv4"),
                                  IE_PDI(IE_list=[
                                      ue_ip_address,
                                      # IE_NetworkInstance(instance="access"),
-                                     IE_SourceInterface(interface="Access"),
+                                     IE_SourceInterface(interface="Core"),
                                  ]),
                                  IE_PDR_Id(id=1),
                                  IE_Precedence(precedence=100)
@@ -131,6 +127,9 @@ def test_create_session():
     ans = sr1(target / session_establish, iface='lo')
     assert ans.haslayer(PFCPSessionEstablishmentResponse)
     assert ans[PFCPSessionEstablishmentResponse][IE_Cause].cause == 1
+    allocated=ans[IE_CreatedPDR][IE_FTEID]
+    session_modification[IE_FTEID].TEID=allocated.TEID
+    session_modification[IE_FTEID].ipv4=allocated.ipv4
 
 
 def test_modify_session():
