@@ -43,11 +43,9 @@ upf_rx `gtp-echo`          | The total number of received GTP echo packets
 upf_rx `gtp-pdu`           | The total number of received GTP PDU packets
 upf_rx `gtp-other`         | The total number of received GTP other packets
 upf_rx `gtp-unexp`         | The total number of received GTP error packets
-upf_route `ip4-cache`      | The total number of IPv4 packets routed using cache entries
 upf_route `ip4-ok`         | The total number of IPv4 packets successfully routed
 upf_route `ip4-error-drop` | The total number of IPv4 packets dropped due to routing errors
 upf_route `ip4-error-pass` | The total number of IPv4 packets passed to stack due to routing errors
-upf_route `ip6-cache`      | The total number of IPv6 packets routed using cache entries
 upf_route `ip6-ok`         | The total number of IPv6 packets successfully routed
 upf_route `ip6-error-drop` | The total number of IPv6 packets dropped due to routing errors
 upf_route `ip6-error-pass` | The total number of IPv6 packets passed to stack due to routing errors

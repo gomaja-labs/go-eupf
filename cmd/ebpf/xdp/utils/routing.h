@@ -14,11 +14,9 @@
 #include "xdp/utils/trace.h"
 
 struct route_stat {
-    __u64 fib_lookup_ip4_cache;
     __u64 fib_lookup_ip4_ok;
     __u64 fib_lookup_ip4_error_drop;
     __u64 fib_lookup_ip4_error_pass;
-    __u64 fib_lookup_ip6_cache;
     __u64 fib_lookup_ip6_ok;
     __u64 fib_lookup_ip6_error_drop;
     __u64 fib_lookup_ip6_error_pass;

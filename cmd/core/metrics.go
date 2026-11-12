@@ -177,11 +177,9 @@ func GatherMetrics(stats ebpf.UpfXdpActionStatistic) {
 	add(UpfRx, "gtp-other", packets.RxGtpOther, previous.RxGtpOther)
 	add(UpfRx, "gtp-unexp", packets.RxGtpUnexp, previous.RxGtpUnexp)
 	prior := metricSnapshots.routes
-	add(UpfRoute, "ip4-cache", routes.FibLookupIp4Cache, prior.FibLookupIp4Cache)
 	add(UpfRoute, "ip4-ok", routes.FibLookupIp4Ok, prior.FibLookupIp4Ok)
 	add(UpfRoute, "ip4-error-drop", routes.FibLookupIp4ErrorDrop, prior.FibLookupIp4ErrorDrop)
 	add(UpfRoute, "ip4-error-pass", routes.FibLookupIp4ErrorPass, prior.FibLookupIp4ErrorPass)
-	add(UpfRoute, "ip6-cache", routes.FibLookupIp6Cache, prior.FibLookupIp6Cache)
 	add(UpfRoute, "ip6-ok", routes.FibLookupIp6Ok, prior.FibLookupIp6Ok)
 	add(UpfRoute, "ip6-error-drop", routes.FibLookupIp6ErrorDrop, prior.FibLookupIp6ErrorDrop)
 	add(UpfRoute, "ip6-error-pass", routes.FibLookupIp6ErrorPass, prior.FibLookupIp6ErrorPass)

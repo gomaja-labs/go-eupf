@@ -33,12 +33,10 @@ type PacketStats struct {
 }
 
 type RouteStats struct {
-	FibLookupIp4Cache     uint64 `json:"fib_lookup_ip4_cache"`
 	FibLookupIp4Ok        uint64 `json:"fib_lookup_ip4_ok"`
 	FibLookupIp4ErrorDrop uint64 `json:"fib_lookup_ip4_error_drop"`
 	FibLookupIp4ErrorPass uint64 `json:"fib_lookup_ip4_error_pass"`
 
-	FibLookupIp6Cache     uint64 `json:"fib_lookup_ip6_cache"`
 	FibLookupIp6Ok        uint64 `json:"fib_lookup_ip6_ok"`
 	FibLookupIp6ErrorDrop uint64 `json:"fib_lookup_ip6_error_drop"`
 	FibLookupIp6ErrorPass uint64 `json:"fib_lookup_ip6_error_pass"`
@@ -99,12 +97,10 @@ func (h *ApiHandler) displayPacketStats(c *gin.Context) {
 func (h *ApiHandler) displayRouteStats(c *gin.Context) {
 	route := h.ForwardPlaneStats.GetUpfRouteStat()
 	c.IndentedJSON(http.StatusOK, RouteStats{
-		FibLookupIp4Cache:     route.FibLookupIp4Cache,
 		FibLookupIp4Ok:        route.FibLookupIp4Ok,
 		FibLookupIp4ErrorDrop: route.FibLookupIp4ErrorDrop,
 		FibLookupIp4ErrorPass: route.FibLookupIp4ErrorPass,
 
-		FibLookupIp6Cache:     route.FibLookupIp6Cache,
 		FibLookupIp6Ok:        route.FibLookupIp6Ok,
 		FibLookupIp6ErrorDrop: route.FibLookupIp6ErrorDrop,
 		FibLookupIp6ErrorPass: route.FibLookupIp6ErrorPass,

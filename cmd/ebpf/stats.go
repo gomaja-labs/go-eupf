@@ -171,12 +171,10 @@ func (stat *UpfXdpActionStatistic) GetUpfExtStatDelta() UpfCounters {
 }
 
 func (current *IpEntrypointRouteStat) Add(new IpEntrypointRouteStat) {
-	current.FibLookupIp4Cache += new.FibLookupIp4Cache
 	current.FibLookupIp4Ok += new.FibLookupIp4Ok
 	current.FibLookupIp4ErrorDrop += new.FibLookupIp4ErrorDrop
 	current.FibLookupIp4ErrorPass += new.FibLookupIp4ErrorPass
 
-	current.FibLookupIp6Cache += new.FibLookupIp6Cache
 	current.FibLookupIp6Ok += new.FibLookupIp6Ok
 	current.FibLookupIp6ErrorDrop += new.FibLookupIp6ErrorDrop
 	current.FibLookupIp6ErrorPass += new.FibLookupIp6ErrorPass
@@ -185,12 +183,10 @@ func (current *IpEntrypointRouteStat) Add(new IpEntrypointRouteStat) {
 func (current *IpEntrypointRouteStat) Delta(new IpEntrypointRouteStat) IpEntrypointRouteStat {
 	delta := IpEntrypointRouteStat{}
 
-	delta.FibLookupIp4Cache = new.FibLookupIp4Cache - current.FibLookupIp4Cache
 	delta.FibLookupIp4Ok = new.FibLookupIp4Ok - current.FibLookupIp4Ok
 	delta.FibLookupIp4ErrorDrop = new.FibLookupIp4ErrorDrop - current.FibLookupIp4ErrorDrop
 	delta.FibLookupIp4ErrorPass = new.FibLookupIp4ErrorPass - current.FibLookupIp4ErrorPass
 
-	delta.FibLookupIp6Cache = new.FibLookupIp6Cache - current.FibLookupIp6Cache
 	delta.FibLookupIp6Ok = new.FibLookupIp6Ok - current.FibLookupIp6Ok
 	delta.FibLookupIp6ErrorDrop = new.FibLookupIp6ErrorDrop - current.FibLookupIp6ErrorDrop
 	delta.FibLookupIp6ErrorPass = new.FibLookupIp6ErrorPass - current.FibLookupIp6ErrorPass
