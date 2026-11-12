@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"time"
 	"unsafe"
 
+	cilium "github.com/cilium/ebpf"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcapgo"
@@ -125,9 +127,24 @@ func outerDatapath(t *testing.T, g []byte, options bool) []byte {
 
 // Set EUPF_PACKET_DIR to retain the exact BPF_PROG_TEST_RUN input and output.
 // These captures describe returned buffers, not delivery by a physical NIC.
-func runDatapath(t *testing.T, b *BpfObjects, packet []byte) (uint32, []byte) {
+type datapathContext struct {
+	Data, DataEnd, DataMeta, IngressIfindex, RxQueueIndex, EgressIfindex uint32
+}
+
+func runDatapath(t *testing.T, b *BpfObjects, packet []byte, context ...*datapathContext) (uint32, []byte) {
 	t.Helper()
-	action, out, err := b.UpfIpEntrypointFunc.Test(packet)
+	var action uint32
+	var out []byte
+	var err error
+	if len(context) == 0 {
+		action, out, err = b.UpfIpEntrypointFunc.Test(packet)
+	} else {
+		inputContext := *context[0]
+		inputContext.DataEnd = uint32(len(packet))
+		opts := cilium.RunOptions{Data: packet, DataOut: make([]byte, len(packet)+512), Context: &inputContext}
+		action, err = b.UpfIpEntrypointFunc.Run(&opts)
+		out = opts.DataOut
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,6 +679,148 @@ func TestDatapathEchoRecoveryWithIPv4Options(t *testing.T) {
 			offset := 14 + 20 + count + 8
 			if action != 3 || len(out) < offset+14 || binary.BigEndian.Uint16(out[offset+2:offset+4]) < 6 || out[offset+12] != 14 || out[offset+13] != 0 {
 				t.Error("Echo Response omitted its mandatory Recovery IE")
+			}
+		})
+	}
+}
+
+func routeDatapathFixture(t *testing.T) *datapathContext {
+	t.Helper()
+	// The dev runner provides a private network namespace. Never create
+	// these interfaces on the host running the test command.
+	if _, err := os.Stat("/.dockerenv"); err != nil {
+		t.Skip("routing fixture requires the privileged dev container")
+	}
+	in, out := "dpin", "dpout"
+	ip := func(args ...string) {
+		t.Helper()
+		if output, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+			t.Fatalf("ip %v: %v: %s", args, err, output)
+		}
+	}
+	ip("link", "add", in, "type", "dummy")
+	t.Cleanup(func() {
+		if err := exec.Command("ip", "link", "del", in).Run(); err != nil {
+			t.Error(err)
+		}
+	})
+	ip("link", "add", out, "type", "dummy")
+	t.Cleanup(func() {
+		if err := exec.Command("ip", "link", "del", out).Run(); err != nil {
+			t.Error(err)
+		}
+	})
+	ip("link", "set", in, "up")
+	ip("link", "set", out, "mtu", "1460", "up")
+	ip("addr", "add", "198.18.0.1/24", "dev", out)
+	ip("neigh", "add", "198.18.0.2", "lladdr", "02:00:00:00:00:03", "nud", "permanent", "dev", out)
+	ip("-6", "addr", "add", "2001:db8:ef::1/64", "dev", out, "nodad")
+	ip("-6", "neigh", "add", "2001:db8:ef::2", "lladdr", "02:00:00:00:00:03", "nud", "permanent", "dev", out)
+	for _, path := range []string{"/proc/sys/net/ipv4/conf/dpin/forwarding", "/proc/sys/net/ipv6/conf/dpin/forwarding", "/proc/sys/net/ipv6/conf/all/forwarding"} {
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("1\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.WriteFile(path, before, 0600); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	iface, err := net.InterfaceByName(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &datapathContext{IngressIfindex: uint32(iface.Index)}
+}
+
+func TestDatapathForwardingHopLimit(t *testing.T) {
+	// RFC 791 section 3.2 and RFC 8200 section 3 require forwarding to
+	// decrease TTL/Hop Limit and stop forwarding when it is exhausted.
+	for _, v6 := range []bool{false, true} {
+		for _, ttl := range []uint8{1, 64} {
+			name := map[bool]string{false: "ipv4", true: "ipv6"}[v6] + "_" + map[uint8]string{1: "expired", 64: "forward"}[ttl]
+			t.Run(name, func(t *testing.T) {
+				ctx := routeDatapathFixture(t)
+				b := loadDatapath(t)
+				inner := udpDatapath(t, v6)
+				if v6 {
+					copy(inner[24:40], net.ParseIP("2001:db8:ef::2").To16())
+					inner[7] = ttl
+				} else {
+					copy(inner[16:20], net.IP{198, 18, 0, 2})
+					inner[8] = ttl
+					inner[10], inner[11] = 0, 0
+					binary.BigEndian.PutUint16(inner[10:12], checksumDatapath(inner[:20]))
+				}
+				// Recompute the UDP checksum after changing the destination.
+				start := 20
+				if v6 {
+					start = 40
+				}
+				inner[start+6], inner[start+7] = 0, 0
+				var pseudo []byte
+				if v6 {
+					pseudo = append(pseudo, inner[8:40]...)
+					pseudo = append(pseudo, 0, 0, 0, 12, 0, 0, 0, 17)
+				} else {
+					pseudo = append(pseudo, inner[12:20]...)
+					pseudo = append(pseudo, 0, 17, 0, 12)
+				}
+				pseudo = append(pseudo, inner[start:]...)
+				binary.BigEndian.PutUint16(inner[start+6:start+8], checksumDatapath(pseudo))
+				action, out := runDatapath(t, b, gtpDatapath(t, inner, nil, 0x30, false), ctx)
+				stats := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfRouteStat()
+				t.Logf("route counters=%+v", stats)
+				if ttl == 1 {
+					if action == 3 || action == 4 {
+						t.Error("exhausted packet was forwarded")
+					}
+					return
+				}
+				if action != 3 && action != 4 {
+					t.Fatal("fixture did not reach successful FIB forwarding")
+				}
+				offset := 14 + 8
+				if v6 {
+					offset = 14 + 7
+				}
+				if out[offset] != 63 {
+					t.Errorf("forwarded TTL/Hop Limit=%d, want 63", out[offset])
+				}
+			})
+		}
+	}
+}
+
+func TestDatapathIPv6MTUIncludesHeader(t *testing.T) {
+	// RFC 8200 section 5 requires the complete IPv6 packet to fit the
+	// outgoing link MTU. The fixed IPv6 header contributes 40 octets.
+	for _, tc := range []struct {
+		name    string
+		size    int
+		forward bool
+	}{
+		{"fits", 1460, true}, {"header_exceeds_mtu", 1490, false}, {"payload_exceeds_mtu", 1501, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := routeDatapathFixture(t)
+			b := loadDatapath(t)
+			ip := &layers.IPv6{Version: 6, NextHeader: layers.IPProtocolUDP, HopLimit: 64, SrcIP: net.ParseIP("2001:db8::1"), DstIP: net.ParseIP("2001:db8:ef::2")}
+			u := &layers.UDP{SrcPort: 1234, DstPort: 4321}
+			if err := u.SetNetworkLayerForChecksum(ip); err != nil {
+				t.Fatal(err)
+			}
+			inner := serializeDatapath(t, ip, u, gopacket.Payload(make([]byte, tc.size-48)))
+			action, _ := runDatapath(t, b, gtpDatapath(t, inner, nil, 0x30, false), ctx)
+			stats := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfRouteStat()
+			t.Logf("IPv6 packet=%d link MTU=1460 route counters=%+v", len(inner), stats)
+			forwarded := action == 3 || action == 4
+			if forwarded != tc.forward {
+				t.Errorf("IPv6 packet=%d link MTU=1460 forwarded=%t, want %t", len(inner), forwarded, tc.forward)
 			}
 		})
 	}
