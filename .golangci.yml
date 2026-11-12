@@ -1,0 +1,26 @@
+# golangci-lint configuration (v2 schema).
+#
+# The standard linters check correctness and unused code. errorlint requires
+# errors.Is/As for error comparisons, unconvert finds conversions between
+# identical types, misspell catches typos in comments and strings. Test files
+# are linted too. golangci-lint must be built with a Go version at least as
+# new as the module's go directive.
+
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - unconvert
+
+issues:
+  # Report every finding: a capped count hides issues.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

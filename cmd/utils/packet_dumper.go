@@ -250,16 +250,16 @@ func (dumper *PacketDumper) dumpRaw(srcIP net.IP, srcPort uint16, dstIP net.IP, 
 
 	dumper.writeC <- PacketToWrite{gopacket.CaptureInfo{
 		Timestamp:      time.Now(),
-		Length:         int(len(outgoingPacket)),
-		CaptureLength:  int(len(outgoingPacket)),
-		InterfaceIndex: int(iface),
+		Length:         len(outgoingPacket),
+		CaptureLength:  len(outgoingPacket),
+		InterfaceIndex: iface,
 	}, outgoingPacket}
 
 	// if err := dumper.w.WritePacket(gopacket.CaptureInfo{
 	// 	Timestamp:      time.Now(),
-	// 	Length:         int(len(outgoingPacket)),
-	// 	CaptureLength:  int(len(outgoingPacket)),
-	// 	InterfaceIndex: int(iface),
+	// 	Length:         len(outgoingPacket),
+	// 	CaptureLength:  len(outgoingPacket),
+	// 	InterfaceIndex: iface,
 	// }, outgoingPacket); err != nil {
 	// 	log.Error().Err(err).Msgf("can't write sig sample to pcap dump")
 	// }

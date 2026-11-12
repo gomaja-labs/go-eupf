@@ -103,7 +103,7 @@ func (h *ApiHandler) setQerValue(c *gin.Context) {
 	}
 
 	if err := h.BpfObjects.QerMap.Put(uint32(id), unsafe.Pointer(&value)); err != nil {
-		log.Printf("Error writting map: %s", err.Error())
+		log.Printf("Error writing map: %s", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

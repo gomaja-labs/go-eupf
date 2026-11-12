@@ -5,9 +5,10 @@ package server
 
 import (
 	"context"
-	"github.com/rs/zerolog/log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type Server struct {

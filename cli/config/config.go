@@ -4,11 +4,12 @@ import (
 	"errors"
 	"fmt"
 
+	"os"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
-	"os"
 )
 
 const configFileName = "config-cli.yaml"

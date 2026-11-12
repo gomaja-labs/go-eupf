@@ -158,7 +158,7 @@ func (e *Eupf) BackupRestore(ctx context.Context, tempBaseURL string, name strin
 func validateBaseURL(u string) error {
 	parsed, err := url.ParseRequestURI(u)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidURLFormat, err)
+		return fmt.Errorf("%w: %w", ErrInvalidURLFormat, err)
 	}
 
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {

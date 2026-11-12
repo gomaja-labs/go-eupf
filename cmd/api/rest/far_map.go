@@ -96,7 +96,7 @@ func (h *ApiHandler) setFarValue(c *gin.Context) {
 	}
 
 	if err := h.BpfObjects.FarMap.Put(uint32(id), unsafe.Pointer(&value)); err != nil {
-		log.Printf("Error writting map: %s", err.Error())
+		log.Printf("Error writing map: %s", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

@@ -38,12 +38,12 @@ func testArp(bpfObjects *BpfObjects) error {
 		},
 		&layers.ARP{},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	bpfRet, bufOut, err := bpfObjects.UpfIpEntrypointFunc.Test(packetArp.Bytes())
 	if err != nil {
-		return fmt.Errorf("test run failed: %v", err)
+		return fmt.Errorf("test run failed: %w", err)
 	}
 	if bpfRet != 2 { // XDP_PASS
 		return fmt.Errorf("unexpected return value: %d", bpfRet)
@@ -66,12 +66,12 @@ func testArpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 		},
 		&layers.ARP{},
 	); err != nil {
-		return 0, fmt.Errorf("serializing input packet failed: %v", err)
+		return 0, fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	_, duration, err := bpfObjects.UpfIpEntrypointFunc.Benchmark(packetArp.Bytes(), repeat, func() {})
 	if err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 
 	return duration.Nanoseconds(), nil
@@ -116,12 +116,12 @@ func testGtpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 			Seq:      0,
 		},
 	); err != nil {
-		return 0, fmt.Errorf("serializing input packet failed: %v", err)
+		return 0, fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	_, duration, err := bpfObjects.UpfIpEntrypointFunc.Benchmark(packet.Bytes(), repeat, func() {})
 	if err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 
 	return duration.Nanoseconds(), nil
@@ -168,7 +168,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 			Seq:      0,
 		},
 	); err != nil {
-		return 0, fmt.Errorf("serializing input packet failed: %v", err)
+		return 0, fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := IpEntrypointPdrInfo{}
@@ -179,18 +179,18 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&far)); err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 	if err := bpfObjects.PdrMapTeidIp4.Put(teid, unsafe.Pointer(&pdr)); err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 
 	_, duration, err := bpfObjects.UpfIpEntrypointFunc.Benchmark(packet.Bytes(), repeat, func() {})
 	if err != nil {
-		return 0, fmt.Errorf("benchmark run failed: %v", err)
+		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 
 	return duration.Nanoseconds(), nil
@@ -224,12 +224,12 @@ func testGtpEcho(t *testing.T, bpfObjects *BpfObjects) error {
 			SequenceNumber: 0,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	bpfRet, bufOut, err := bpfObjects.UpfIpEntrypointFunc.Test(packetArp.Bytes())
 	if err != nil {
-		return fmt.Errorf("test run failed: %v", err)
+		return fmt.Errorf("test run failed: %w", err)
 	}
 	if bpfRet != 3 { // XDP_TX
 		return fmt.Errorf("unexpected return value: %d", bpfRet)
@@ -300,7 +300,7 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 			Seq:      0,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -309,17 +309,17 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farDrop)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	sdf := SdfFilter{
@@ -332,12 +332,12 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	pdr.SdfFilter = []SdfFilter{sdf}
 	pdr.FarId = 2
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, _, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 1 { // XDP_DROP
@@ -391,7 +391,7 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 			Seq:      0,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	t.Logf("packet: %v", packet.Layers())
@@ -402,19 +402,19 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, _, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 3 && bpfRet != 4 { // XDP_TX or XDP_REDIRECT
@@ -465,7 +465,7 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 			Seq:      0,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -474,22 +474,22 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	srcIP, srcNet, err := net.ParseCIDR("ff02::2/128")
 	if err != nil {
-		return fmt.Errorf("can't parse CIDR: %v", err)
+		return fmt.Errorf("can't parse CIDR: %w", err)
 	}
 
 	sdf := SdfFilter{
@@ -502,12 +502,12 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	pdr.SdfFilter = []SdfFilter{sdf}
 	pdr.FarId = 2
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, _, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 1 { // XDP_DROP
@@ -556,7 +556,7 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 			TypeCode: layers.ICMPv6TypeEchoRequest,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -565,27 +565,27 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farDrop)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	srcIP, srcNet, err := net.ParseCIDR("2001:db8::2/128")
 	if err != nil {
-		return fmt.Errorf("can't parse CIDR: %v", err)
+		return fmt.Errorf("can't parse CIDR: %w", err)
 	}
 
 	dstIP, dstNet, err := net.ParseCIDR("2001:db8::1/128")
 	if err != nil {
-		return fmt.Errorf("can't parse CIDR: %v", err)
+		return fmt.Errorf("can't parse CIDR: %w", err)
 	}
 
 	sdf := SdfFilter{
@@ -598,12 +598,12 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	pdr.SdfFilter = []SdfFilter{sdf}
 	pdr.FarId = 2
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, _, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 1 { // XDP_DROP
@@ -662,7 +662,7 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 			SrcPort: 2153,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -671,17 +671,17 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	sdf := SdfFilter{
@@ -695,12 +695,12 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 	pdr.FarId = 2
 	pdr.NotifyFlag = true
 	if err := bpfObjects.PutPdrUplink(teid, pdr); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, _, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	sdfEvent, err := sdfListener.ReadEventOnce()
@@ -746,7 +746,7 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 			Seq:      0,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -759,21 +759,21 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrDownlink(net.IP{10, 60, 0, 1}, pdr); err != nil {
-		return fmt.Errorf("can't set downlink PDR: %v", err)
+		return fmt.Errorf("can't set downlink PDR: %w", err)
 	}
 
 	t.Logf("package %v", packet)
 
 	bpfRet, bufOut, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 4 { // XDP_REDIRECT
@@ -794,19 +794,19 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 		if gtp.ExtensionHeaderFlag == true {
 
 			if len(gtp.GTPExtensionHeaders) != 1 {
-				return fmt.Errorf("unexpected gtp extention header count: %d", len(gtp.GTPExtensionHeaders))
+				return fmt.Errorf("unexpected gtp extension header count: %d", len(gtp.GTPExtensionHeaders))
 			}
 
 			extHeader := gtp.GTPExtensionHeaders[0]
 			if extHeader.Type != 0x85 {
-				return fmt.Errorf("unexpected gtp extention header: %d", gtp.GTPExtensionHeaders[0].Type)
+				return fmt.Errorf("unexpected gtp extension header: %d", gtp.GTPExtensionHeaders[0].Type)
 			}
 			if len(extHeader.Content) != 2 {
-				return fmt.Errorf("unexpected gtp extention header len: %d", len(extHeader.Content))
+				return fmt.Errorf("unexpected gtp extension header len: %d", len(extHeader.Content))
 			}
 
 			if extHeader.Content[1] != 5 {
-				return fmt.Errorf("unexpected gtp extention header QFI: %d %d", extHeader.Content[0], extHeader.Content[1])
+				return fmt.Errorf("unexpected gtp extension header QFI: %d %d", extHeader.Content[0], extHeader.Content[1])
 			}
 		}
 	} else {
@@ -842,7 +842,7 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 			DstPort: 2152,
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
@@ -855,21 +855,21 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 	qer := QerInfo{GateStatusUL: 0, GateStatusDL: 0, Qfi: 5, MaxBitrateUL: 1000000, MaxBitrateDL: 100000}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 
 	if err := bpfObjects.PutPdrDownlink(net.IP{10, 60, 0, 1}, pdr); err != nil {
-		return fmt.Errorf("can't set downlink PDR: %v", err)
+		return fmt.Errorf("can't set downlink PDR: %w", err)
 	}
 
 	t.Logf("package %v", packet)
 
 	bpfRet, bufOut, err := bpfObjects.UpfIpEntrypointFunc.Test(packet.Bytes())
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 4 { // XDP_REDIRECT
@@ -889,19 +889,19 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 		if gtp.ExtensionHeaderFlag == true {
 
 			if len(gtp.GTPExtensionHeaders) != 1 {
-				return fmt.Errorf("unexpected gtp extention header count: %d", len(gtp.GTPExtensionHeaders))
+				return fmt.Errorf("unexpected gtp extension header count: %d", len(gtp.GTPExtensionHeaders))
 			}
 
 			extHeader := gtp.GTPExtensionHeaders[0]
 			if extHeader.Type != 0x85 {
-				return fmt.Errorf("unexpected gtp extention header: %d", gtp.GTPExtensionHeaders[0].Type)
+				return fmt.Errorf("unexpected gtp extension header: %d", gtp.GTPExtensionHeaders[0].Type)
 			}
 			if len(extHeader.Content) != 2 {
-				return fmt.Errorf("unexpected gtp extention header len: %d", len(extHeader.Content))
+				return fmt.Errorf("unexpected gtp extension header len: %d", len(extHeader.Content))
 			}
 
 			if extHeader.Content[1] != 5 {
-				return fmt.Errorf("unexpected gtp extention header QFI: %d %d", extHeader.Content[0], extHeader.Content[1])
+				return fmt.Errorf("unexpected gtp extension header QFI: %d %d", extHeader.Content[0], extHeader.Content[1])
 			}
 		}
 	} else {
@@ -956,7 +956,7 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 			Options: []layers.ICMPv6Option{{Type: 1, Data: []byte{0x37, 0xb4, 0x18, 0x81, 0x48, 0x41}}},
 		},
 	); err != nil {
-		return fmt.Errorf("serializing input packet failed: %v", err)
+		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
 	t.Logf("packet:\n%v", hex.Dump(packet.Bytes()))
@@ -974,25 +974,25 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
-		return fmt.Errorf("can't set FAR: %v", err)
+		return fmt.Errorf("can't set FAR: %w", err)
 	}
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
-		return fmt.Errorf("can't set QER: %v", err)
+		return fmt.Errorf("can't set QER: %w", err)
 	}
 	if err := bpfObjects.PutPdrDownlink(net.ParseIP("2a03:d000:29a0:509:1:0:8e11:2f19"), pdr); err != nil {
-		return fmt.Errorf("can't set downlink PDR: %v", err)
+		return fmt.Errorf("can't set downlink PDR: %w", err)
 	}
 
 	if err := bpfObjects.UpdateFar(2, farUplink); err != nil {
-		return fmt.Errorf("can't set uplink FAR: %v", err)
+		return fmt.Errorf("can't set uplink FAR: %w", err)
 	}
 	if err := bpfObjects.PutPdrUplink(teid, pdrUplink); err != nil {
-		return fmt.Errorf("can't set uplink PDR: %v", err)
+		return fmt.Errorf("can't set uplink PDR: %w", err)
 	}
 
 	bpfRet, bufOut, err := bpfObjects.UpfIpEntrypointFunc.Test(append(packet.Bytes(), 0x00, 0x00, 0x00, 0x00))
 	if err != nil {
-		return fmt.Errorf("ebpf run failed: %v", err)
+		return fmt.Errorf("ebpf run failed: %w", err)
 	}
 
 	if bpfRet != 4 { // XDP_REDIRECT
@@ -1093,7 +1093,7 @@ func TestEntrypoint(t *testing.T) {
 		}
 	})
 
-	t.Run("GTP Extention Header test", func(t *testing.T) {
+	t.Run("GTP Extension Header test", func(t *testing.T) {
 		err := testGtpExtHeader(t, bpfObjects)
 		if err != nil {
 			t.Fatalf("test failed: %s", err)
