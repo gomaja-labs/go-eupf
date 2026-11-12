@@ -146,12 +146,16 @@ func (e *Eupf) BackupRestore(ctx context.Context, tempBaseURL string, name strin
 		failures = append(failures, fmt.Errorf("restore PFCP N4: %w", err))
 	}
 
-	if err := e.eupfRepo.RestoreConfigPFCPSxa(ctx, config.SxaLocalAddress, config.SxaLocalNodeId, config.SxaRemoteNode, baseURL); err != nil {
-		failures = append(failures, fmt.Errorf("restore PFCP SXA: %w", err))
+	if config.SxaLocalAddress != "" && current.SxaLocalAddress != "" {
+		if err := e.eupfRepo.RestoreConfigPFCPSxa(ctx, config.SxaLocalAddress, config.SxaLocalNodeId, config.SxaRemoteNode, baseURL); err != nil {
+			failures = append(failures, fmt.Errorf("restore PFCP SXA: %w", err))
+		}
 	}
 
-	if err := e.eupfRepo.RestoreConfigPFCPSxb(ctx, config.SxbLocalAddress, config.SxbLocalNodeId, config.SxbRemoteNode, baseURL); err != nil {
-		failures = append(failures, fmt.Errorf("restore PFCP SXB: %w", err))
+	if config.SxbLocalAddress != "" && current.SxbLocalAddress != "" {
+		if err := e.eupfRepo.RestoreConfigPFCPSxb(ctx, config.SxbLocalAddress, config.SxbLocalNodeId, config.SxbRemoteNode, baseURL); err != nil {
+			failures = append(failures, fmt.Errorf("restore PFCP SXB: %w", err))
+		}
 	}
 
 	if err := e.eupfRepo.RestoreConfigPFCPTimers(ctx, config.AssociationSetupTimeout, config.HeartbeatTimeout, baseURL); err != nil {

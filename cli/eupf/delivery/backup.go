@@ -100,7 +100,7 @@ func (cli *CLI) newBackupRestoreCmd() *cobra.Command {
 
 			err := cli.usecase.BackupRestore(ctx, baseURL, backupID)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to create backup: %v\n", err)
+				fmt.Fprintf(os.Stderr, "failed to restore backup: %v\n", err)
 				os.Exit(1)
 			}
 		},
