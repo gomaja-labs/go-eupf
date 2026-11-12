@@ -152,6 +152,11 @@ func TestReservationViewOwnsReturnedAddressesAndPrefixMasks(t *testing.T) {
 	if err != nil || !again.Equal(want) {
 		t.Fatal("caller changed a private reservation address")
 	}
+	clear(again)
+	again, err = journal.View().IPAM.AllocateIP(10)
+	if err != nil || !again.Equal(want) {
+		t.Fatal("caller changed a reused private reservation address")
+	}
 	mask := net.CIDRMask(64, 128)
 	if err := journal.View().IPAM.ReserveIPv6Prefix(10, net.ParseIP("2001:db8:17::1"), mask); err != nil {
 		t.Fatal(err)
