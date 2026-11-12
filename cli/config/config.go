@@ -95,7 +95,7 @@ func GlobalFlags() *pflag.FlagSet {
 
 func defineFlags() {
 	flagGroup = pflag.NewFlagSet("cli-flags", pflag.ContinueOnError)
-	flagGroup.ParseErrorsWhitelist.UnknownFlags = true
+	flagGroup.ParseErrorsAllowlist.UnknownFlagsHandling = pflag.IgnoreUnknownFlag
 	flagGroup.String("api_token", "", "Bearer token for the administration API")
 	flagGroup.String("log_level", "", "Log level (debug, info, warn, error)")
 	flagGroup.String("eupf_addr", "", "Base URL for eupf API (e.g. http://localhost:8080/api/v1/)")
