@@ -308,6 +308,20 @@ def test_sdf_protocol_number_establishment(peer, protocol):
     assert peer.request(pfcp.PFCPSessionDeletionRequest(), seid)[pfcp.IE_Cause].cause == 1
 
 
+@pytest.mark.parametrize("v4,v6,cause", [(1, 0, 1), (1, 1, 1), (0, 1, 76)])
+def test_fteid_choose_offered_families(peer, v4, v6, cause):
+    # TS 29.244 V20.1.0 clause 8.2.3: V4/V6 are offers when CHOOSE is set.
+    rule = uplink_pdr()
+    tunnel = rule[pfcp.IE_FTEID]
+    tunnel.CH, tunnel.V4, tunnel.V6 = 1, v4, v6
+    response = peer.establish([uplink_far(), rule])
+    assert response[pfcp.IE_Cause].cause == cause
+    if cause == 1:
+        allocated = response[pfcp.IE_FTEID]
+        assert allocated.V4 == 1 and allocated.V6 == 0 and allocated.TEID != 0
+        assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
+
+
 @pytest.mark.parametrize("option", ["frag", "ipoptions ssrr,!lsrr,rr,ts", "tcpoptions mss,!window,sack,ts,cc", "established", "setup", "tcpflags syn,!ack", "icmptypes 0,8-11", "icmptypes echo reply"])
 def test_valid_unsupported_sdf_option_rejected(peer, option):
     # Valid IPFilterRule options must not be discarded as malformed optional IEs.

@@ -276,7 +276,9 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		if fteid.HasChID() && !fteid.HasCh() || fteid.Flags&3 == 0 || !fteid.HasCh() && !pdrContext.Restoration && !pdrContext.hasSessionFTEID(fteid.TEID, spdrInfo.SourceInterface, fteid.IPv4Address) {
 			return &requestIEError{ie.CauseInvalidFTEIDAllocationOption, ie.FTEID, fmt.Errorf("incompatible F-TEID allocation option")}
 		}
-		if fteid.Flags&2 != 0 {
+		// TS 29.244 V20.1.0 clause 8.2.3: CHOOSE offers address
+		// families; an IPv4 tunnel interface may satisfy V4|V6 with V4.
+		if fteid.HasCh() && fteid.Flags&1 == 0 || !fteid.HasCh() && fteid.Flags&2 != 0 {
 			return unsupportedRuleIE(ie.FTEID)
 		}
 		if !fteid.HasCh() && fteid.TEID == 0 {

@@ -211,3 +211,8 @@ unshare and the required BPF privileges. The program-load tests exercise the run
 the minimum also has a separate KVM boot and packet-test script. See
 [minimum-kernel validation](minimum-kernel.md) for inputs and commands. An
 individual host-kernel run does not establish minimum-kernel support.
+
+F-TEID CHOOSE offers of both V4 and V6 allocate IPv4 on the current IPv4-only
+tunnel interfaces (TS 29.244 V20.1.0 clause 8.2.3). IPv6-only offers reject
+with Cause 76. User-plane IPv6 payloads are supported independently of the
+outer tunnel family.
