@@ -116,11 +116,11 @@ eUPF supports FAR rules in PDR. Only one FAR rule per PDR is supported.
 
 #### QER support
 
-eUPF supports QER rules in PDR. Currently only one QER rule per PDR is supported.
+eUPF supports QER rules in PDR. Up to four QERs per PDR apply in binding order.
 
 #### SDF filters support
 
-eUPF is able to apply SDF filters in PDR. Currently only one SDF filter per GTP tunnel is supported.
+Each PDR supports up to five SDF filters, including session-assigned IPv4 and IPv6 prefixes. Up to four ordered PDRs share a tunnel or UE-address key; this also bounds QoS flows sharing an N3 F-TEID. See the [rule capability audit](docs/rule-capabilities.md) for supported IEs and rejected features.
 
 #### GTP path management
 
@@ -199,7 +199,7 @@ docker build --target cli -t local/eupf-cli:latest .
 Run the application image with the capabilities and mounts shown in the quick
 start above. For CLI usage, run `docker run --rm local/eupf-cli:latest eupf --help`.
 Enable packet logging with `--build-arg BPF_ENABLE_LOG=1`. See
-[data-plane behaviour and limits](docs/dataplane.md).
+[data-plane behaviour and limits](docs/dataplane.md), [rule capabilities](docs/rule-capabilities.md), and [minimum-kernel tests](docs/minimum-kernel.md).
 
 ### Build and test from source
 

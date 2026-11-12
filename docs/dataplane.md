@@ -39,17 +39,25 @@ integration work.
 
 URR counters and QER rates use the validated IP PDU length, including its IP
 header and excluding GTP optional headers, outer IP/UDP headers, Ethernet and
-padding. Volume is counted after gate and bitrate enforcement (TS 29.244
+padding. Volume is counted after QER gate and bitrate enforcement (TS 29.244
 V20.1.0 clause 5.2.2.2.1). Kernel increments are atomic across CPUs. Updating a
-URR configuration preserves live counters. Session transactions close a shared
-admission gate and wait for admitted XDP invocations to finish. They detach all
-references before reading final URR counters, clear the slot, then release its
-ID after commit. Tail calls release admission before the next invocation.
-A closed gate drops known user-plane traffic during the transaction; it does
-not buffer it. Control traffic and unowned N6 destinations retain their ordinary
-paths. This is a whole-UPF pause, bounded to a one-second drain wait, rather
-than a per-session concurrency guarantee. A failed rollback leaves admission
-closed and rejects further transactions until restart.
+URR configuration preserves live counters. Session transactions serialize control-plane journals without touching a shared
+packet-admission counter. Dependencies are written before a PDR's complete
+replacement bucket is published; obsolete keys are removed afterwards. Old
+FAR/QER slots remain reserved until a batched kernel RCU grace period completes.
+URR detachment waits for old invocations before reading final usage and clearing
+its slot. A dummy map-in-map update invokes the kernel's BPF synchronization;
+there are no packet-path instructions for this synchronization. Native and
+generic XDP, test runs and tail calls remain inside the kernel RCU reader.
+Local-tunnel recursion and Router Advertisement continuation use tail calls.
+A failed rollback poisons control-plane admission until restart; packets keep
+using the remaining map state. A grace-period failure retains retired slots.
+
+The current implementation waits synchronously for final usage and removed
+keys. Normal kernel RCU latency can therefore limit deletion throughput; a
+background queue batches FAR/QER reclamation but does not batch synchronous
+PFCP responses across requests. This is a performance limitation, not an
+accepted throughput claim.
 
 Every bound QER applies in received binding order, up to four per PDR
 (TS 29.244 V20.1.0 clause 5.4.4). Each gate and bitrate is enforced; a later
@@ -89,8 +97,10 @@ of independently replaceable PDRs (TS 29.244 V20.1.0 clauses 5.2.1, 5.2.1A and
 Interface, UE address constraint, QFI and SDF tuple constraints are conjunctive.
 Repeated SDF filters and repeated QFIs are alternatives within their own field.
 Access PDRs reverse the CP description's addresses and ports (clause 5.2.1A.2A).
-The unresolved `assigned` address token and unsupported protocol numbers return
-Service not supported, rather than widening a match.
+`assigned` resolves against the session's IPv4 address and/or IPv6 prefix.
+An unavailable address family never widens the match. Malformed optional SDF
+Flow Descriptions are logged and ignored (clause 7.6.8); valid descriptions that
+request unsupported semantics return Service not supported with Failed Rule ID.
 A known key with no matching PDR drops. Unowned N6 destinations, non-IP traffic,
 and explicitly documented kernel slow paths retain XDP_PASS; an unknown GTP
 TEID follows the Error Indication procedure above. IPv6 prefixes use an LPM
@@ -99,7 +109,7 @@ overlapping prefixes within one session are currently rejected as unsupported,
 since a longest-prefix lookup cannot preserve precedence across both lists.
 Identical prefixes can hold the ordinary independent PDR list.
 
-Fixed bounds are four PDRs per key, two SDF filters, eight QFIs, four QERs and
+Fixed bounds are four PDRs per key, five SDF filters, eight QFIs, four QERs and
 three URRs per PDR, and 64 rules of each type per session.
 Ownership, key/prefix intersections and key capacity are checked against the
 final draft before slot reservation or map writes. Map capacities are
@@ -107,7 +117,7 @@ configured separately and array slot zero is reserved. Capacity failures return
 No resources available; unsupported standard rule fields return Service not
 supported, with Failed Rule ID and Offending IE where applicable. No list is
 silently truncated. Diagnostic PDR GETs return a session ID and ordered rules;
-direct REST map PUTs return 405. Session displays show logical per-session
+direct REST map PUT routes are absent. Session displays show logical per-session
 rule IDs, keeping internal array slots separate.
 
 The URR subset measures volume after QoS, requires a positive total-volume
@@ -126,10 +136,13 @@ chosen resources appear in Created PDR; allocations through Update PDR use
 Updated PDR.
 
 PFCP mutations validate into a private session and resource view, reserve every
-new slot, detach all changing PDRs, then journal exact previous map values
-while admission is closed.
-Rollback restores QER policer runtime and URR counters as well as bindings and
-allocator bitmaps. The existing PFCP state lock serializes session mutations,
+new slot, write dependencies, publish final PDR buckets, detach obsolete
+references, and retire unreachable slots. The journal records actual map
+publications. Rollback restores previous bindings and values, waits for any
+invocation that saw the failed draft, and releases only newly allocated slots.
+It does not replace allocator snapshots that asynchronous reclamation may have
+updated. Live URR configuration updates preserve counters throughout.
+The existing PFCP state lock serializes session mutations,
 association cleanup and snapshots; diagnostic map readers also exclude the
 journal. Local SEIDs are allocated by the shared resource manager across N4/Sxa/Sxb
 and never wrap. A shared reservation lock serializes private pool snapshots
@@ -154,8 +167,14 @@ Core-side GTP ingress requires distinct N3 and N9 addresses; shared addresses
 cannot distinguish this match field. Only IPv4/UDP/GTP-U outer creation is
 supported. Spare bits are ignored; named unsupported controls are rejected.
 
-EPC/5GS deployments must enable FTUP; CP allocation
-mode remains available in configuration and does not satisfy clause 5.5.1.
+EPC and 5GC always advertise FTUP and allocate F-TEIDs in the UP function
+(clause 5.5.1). A new CP-allocated F-TEID receives Cause 71 unless RESTI permits
+restoration. There is no FTUP configuration mode.
+
+Network Instance names admitted by `allowed_apns` are aliases of the same
+kernel routing domain. An unconfigured name is rejected with Cause 73, Failed
+Rule ID and Offending IE 22. No network-instance isolation is provided. See the
+[IE capability and bound audit](rule-capabilities.md).
 
 Map capacities are configured before Load. Live resizing returns an error
 without changing handles, instructions or data. All map buffers use bpf2go
@@ -168,5 +187,6 @@ take effect immediately.
 Tests enter private network and mount namespaces and create their own permanent
 neighbors. Run them inside the privileged development image with iproute2,
 unshare and the required BPF privileges. The program-load tests exercise the running kernel;
-they do not establish support on an unavailable minimum kernel. The README
-names Linux 5.15.0-25-generic as its minimum tested version.
+the minimum also has a separate KVM boot and packet-test script. See
+[minimum-kernel validation](minimum-kernel.md) for inputs and commands. An
+individual host-kernel run does not establish minimum-kernel support.
