@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 
 	cilium "github.com/cilium/ebpf"
 	"github.com/gopacket/gopacket"
@@ -64,7 +63,7 @@ func loadDatapath(t *testing.T) *BpfObjects {
 
 func putDatapath[T any](t *testing.T, put func(interface{}, interface{}) error, key uint32, value *T) {
 	t.Helper()
-	if err := put(key, unsafe.Pointer(value)); err != nil {
+	if err := put(key, value); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -115,14 +114,18 @@ func gtpDatapath(t *testing.T, inner, optional []byte, flags byte, options bool)
 	return outerDatapath(t, g, options)
 }
 
-func outerDatapath(t *testing.T, g []byte, options bool) []byte {
+func outerDatapath(t *testing.T, g []byte, options bool, sourcePorts ...layers.UDPPort) []byte {
 	t.Helper()
 	ip := &layers.IPv4{Version: 4, TTL: 64, Protocol: layers.IPProtocolUDP,
 		SrcIP: net.IP{192, 0, 2, 2}, DstIP: net.IP{192, 0, 2, 1}}
 	if options {
 		ip.Options = []layers.IPv4Option{{OptionType: 1}, {OptionType: 1}, {OptionType: 1}, {OptionType: 1}}
 	}
-	u := &layers.UDP{SrcPort: 2152, DstPort: 2152}
+	sourcePort := layers.UDPPort(2152)
+	if len(sourcePorts) > 0 {
+		sourcePort = sourcePorts[0]
+	}
+	u := &layers.UDP{SrcPort: sourcePort, DstPort: 2152}
 	if err := u.SetNetworkLayerForChecksum(ip); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +166,7 @@ func runDatapath(t *testing.T, b *BpfObjects, packet []byte, context ...*datapat
 		}
 		t.Logf("capture=%s", f.Name())
 		w := pcapgo.NewWriter(f)
-		if err := w.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
+		if err := w.WriteFileHeader(262144, layers.LinkTypeEthernet); err != nil {
 			t.Fatal(err)
 		}
 		for i, p := range [][]byte{packet, out} {

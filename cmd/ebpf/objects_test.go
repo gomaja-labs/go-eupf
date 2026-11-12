@@ -11,7 +11,6 @@ import (
 	"net"
 	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -181,13 +180,13 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 	far := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&far)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &far); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
-	if err := bpfObjects.PdrMapTeidIp4.Put(teid, unsafe.Pointer(&pdr)); err != nil {
+	if err := bpfObjects.PdrMapTeidIp4.Put(teid, &pdr); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 
@@ -315,13 +314,13 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farDrop)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(2), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -409,10 +408,10 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 0, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -483,13 +482,13 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(2), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -575,13 +574,13 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farDrop)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(2), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -687,13 +686,13 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.FarMap.Put(uint32(2), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(2), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -776,10 +775,10 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 		TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -873,10 +872,10 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 		TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 
@@ -991,10 +990,10 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 		TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
-	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
+	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
 	}
-	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
+	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
 	if err := bpfObjects.PutPdrDownlink(net.ParseIP("fe80::1:0:8e11:2f19"), pdr); err != nil {

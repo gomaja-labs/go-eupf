@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"syscall"
-	"unsafe"
 
 	"github.com/cilium/ebpf"
 
@@ -80,7 +79,7 @@ func (bpfObjects *BpfObjects) PutPdrUplink(teid uint32, pdrInfo PdrInfo) error {
 	} else {
 		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
 	}
-	return bpfObjects.PdrMapTeidIp4.Put(teid, unsafe.Pointer(&pdrToStore))
+	return bpfObjects.PdrMapTeidIp4.Put(teid, &pdrToStore)
 }
 
 func (bpfObjects *BpfObjects) PutPdrDownlink(ip net.IP, pdrInfo PdrInfo) error {
@@ -107,7 +106,7 @@ func (bpfObjects *BpfObjects) PutPdrDownlink(ip net.IP, pdrInfo PdrInfo) error {
 		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
 	}
 
-	return putFunc(ip, unsafe.Pointer(&pdrToStore))
+	return putFunc(ip, &pdrToStore)
 }
 
 func (bpfObjects *BpfObjects) UpdatePdrUplink(teid uint32, pdrInfo PdrInfo) error {
@@ -121,7 +120,7 @@ func (bpfObjects *BpfObjects) UpdatePdrUplink(teid uint32, pdrInfo PdrInfo) erro
 	} else {
 		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
 	}
-	return bpfObjects.PdrMapTeidIp4.Update(teid, unsafe.Pointer(&pdrToStore), ebpf.UpdateExist)
+	return bpfObjects.PdrMapTeidIp4.Update(teid, &pdrToStore, ebpf.UpdateExist)
 }
 
 func (bpfObjects *BpfObjects) UpdatePdrDownlink(ipv4 net.IP, pdrInfo PdrInfo) error {
@@ -138,7 +137,7 @@ func (bpfObjects *BpfObjects) UpdatePdrDownlink(ipv4 net.IP, pdrInfo PdrInfo) er
 	} else {
 		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
 	}
-	return m.Update(key, unsafe.Pointer(&pdrToStore), ebpf.UpdateExist)
+	return m.Update(key, &pdrToStore, ebpf.UpdateExist)
 }
 
 func (bpfObjects *BpfObjects) DeletePdrUplink(teid uint32) error {
@@ -210,7 +209,7 @@ func (bpfObjects *BpfObjects) NewFar(farInfo FarInfo) (uint32, error) {
 		Remoteip:              farInfo.RemoteIP,
 		TransportLevelMarking: farInfo.TransportLevelMarking,
 	}
-	if err := bpfObjects.FarMap.Put(internalId, unsafe.Pointer(&farToStore)); err != nil {
+	if err := bpfObjects.FarMap.Put(internalId, &farToStore); err != nil {
 		bpfObjects.ReleaseFAR(internalId)
 		return 0, fmt.Errorf("create FAR: %w", err)
 	}
@@ -221,7 +220,7 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	log.Debug().Msgf("EBPF: Get FAR: internalId=%d", internalId)
 
 	farToStore := IpEntrypointFarInfo{}
-	if err := bpfObjects.FarMap.Lookup(internalId, unsafe.Pointer(&farToStore)); err != nil {
+	if err := bpfObjects.FarMap.Lookup(internalId, &farToStore); err != nil {
 		return FarInfo{}, err
 	}
 
@@ -248,7 +247,7 @@ func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) erro
 		Remoteip:              farInfo.RemoteIP,
 		TransportLevelMarking: farInfo.TransportLevelMarking,
 	}
-	return bpfObjects.FarMap.Update(internalId, unsafe.Pointer(&farToStore), ebpf.UpdateExist)
+	return bpfObjects.FarMap.Update(internalId, &farToStore, ebpf.UpdateExist)
 }
 
 func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
@@ -256,7 +255,7 @@ func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
 		return fmt.Errorf("cannot delete reserved Far 0")
 	}
 	log.Debug().Msgf("EBPF: Delete FAR: intenalId=%d", intenalId)
-	if err := bpfObjects.FarMap.Update(intenalId, unsafe.Pointer(&IpEntrypointFarInfo{}), ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
+	if err := bpfObjects.FarMap.Update(intenalId, &IpEntrypointFarInfo{}, ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
 		return err
 	}
 	bpfObjects.ReleaseFAR(intenalId)
@@ -289,7 +288,7 @@ func (bpfObjects *BpfObjects) NewQer(qerInfo QerInfo) (uint32, error) {
 		UlStart:          0,
 		DlStart:          0,
 	}
-	if err := bpfObjects.QerMap.Put(internalId, unsafe.Pointer(&qerToStore)); err != nil {
+	if err := bpfObjects.QerMap.Put(internalId, &qerToStore); err != nil {
 		bpfObjects.ReleaseQER(internalId)
 		return 0, fmt.Errorf("create QER: %w", err)
 	}
@@ -309,7 +308,7 @@ func (bpfObjects *BpfObjects) UpdateQer(internalId uint32, qerInfo QerInfo) erro
 		UlStart:          0,
 		DlStart:          0,
 	}
-	return bpfObjects.QerMap.Update(internalId, unsafe.Pointer(&qerToStore), ebpf.UpdateExist)
+	return bpfObjects.QerMap.Update(internalId, &qerToStore, ebpf.UpdateExist)
 }
 
 func (bpfObjects *BpfObjects) DeleteQer(internalId uint32) error {
@@ -317,7 +316,7 @@ func (bpfObjects *BpfObjects) DeleteQer(internalId uint32) error {
 		return fmt.Errorf("cannot delete reserved Qer 0")
 	}
 	log.Debug().Msgf("EBPF: Delete QER: internalId=%d", internalId)
-	if err := bpfObjects.QerMap.Update(internalId, unsafe.Pointer(&IpEntrypointQerInfo{}), ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
+	if err := bpfObjects.QerMap.Update(internalId, &IpEntrypointQerInfo{}, ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
 		return err
 	}
 	bpfObjects.ReleaseQER(internalId)
@@ -344,7 +343,7 @@ func (bpfObjects *BpfObjects) NewUrr(urrInfo UrrInfo) (uint32, error) {
 		Dl: urrInfo.DownlinkVolume,
 	}
 
-	if err := bpfObjects.UrrMap.Put(internalId, unsafe.Pointer(&urrToStore)); err != nil {
+	if err := bpfObjects.UrrMap.Put(internalId, &urrToStore); err != nil {
 		bpfObjects.ReleaseURR(internalId)
 		return 0, fmt.Errorf("create URR: %w", err)
 	}
@@ -368,7 +367,7 @@ func (bpfObjects *BpfObjects) GetUrr(internalId uint32) (UrrInfo, error) {
 	log.Debug().Msgf("EBPF: Get URR: internalId=%d", internalId)
 
 	urrToStore := IpEntrypointUrrInfo{}
-	if err := bpfObjects.UrrMap.Lookup(internalId, unsafe.Pointer(&urrToStore)); err != nil {
+	if err := bpfObjects.UrrMap.Lookup(internalId, &urrToStore); err != nil {
 		return UrrInfo{}, err
 	}
 
@@ -386,13 +385,13 @@ func (bpfObjects *BpfObjects) DeleteUrr(internalId uint32) (UrrInfo, error) {
 	log.Debug().Msgf("EBPF: Delete URR: internalId=%d", internalId)
 
 	urrToStore := IpEntrypointUrrInfo{}
-	if err := bpfObjects.UrrMap.Lookup(internalId, unsafe.Pointer(&urrToStore)); err != nil {
+	if err := bpfObjects.UrrMap.Lookup(internalId, &urrToStore); err != nil {
 		if isKeyAbsent(err) {
 			return UrrInfo{}, nil
 		}
 		return UrrInfo{}, err
 	}
-	if err := bpfObjects.UrrMap.Update(internalId, unsafe.Pointer(&IpEntrypointUrrInfo{}), ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
+	if err := bpfObjects.UrrMap.Update(internalId, &IpEntrypointUrrInfo{}, ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
 		return UrrInfo{}, err
 	}
 

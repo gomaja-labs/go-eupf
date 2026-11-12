@@ -5,7 +5,6 @@ package ebpf
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
@@ -81,7 +80,7 @@ func ListQerMapContents(m *ebpf.Map) ([]QerMapElement, error) {
 
 	var value IpEntrypointQerInfo
 	for i := uint32(0); i < mapInfo.MaxEntries; i++ {
-		err := m.Lookup(i, unsafe.Pointer(&value))
+		err := m.Lookup(i, &value)
 		if err != nil {
 			return nil, err
 		}

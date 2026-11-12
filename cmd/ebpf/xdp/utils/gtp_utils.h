@@ -135,6 +135,10 @@ static __noinline enum xdp_action reply_gtp_control(struct packet_context *ctx, 
     struct gtpuhdr *gtp=(void *)(udp+1);
     if ((const char *)gtp+14>end) return XDP_ABORTED;
     swap_mac(eth);swap_ip(ip);swap_port(udp);
+    // TS 29.281 V19.2.0 clauses 4.4.2.2, 4.4.2.4 and 4.4.2.5:
+    // only Echo Response returns to the request's source port. Diagnostic
+    // indications target the registered GTP-U port even for an ephemeral sender.
+    if (type != GTPU_ECHO_RESPONSE) udp->dest=bpf_htons(GTP_UDP_PORT);
     ip->ttl=64;ip->tot_len=bpf_htons(ihl+sizeof(*udp)+size);
     ip->check=0;ip->check=ipv4_header_checksum(ip,end);
     udp->len=bpf_htons(sizeof(*udp)+size);

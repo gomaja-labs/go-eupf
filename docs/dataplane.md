@@ -24,7 +24,9 @@ A valid GTP Echo Request with S=1 receives a fresh Echo Response containing its
 sequence number and mandatory Recovery=0, independent of request IEs and
 Ethernet padding (TS 29.281 V19.2.0 clauses 7.2.2 and 8.2). Unknown nonzero
 TEIDs receive Error Indication with the triggering TEID and destination address;
-zero TEIDs are silently discarded (clause 7.3.1). Error Indications and Supported
+zero TEIDs are silently discarded (clause 7.3.1). Diagnostic replies target UDP
+2152; Echo Response returns to the request source port (clauses 4.4.2.2, 4.4.2.4
+and 4.4.2.5). Error Indications and Supported
 Extension Headers Notifications share a global 100 responses/second budget to
 bound reflection. Echo Responses are not policed by this budget.
 
@@ -72,8 +74,9 @@ Source Interface and QFI constraints need coordinated control-plane and map
 changes. Do not treat successful SDF tuple matching as full PDI compliance.
 
 Map capacities are configured before Load. Live resizing returns an error
-without changing handles, instructions or data. All raw map buffers use bpf2go
-value types; REST DTOs are converted explicitly. Route-cache build flags retain
+without changing handles, instructions or data. All map buffers use bpf2go
+value types and typed map calls so the library checks their size; REST DTOs are
+converted explicitly. Route-cache build flags retain
 map definitions but forwarding always consults the current FIB: cached results
 cannot safely replace live MTU, route and neighbor checks without invalidation.
 

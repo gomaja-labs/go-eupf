@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+
+	"github.com/gopacket/gopacket/layers"
 )
 
 func TestUnknownTunnelErrorIndication(t *testing.T) {
@@ -121,5 +123,40 @@ func TestIntermediateUnknownExtensionComprehension(t *testing.T) {
 	action, out := runDatapath(t, b, packet)
 	if action != 4 || len(out) < 58 || out[43] != 255 || out[53] != 0xa0 {
 		t.Errorf("intermediate discarded endpoint-only extension: action=%d", action)
+	}
+}
+
+func TestControlReplyDestinationPort(t *testing.T) {
+	for _, kind := range []string{"echo", "error", "extension"} {
+		t.Run(kind, func(t *testing.T) {
+			b := loadDatapath(t)
+			g := make([]byte, 8)
+			g[0], g[1] = 0x30, 255
+			binary.BigEndian.PutUint32(g[4:8], 10)
+			want := uint16(2152)
+			switch kind {
+			case "echo":
+				g[0], g[1] = 0x32, 1
+				g = append(g, 0x12, 0x34, 0, 0)
+				want = 43210
+			case "error":
+				if err := b.PdrMapTeidIp4.Delete(uint32(10)); err != nil {
+					t.Fatal(err)
+				}
+				g = append(g, udpDatapath(t, false)...)
+			case "extension":
+				g[0] = 0x34
+				g = append(g, 0, 0, 0, 0xe0, 1, 0, 0, 0)
+				g = append(g, udpDatapath(t, false)...)
+			}
+			binary.BigEndian.PutUint16(g[2:4], uint16(len(g)-8))
+			action, out := runDatapath(t, b, outerDatapath(t, g, false, layers.UDPPort(43210)))
+			if action != 3 || len(out) < 42 {
+				t.Fatalf("no control response: action=%d", action)
+			}
+			if port := binary.BigEndian.Uint16(out[36:38]); port != want {
+				t.Errorf("%s destination port=%d, want %d", kind, port, want)
+			}
+		})
 	}
 }

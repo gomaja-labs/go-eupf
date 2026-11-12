@@ -7,7 +7,6 @@ package rest
 import (
 	"net/http"
 	"strconv"
-	"unsafe"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -43,7 +42,7 @@ func (h *ApiHandler) getFarValue(c *gin.Context) {
 	}
 
 	var value ebpf.IpEntrypointFarInfo
-	if err = h.BpfObjects.FarMap.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
+	if err = h.BpfObjects.FarMap.Lookup(uint32(id), &value); err != nil {
 		log.Printf("Error reading map: %s", err.Error())
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -95,7 +94,7 @@ func (h *ApiHandler) setFarValue(c *gin.Context) {
 		TransportLevelMarking: farElement.TransportLevelMarking,
 	}
 
-	if err := h.BpfObjects.FarMap.Put(uint32(id), unsafe.Pointer(&value)); err != nil {
+	if err := h.BpfObjects.FarMap.Put(uint32(id), &value); err != nil {
 		log.Printf("Error writing map: %s", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

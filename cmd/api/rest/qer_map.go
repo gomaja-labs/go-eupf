@@ -7,7 +7,6 @@ package rest
 import (
 	"net/http"
 	"strconv"
-	"unsafe"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -50,7 +49,7 @@ func (h *ApiHandler) getQerValue(c *gin.Context) {
 
 	var value ebpf.IpEntrypointQerInfo
 
-	if err = h.BpfObjects.QerMap.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
+	if err = h.BpfObjects.QerMap.Lookup(uint32(id), &value); err != nil {
 		log.Printf("Error reading map: %s", err.Error())
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -102,7 +101,7 @@ func (h *ApiHandler) setQerValue(c *gin.Context) {
 		DlMaximumBitrate: qerElement.MaxBitrateDL,
 	}
 
-	if err := h.BpfObjects.QerMap.Put(uint32(id), unsafe.Pointer(&value)); err != nil {
+	if err := h.BpfObjects.QerMap.Put(uint32(id), &value); err != nil {
 		log.Printf("Error writing map: %s", err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

@@ -4,7 +4,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"unsafe"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -47,7 +46,7 @@ func (h *ApiHandler) getUplinkPdrValue(c *gin.Context) {
 	}
 
 	var value ebpf.IpEntrypointPdrInfo
-	if err = h.BpfObjects.PdrMapTeidIp4.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
+	if err = h.BpfObjects.PdrMapTeidIp4.Lookup(uint32(id), &value); err != nil {
 		log.Warn().Err(err).Msgf("can't get pdr from map")
 		c.JSON(http.StatusNotFound, gin.H{"error": "no pdr found"})
 		return
@@ -132,13 +131,13 @@ func (h *ApiHandler) getDownlinkPdrValue(c *gin.Context) {
 	}
 	switch len(ip) {
 	case 4:
-		if err := h.BpfObjects.PdrMapDownlinkIp4.Lookup(ip, unsafe.Pointer(&value)); err != nil {
+		if err := h.BpfObjects.PdrMapDownlinkIp4.Lookup(ip, &value); err != nil {
 			log.Warn().Err(err).Msgf("can't get pdr from ipv4 map")
 			c.JSON(http.StatusNotFound, gin.H{"error": "no pdr found"})
 			return
 		}
 	case 16:
-		if err := h.BpfObjects.PdrMapDownlinkIp6.Lookup(ip, unsafe.Pointer(&value)); err != nil {
+		if err := h.BpfObjects.PdrMapDownlinkIp6.Lookup(ip, &value); err != nil {
 			log.Warn().Err(err).Msgf("can't get pdr from ipv6 map")
 			c.JSON(http.StatusNotFound, gin.H{"error": "no pdr found"})
 			return
