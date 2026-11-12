@@ -86,6 +86,7 @@ class Peer:
     def __init__(self, process, address="127.0.0.2"):
         self.process = process
         self.address = address
+        self.entity_address = address
         self.sequence = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((address, 0))
@@ -120,7 +121,7 @@ class Peer:
     def establishment_request(self, extra=None):
         return self.packet(pfcp.PFCPSessionEstablishmentRequest(IE_list=[
             pfcp.IE_NodeId(id_type=0, ipv4=self.address),
-            pfcp.IE_FSEID(v4=1, seid=self.sequence+1, ipv4=self.address),
+            pfcp.IE_FSEID(v4=1, seid=self.sequence+1, ipv4=self.entity_address),
 
         ] + ([far(), pdr()] if extra is None else extra)), seid=0)
 

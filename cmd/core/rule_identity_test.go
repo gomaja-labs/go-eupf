@@ -33,7 +33,7 @@ func TestRuleIdentityRejectedBeforeMutation(t *testing.T) {
 			conn, peer := PreparePfcpConnection(t)
 			session := NewSession(2, 42, "", "", false)
 			session.NewFar(1, 10, session.GetFar(1).FarInfo)
-			conn.NodeAssociations[peer].Sessions[2] = session
+			conn.GetAssociation(peer).Sessions[2] = session
 			before := cloneSession(session)
 			response, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(2, 1, tt.ies...), peer)
 			if err != nil {

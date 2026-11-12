@@ -16,6 +16,8 @@ type NodeAssociation struct {
 	RecoveryTimestamp time.Time
 	CPFeatures        []byte
 	endpoint          string
+	setupSource       string
+	UPFeatures        []byte
 	sessionEntities   map[uint64]string
 	recoveries        map[string]time.Time
 	nextHeartbeat     time.Time

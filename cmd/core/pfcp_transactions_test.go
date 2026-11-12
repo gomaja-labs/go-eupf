@@ -286,10 +286,10 @@ func TestCompletedSequenceCanCarryDifferentRequest(t *testing.T) {
 		calls++
 		return message.NewAssociationUpdateResponse(msg.Sequence(), ie.NewNodeIDFQDN(fmt.Sprintf("result-%d.example", calls)), ie.NewCause(ie.CauseRequestAccepted)), false, nil
 	}}
-	original := protocolWire(t, message.NewAssociationUpdateRequest(1, ie.NewNodeIDFQDN("first.example")))
+	original := protocolWire(t, message.NewAssociationUpdateRequest(1, ie.NewNodeIDFQDN("synthetic.example"), ie.New(4000, []byte{1})))
 	conn.Handle(original, peer.LocalAddr().(*net.UDPAddr))
 	first := readTransaction(t, peer)
-	changed := protocolWire(t, message.NewAssociationUpdateRequest(1, ie.NewNodeIDFQDN("second.example")))
+	changed := protocolWire(t, message.NewAssociationUpdateRequest(1, ie.NewNodeIDFQDN("synthetic.example"), ie.New(4000, []byte{2})))
 	conn.Handle(changed, peer.LocalAddr().(*net.UDPAddr))
 	second := readTransaction(t, peer)
 	if calls != 2 || bytes.Equal(first, second) {

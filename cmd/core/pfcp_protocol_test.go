@@ -239,7 +239,7 @@ func TestProtocolFirstOccurrenceWins(t *testing.T) {
 	if reply == nil {
 		t.Fatal("no association response")
 	}
-	association := conn.NodeAssociations["127.0.0.1"]
+	association := conn.GetAssociation("127.0.0.1")
 	if association == nil || association.ID != "first.example" {
 		t.Fatalf("association %+v", association)
 	}

@@ -29,16 +29,16 @@ func TestSessionEstablishmentRecoveryUsesCPAddressAndRejectsStale(t *testing.T) 
 	if send(2, 10) != nil {
 		t.Fatal("stale establishment received a response instead of being discarded")
 	}
-	if len(conn.NodeAssociations[peer].Sessions) != 1 {
+	if len(conn.GetAssociation(peer).Sessions) != 1 {
 		t.Fatal("stale establishment changed sessions")
 	}
 	if send(3, 30) == nil {
 		t.Fatal("new timestamp discarded")
 	}
-	if got := len(conn.NodeAssociations[peer].Sessions); got != 1 {
+	if got := len(conn.GetAssociation(peer).Sessions); got != 1 {
 		t.Fatalf("restart retained %d sessions", got)
 	}
-	if got := conn.NodeAssociations[peer].recoveries[entity]; !got.Equal(time.Unix(30, 0)) {
+	if got := conn.GetAssociation(peer).recoveries[entity]; !got.Equal(time.Unix(30, 0)) {
 		t.Fatal(got)
 	}
 }

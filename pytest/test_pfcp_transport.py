@@ -102,6 +102,10 @@ def test_retransmitted_deletion_replays_response(peer):
 
 def test_originated_report_retries_and_matches_response(server):
     remote = Peer(server(("--pfcp-request-timeout", "1", "--pfcp-request-retries", "3")))
+    entity = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    entity.bind(("127.0.0.6", 8805))
+    entity.settimeout(3)
+    remote.entity_address = "127.0.0.6"
     try:
         remote.associate()
         seid = remote.session()
@@ -112,18 +116,19 @@ def test_originated_report_retries_and_matches_response(server):
         )
         with urllib.request.urlopen(request, timeout=2) as response:
             assert response.status == 200
-        first, _ = remote.sock.recvfrom(65535)
+        first, _ = entity.recvfrom(65535)
         original = pfcp.PFCP(first)
         assert original.message_type == 56
-        second, _ = remote.sock.recvfrom(65535)
+        second, _ = entity.recvfrom(65535)
         identical = first == second
         assert identical, "originated report retry changed bytes"
-        remote.sock.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=original.seq) /
+        entity.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=original.seq) /
                                   pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=1)])), DESTINATION)
-        remote.sock.settimeout(1.4)
+        entity.settimeout(1.4)
         with pytest.raises(socket.timeout):
-            remote.sock.recvfrom(65535)
+            entity.recvfrom(65535)
     finally:
+        entity.close()
         remote.close()
 
 

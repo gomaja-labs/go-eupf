@@ -88,10 +88,26 @@ capacity for PFCP while forwarding traffic. A delayed receive loop sends each
 configured retry before declaring failure; it does not consume the entire
 budget merely because several timer intervals elapsed during local overload.
 
-The session index currently admits one Node ID per peer IP address. Setup for a
-different Node ID at an occupied address is rejected instead of deleting the
-existing node's sessions. Multiple nodes behind the same translated IP require
-separate peer IPs; transaction response matching still includes the UDP port.
+Associations are indexed by the CP Node ID, independent of source addresses
+(TS 29.244 V20.1.0 clause 5.8.1). Establishment uses the request's Node ID;
+Modification and Deletion resolve the local SEID and its owning association.
+Different Node IDs may share an address. The source allow-list still applies
+before decoding, so every additional CP address must be admitted by that list.
+
+Responses return to the request's source IP and UDP port (clause 4.2.2).
+Originated requests always use destination port 8805. Node requests use the
+Node ID address when it is an IP. For FQDN Node IDs this implementation uses
+the admitted Setup source IP, without a DNS lookup in the receive loop; those
+peers must provide a routable source address, or configure an IP Node ID when
+using NAT (clause 5.8.1 NOTE 2). Setup source ports are never saved as request
+destinations. Heartbeats cover that node endpoint; incoming heartbeat recovery
+is attributed only to an unambiguous known source/entity. Arbitrary source
+addresses are not accumulated as a growing address registry.
+
+Session requests use the session's CP F-SEID address on port 8805 (clause
+4.3.2), including an accepted Modification that changes it. Both IPv4 and IPv6
+are retained; IPv4 is preferred on an IPv4 socket and IPv6 on an IPv6 socket.
+A session's advertised addresses also identify its CP entity for recovery.
 
 The CLI retains every configuration field returned by `GET /config` in `eupf show`
 and backup archives. Archives use the server's YAML key names. Restore checks all

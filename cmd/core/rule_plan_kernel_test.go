@@ -47,7 +47,7 @@ func TestAllMovingPDRsDetachBeforeNewPrefixIsApplied(t *testing.T) {
 	if cause, _ := changed.(*message.SessionModificationResponse).Cause.Cause(); cause != 1 {
 		t.Fatalf("valid shared-prefix replacement rejected with cause %d", cause)
 	}
-	for _, pdr := range conn.NodeAssociations[peer].Sessions[fseid.SEID].PDRs {
+	for _, pdr := range conn.GetAssociation(peer).Sessions[fseid.SEID].PDRs {
 		ones, bits := pdr.PdrInfo.UEIPv6Mask.Size()
 		if ones != 128 || bits != 128 {
 			t.Fatal("old prefix survived")

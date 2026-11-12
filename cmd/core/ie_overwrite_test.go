@@ -142,7 +142,7 @@ func TestSessionOverwrite(t *testing.T) {
 	if nodeIDText(nodeId) != "test-node" {
 		t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 	}
-	if _, ok := pfcpConn.NodeAssociations[remoteIP]; !ok {
+	if pfcpConn.GetAssociation(remoteIP) == nil {
 		t.Errorf("Association not created")
 	}
 
@@ -187,10 +187,10 @@ func TestSessionOverwrite(t *testing.T) {
 	}
 
 	// Check that session PDRs are correct
-	if pfcpConn.NodeAssociations[remoteIP].Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
+	if pfcpConn.GetAssociation(remoteIP).Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
 		t.Errorf("Session 1, got broken")
 	}
-	if pfcpConn.NodeAssociations[remoteIP].Sessions[3].PDRs[1].Ipv4.String() != "2.2.2.2" {
+	if pfcpConn.GetAssociation(remoteIP).Sessions[3].PDRs[1].Ipv4.String() != "2.2.2.2" {
 		t.Errorf("Session 2, got broken")
 	}
 
@@ -215,10 +215,10 @@ func TestSessionOverwrite(t *testing.T) {
 	}
 
 	// Check that session PDRs are correct
-	if pfcpConn.NodeAssociations[remoteIP].Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
+	if pfcpConn.GetAssociation(remoteIP).Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
 		t.Errorf("Session 1, got broken")
 	}
-	if pfcpConn.NodeAssociations[remoteIP].Sessions[3].PDRs[1].Ipv4.String() != "2.2.2.2" {
+	if pfcpConn.GetAssociation(remoteIP).Sessions[3].PDRs[1].Ipv4.String() != "2.2.2.2" {
 		t.Errorf("Session 2, got broken")
 	}
 }

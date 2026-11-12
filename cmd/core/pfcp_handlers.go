@@ -137,7 +137,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		return net.ErrClosed
 	}
 	if completed != nil {
-		current := conn.GetAssociation(addr.IP.String())
+		current := conn.GetAssociation(completed.associationID())
 		if (completed.association != nil || completed.typ == message.MsgTypeHeartbeatRequest) && current != completed.association {
 			conn.stateMu.Unlock()
 			return nil
@@ -154,24 +154,25 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	if incomingMsg.IsRequest() {
 		if failure := validateIncomingRequest(incomingMsg); failure != nil {
 			handlerErr = failure
-			outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
+			outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.responseSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
 		}
 	}
 
 	if handlerErr == nil && incomingMsg.IsRequest() {
 		switch incomingMsg.MessageType() {
 		case message.MsgTypeSessionEstablishmentRequest, message.MsgTypeSessionModificationRequest, message.MsgTypeSessionDeletionRequest:
-			if conn.GetAssociation(addr.IP.String()) == nil {
+			if conn.associationForMessage(incomingMsg, addr.IP.String()) == nil {
 				handlerErr = errNoEstablishedAssociation
-				outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoEstablishedPFCPAssociation, nil)
+				outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.responseSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoEstablishedPFCPAssociation, nil)
 			}
 		}
 	}
+	assoc := conn.associationForMessage(incomingMsg, addr.IP.String())
 	entity := conn.incomingEntity(incomingMsg, addr.IP.String())
 	// Heartbeat responses are deterministic from the immutable local timestamp.
 	// They must remain answerable even when the bounded response cache is full
 	// (clause 6.2.2.2), and unknown peers must not consume cache entries.
-	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil && conn.GetAssociation(addr.IP.String()) != nil
+	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil && assoc != nil
 	if cacheable {
 		wire, found, err := conn.cachedReply(key, digest)
 		if found {
@@ -189,7 +190,6 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	if handlerErr == nil {
 		outgoing, trace, handlerErr = handler(conn, incomingMsg, addr.IP.String())
 		if handlerErr == nil {
-			conn.rememberEndpoint(incomingMsg, addr)
 			conn.rememberSessionEntity(incomingMsg, outgoing, addr.IP.String())
 		}
 	}
@@ -214,7 +214,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			}
 		}
 	}
-	if cacheable && conn.GetAssociation(addr.IP.String()) != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest && handlerErr == nil && conn.GetAssociation(addr.IP.String()) != nil {
+	if cacheable && conn.associationForMessage(incomingMsg, addr.IP.String()) != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest && handlerErr == nil && conn.associationForMessage(incomingMsg, addr.IP.String()) != nil {
 		conn.cacheReply(key, digest, wire, entity)
 	}
 	conn.stateMu.Unlock()
@@ -281,7 +281,7 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 	}
 	printAssociationUpdateRequest(request)
 	node, _ := request.NodeID.NodeID()
-	assoc := conn.GetAssociation(addr)
+	assoc := conn.associationByID(nodeIDText(node))
 	cause := ie.CauseRequestAccepted
 	if assoc == nil || assoc.ID != nodeIDText(node) {
 		cause = ie.CauseNoEstablishedPFCPAssociation

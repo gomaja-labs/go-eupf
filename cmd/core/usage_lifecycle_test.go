@@ -1,6 +1,7 @@
 package core
 
 import (
+	"net"
 	"testing"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
@@ -16,7 +17,7 @@ func TestFinalUsageReportsStartAtZeroPerURR(t *testing.T) {
 		session := NewSession(2, 42, "", "", false)
 		session.NewUrr(11, 1, ebpf.UrrInfo{})
 		session.NewUrr(22, 2, ebpf.UrrInfo{})
-		conn.NodeAssociations[peer].Sessions[2] = session
+		conn.GetAssociation(peer).Sessions[2] = session
 		reply, _, err := HandlePfcpSessionDeletionRequest(conn, message.NewSessionDeletionRequest(2, 1), peer)
 		if err != nil {
 			t.Fatal(err)
@@ -50,7 +51,7 @@ func TestUsagePollPreservesUnreportedOctets(t *testing.T) {
 	conn, peer := PreparePfcpConnectionWithMock(t, maps, config.UpfConfig{})
 	session := NewSession(2, 42, "", "", false)
 	session.NewUrr(11, 1, ebpf.UrrInfo{VolumeThreshold: 10, VolumeTrigger: true})
-	conn.NodeAssociations[peer].Sessions[2] = session
+	conn.GetAssociation(peer).Sessions[2] = session
 	conn.SendReports()
 	if got := session.URRs[11].UrrInfo.UplinkVolume; got != 0 {
 		t.Fatalf("poll discarded %d unreported octets", got)
@@ -68,8 +69,9 @@ func TestUsageReportCapacityKeepsUnreportedUsage(t *testing.T) {
 	conn.maxTransactions = 1
 	conn.transport.pending = map[uint32]*pendingRequest{1: {}}
 	s := NewSession(2, 42, "", "", false)
+	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.1")
 	s.NewUrr(11, 1, ebpf.UrrInfo{VolumeThreshold: 10, VolumeTrigger: true})
-	conn.NodeAssociations[peer].Sessions[2] = s
+	conn.GetAssociation(peer).Sessions[2] = s
 	conn.SendReports()
 	if got := s.URRs[11]; got.ReportSeqNumber != 0 || got.UrrInfo.UplinkVolume != 0 || got.UrrInfo.VolumeThreshold != 10 {
 		t.Fatalf("transport rejection lost usage: %+v", got)
@@ -82,8 +84,9 @@ func TestUsageThresholdKeepsConfigurationAndRearmsExplicitly(t *testing.T) {
 	conn.mapOperations = maps
 	associationSetup(t, conn, "127.0.0.1", 1)
 	s := NewSession(2, 42, "", "", false)
+	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.1")
 	s.NewUrr(11, 1, ebpf.UrrInfo{VolumeThreshold: 10, VolumeTrigger: true})
-	conn.NodeAssociations["127.0.0.1"].Sessions[2] = s
+	conn.GetAssociation("127.0.0.1").Sessions[2] = s
 	conn.SendReports()
 	if got := s.URRs[11].UrrInfo.VolumeThreshold; got != 10 {
 		t.Fatalf("report erased configured threshold: %d", got)
@@ -106,9 +109,10 @@ func TestLastPDRRemovalReportsAndResetsRetainedURR(t *testing.T) {
 	maps := &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 99}}
 	conn, peer := PreparePfcpConnectionWithMock(t, maps, config.UpfConfig{})
 	s := NewSession(2, 42, "", "", false)
+	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.1")
 	s.NewUrr(11, 1, ebpf.UrrInfo{UplinkVolume: 4, VolumeThreshold: 10, VolumeTrigger: true})
 	s.PutPDR(1, SPDRInfo{PdrID: 1, Teid: 10, URRIDs: []uint32{11}, PdrInfo: ebpf.PdrInfo{SessionID: 2, PdrID: 1, UrrIDs: []uint32{1}}})
-	conn.NodeAssociations[peer].Sessions[2] = s
+	conn.GetAssociation(peer).Sessions[2] = s
 	reply, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(2, 1, ie.NewRemovePDR(ie.NewPDRID(1))), peer)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +130,7 @@ func TestLastPDRRemovalReportsAndResetsRetainedURR(t *testing.T) {
 	if volume.TotalVolume != 95 {
 		t.Fatal(volume.TotalVolume)
 	}
-	retained := conn.NodeAssociations[peer].Sessions[2].URRs[11]
+	retained := conn.GetAssociation(peer).Sessions[2].URRs[11]
 	if retained.GlobalId != 1 || retained.ReportSeqNumber != 1 || retained.UrrInfo.UplinkVolume != 0 || maps.urr.UplinkVolume != 0 {
 		t.Fatalf("URR not retained and reset: %+v counters=%+v", retained, maps.urr)
 	}
@@ -135,8 +139,9 @@ func TestLastPDRRemovalReportsAndResetsRetainedURR(t *testing.T) {
 func TestActivatingVolumeTriggerRequiresThreshold(t *testing.T) {
 	conn, peer := PreparePfcpConnection(t)
 	s := NewSession(2, 42, "", "", false)
+	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.1")
 	s.NewUrr(11, 1, ebpf.UrrInfo{})
-	conn.NodeAssociations[peer].Sessions[2] = s
+	conn.GetAssociation(peer).Sessions[2] = s
 	reply, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(2, 1, ie.NewUpdateURR(ie.NewURRID(11), ie.NewReportingTriggers(2, 0))), peer)
 	if err != nil {
 		t.Fatal(err)

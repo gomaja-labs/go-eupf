@@ -113,7 +113,7 @@ func TestAssociationSnapshotIsIndependent(t *testing.T) {
 	session := NewSession(3, 4, "", "", false)
 	session.PDRs[1] = SPDRInfo{Ipv4: net.IPv4(192, 0, 2, 1), PdrInfo: ebpf.PdrInfo{SdfFilter: []ebpf.SdfFilter{{SrcAddress: ebpf.IpWMask{Ip: net.IPv4(192, 0, 2, 2)}}}}}
 	conn.GetAssociation("127.0.0.1").Sessions[3] = session
-	copy := conn.AssociationSnapshots()["127.0.0.1"]
+	copy := conn.AssociationSnapshots()["synthetic.example"]
 	pdr := copy.Sessions[3].PDRs[1]
 	pdr.Ipv4[0]++
 	pdr.PdrInfo.SdfFilter[0].SrcAddress.Ip[0]++
@@ -200,15 +200,15 @@ func TestHeartbeatSourceEntityRestartIsSelective(t *testing.T) {
 	}
 }
 
-func TestDifferentNodeCannotOverwriteOccupiedPeerAddress(t *testing.T) {
+func TestDifferentNodeCoexistsAtOccupiedPeerAddress(t *testing.T) {
 	conn := newProtocolConnection(t)
 	associationSetup(t, conn, "127.0.0.1", 1)
 	old := conn.GetAssociation("127.0.0.1")
 	old.Sessions[3] = NewSession(3, 4, "", "", false)
 	reply, _, _ := HandlePfcpAssociationSetupRequest(conn, message.NewAssociationSetupRequest(2, ie.NewNodeIDFQDN("different.example"), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)), old.Addr)
 	cause, _ := reply.(*message.AssociationSetupResponse).Cause.Cause()
-	if cause == ie.CauseRequestAccepted || conn.GetAssociation(old.Addr) != old || len(old.Sessions) != 1 {
-		t.Fatal("a different Node ID replaced another node's association")
+	if cause != ie.CauseRequestAccepted || conn.associationByID(old.ID) != old || len(old.Sessions) != 1 || conn.GetAssiciationCount() != 2 {
+		t.Fatal("a different Node ID did not coexist without changing another node's sessions")
 	}
 }
 

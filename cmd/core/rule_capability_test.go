@@ -44,7 +44,7 @@ func TestUnsupportedRuleContentRejected(t *testing.T) {
 			if kindErr != nil || idErr != nil || kind != test.kind || id != test.id {
 				t.Fatalf("failed rule=%d/%d errors=%v/%v", kind, id, kindErr, idErr)
 			}
-			if len(conn.NodeAssociations[peer].Sessions) != 0 {
+			if len(conn.GetAssociation(peer).Sessions) != 0 {
 				t.Fatal("unsupported rule left a session")
 			}
 		})

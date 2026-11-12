@@ -170,7 +170,7 @@ func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
 	PfcpRequestTimeouts.WithLabelValues(message.MessageTypeName(req.typ)).Inc()
 	log.Warn().Str("peer", req.peer.String()).Str("message", message.MessageTypeName(req.typ)).Msg("PFCP request retry budget exhausted")
 	if req.typ == message.MsgTypeHeartbeatRequest {
-		conn.heartbeatFailed(req.peer.IP.String(), req.association)
+		conn.heartbeatFailed(req.associationID(), req.association)
 	}
 }
 
@@ -360,7 +360,7 @@ func (conn *PfcpConnection) finishProbeLocked(req *pendingRequest) {
 	if req == nil || req.typ != message.MsgTypeHeartbeatRequest {
 		return
 	}
-	assoc := conn.GetAssociation(req.peer.IP.String())
+	assoc := conn.GetAssociation(req.associationID())
 	if assoc == nil || assoc != req.association {
 		return
 	}
@@ -396,4 +396,11 @@ func (state *transportState) compactResponseIndexes() {
 	clear(state.responseExpiry[len(kept):])
 	state.responseExpiry = kept
 	heap.Init(&state.responseExpiry)
+}
+
+func (req *pendingRequest) associationID() string {
+	if req.association != nil {
+		return req.association.ID
+	}
+	return req.peer.IP.String()
 }

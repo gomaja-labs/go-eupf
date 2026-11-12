@@ -13,7 +13,7 @@ func TestRejectedModificationKeepsAllSessionState(t *testing.T) {
 	conn, peer := PreparePfcpConnection(t)
 	session := NewSession(2, 42, "", "", false)
 	session.NewFar(1, 10, ebpf.FarInfo{Action: 2})
-	conn.NodeAssociations[peer].Sessions[2] = session
+	conn.GetAssociation(peer).Sessions[2] = session
 	before := cloneSession(session)
 	request := message.NewSessionModificationRequest(2, 1,
 		ie.NewRemoveFAR(ie.NewFARID(1)),
@@ -26,7 +26,7 @@ func TestRejectedModificationKeepsAllSessionState(t *testing.T) {
 	if err != nil || cause == ie.CauseRequestAccepted {
 		t.Fatalf("cause=%d err=%v", cause, err)
 	}
-	if got := conn.NodeAssociations[peer].Sessions[2]; !reflect.DeepEqual(got, before) {
+	if got := conn.GetAssociation(peer).Sessions[2]; !reflect.DeepEqual(got, before) {
 		t.Fatalf("rejection changed live session: before=%+v after=%+v", before, got)
 	}
 }

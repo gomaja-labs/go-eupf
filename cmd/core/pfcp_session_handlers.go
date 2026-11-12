@@ -42,8 +42,8 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), convertErrorToIeCause(err)), isTraced, nil
 	}
 
-	association, ok := conn.NodeAssociations[addr]
-	if !ok {
+	association := conn.associationForMessage(req, addr)
+	if association == nil {
 		log.Warn().Msgf("Rejecting Session Establishment Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), isTraced, nil
@@ -58,7 +58,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 				return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 			}
 			previous := association.recoveries[entity]
-			if !conn.observeEntityRecovery(addr, entity, stamp, true) {
+			if !conn.observeEntityRecovery(association.ID, entity, stamp, true) {
 				if stamp.After(previous) {
 					return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), isTraced, nil
 				}
@@ -72,6 +72,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 	}
 	session := NewSession(localSEID, remoteSEID.SEID, imsi, msisdn, isTraced)
+	session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(remoteSEID.IPv4Address), slices.Clone(remoteSEID.IPv6Address)
 	printSessionEstablishmentRequest(req, conn.profile)
 
 	if req.SNSSAI != nil || requestHasQFI(req.CreateQER) {
@@ -131,9 +132,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		return message.NewSessionEstablishmentResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), isTraced, nil
 	}
 
-	// Reassigning is the best I can think of for now
 	association.Sessions[localSEID] = session
-	conn.NodeAssociations[addr] = association
 
 	additionalIEs := []*ie.IE{
 		conn.profile.NodeID(conn.nodeId),
@@ -165,8 +164,8 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	req := msg.(*message.SessionDeletionRequest)
 	log.Debug().Msgf("Got Session Deletion Request from: %s. \n", addr)
 
-	association, ok := conn.NodeAssociations[addr]
-	if !ok {
+	association := conn.associationForMessage(req, addr)
+	if association == nil {
 		log.Warn().Msgf("Rejecting Session Deletion Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
@@ -246,8 +245,8 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	log.Debug().Msgf("Got Session Modification Request from: %s. \n", addr)
 
 	log.Debug().Msgf("Finding association for %s", addr)
-	association, ok := conn.NodeAssociations[addr]
-	if !ok {
+	association := conn.associationForMessage(req, addr)
+	if association == nil {
 		log.Warn().Msgf("Rejecting Session Modification Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		return message.NewSessionModificationResponse(req.SEID(), req.Sequence(), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
@@ -325,6 +324,12 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	// TS 29.244 V20.1.0 clause 6.3.3.3: rejected requests discard every
 	// context update, including the CP F-SEID used for subsequent messages.
 	session.RemoteSEID = newRemoteSEID
+	if req.CPFSEID != nil {
+		if fields, err := req.CPFSEID.FSEID(); err == nil {
+			session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(fields.IPv4Address), slices.Clone(fields.IPv6Address)
+			association.sessionEntities[req.SEID()] = session.controlIP(conn).String()
+		}
+	}
 	association.Sessions[req.SEID()] = session
 
 	additionalIEs := []*ie.IE{

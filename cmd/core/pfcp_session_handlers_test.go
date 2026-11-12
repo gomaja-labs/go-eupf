@@ -83,7 +83,7 @@ func TestAssociationSetup(t *testing.T) {
 	if nodeIDText(nodeId) != "test-node" {
 		t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 	}
-	if _, ok := pfcpConn.NodeAssociations[remoteIP]; !ok {
+	if pfcpConn.GetAssociation(remoteIP) == nil {
 		t.Errorf("Association not created")
 	}
 }
@@ -167,7 +167,7 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 			t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 		}
 	}
-	if _, ok := pfcpConn.NodeAssociations[smfIP]; !ok {
+	if pfcpConn.GetAssociation(smfIP) == nil {
 		t.Errorf("Association not created")
 	}
 
@@ -217,10 +217,10 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 	}
 
 	// Check that session PDRs are correct
-	if pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
+	if pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs[1].Ipv4.String() != "1.1.1.1" {
 		t.Errorf("Session 1, got broken")
 	}
-	if pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs[1].Teid != 10 {
+	if pfcpConn.GetAssociation(smfIP).Sessions[3].PDRs[1].Teid != 10 {
 		t.Errorf("Session 2, got broken")
 	}
 }
@@ -236,11 +236,11 @@ func TestSdfFilterStoreValid(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnection(t)
 	SendDefaulMappingPdrs(t, pfcpConn, smfIP)
 
-	if len(pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs) != 1 {
+	if len(pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs) != 1 {
 		t.Errorf("Session 1, should have already stored 1 PDR")
 	}
 
-	if len(pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs) != 1 {
+	if len(pfcpConn.GetAssociation(smfIP).Sessions[3].PDRs) != 1 {
 		t.Errorf("Session 2, should have already stored 1 PDR")
 	}
 
@@ -294,22 +294,22 @@ func TestSdfFilterStoreValid(t *testing.T) {
 	}
 
 	// Check that session PDRs are correct
-	if pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs[2].Ipv4.String() != "1.1.1.1" {
+	if pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs[2].Ipv4.String() != "1.1.1.1" {
 		t.Errorf("Session 1, got broken")
 	}
 
-	if pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs[2].Teid != 10 {
+	if pfcpConn.GetAssociation(smfIP).Sessions[3].PDRs[2].Teid != 10 {
 		t.Errorf("Session 2, got broken")
 	}
 
 	// Check that SDF filter is stored inside session
-	pdrInfo := pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs[2].PdrInfo
+	pdrInfo := pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs[2].PdrInfo
 	err = CheckSdfFilterEquality(&pdrInfo.SdfFilter[0], fd)
 	if err != nil {
 		t.Error(err.Error())
 	}
 
-	pdrInfo = pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs[2].PdrInfo
+	pdrInfo = pfcpConn.GetAssociation(smfIP).Sessions[3].PDRs[2].PdrInfo
 	err = CheckSdfFilterEquality(&pdrInfo.SdfFilter[0], fd)
 	if err != nil {
 		t.Error(err.Error())
@@ -323,7 +323,7 @@ func TestSdfFilterStoreInvalid(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnection(t)
 	SendDefaulMappingPdrs(t, pfcpConn, smfIP)
 
-	if len(pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs) != 1 {
+	if len(pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs) != 1 {
 		t.Errorf("Session 1, should have already stored 1 PDR")
 	}
 
@@ -350,7 +350,7 @@ func TestSdfFilterStoreInvalid(t *testing.T) {
 	}
 
 	// Check that session PDR wasn't stored? Now it is, just without SDF.
-	if pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs[2].PdrInfo.SdfFilter != nil {
+	if pfcpConn.GetAssociation(smfIP).Sessions[2].PDRs[2].PdrInfo.SdfFilter != nil {
 		t.Errorf("Bad SDF shouldn't be stored")
 	}
 }
@@ -409,7 +409,7 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 		t.Errorf("No error should appear while handling session establishment request. PDR with bad SDF should be skipped?")
 	}
 
-	sdfFilterList := pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs[2].PdrInfo.SdfFilter
+	sdfFilterList := pfcpConn.GetAssociation(smfIP).Sessions[3].PDRs[2].PdrInfo.SdfFilter
 	// Check that session PDR wasn't stored? Now it is, just without SDF.
 	if sdfFilterList == nil || len(sdfFilterList) != 2 {
 		t.Fatal("both SDF filters must be stored")
@@ -695,7 +695,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithURR(t *testing.T) {
 		t.Errorf("Error handling session establishment request: %s", err)
 	}
 
-	if _, exists := pfcpConn.NodeAssociations[smfIP].Sessions[2].URRs[0xf]; !exists {
+	if _, exists := pfcpConn.GetAssociation(smfIP).Sessions[2].URRs[0xf]; !exists {
 		t.Errorf("URR wasn't stored")
 	}
 }
@@ -726,7 +726,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 		t.Errorf("Error handling session modification request: %s", err)
 	}
 
-	if _, exists := pfcpConn.NodeAssociations[smfIP].Sessions[2].URRs[0xf]; !exists {
+	if _, exists := pfcpConn.GetAssociation(smfIP).Sessions[2].URRs[0xf]; !exists {
 		t.Errorf("URR wasn't stored")
 	}
 
@@ -741,7 +741,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 	// if err != nil {
 	// 	t.Errorf("Error handling session modification request: %s", err)
 	// }
-	// if pfcpConn.NodeAssociations[smfIP].Sessions[2].URRs[0xf].UrrInfo.MeasurementMethod != ?  {
+	// if pfcpConn.GetAssociation(smfIP).Sessions[2].URRs[0xf].UrrInfo.MeasurementMethod != ?  {
 	// 	t.Errorf("URR wasn't updated")
 	// }
 
@@ -797,7 +797,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 		t.Errorf("TotalVolume equals %d", vol.TotalVolume)
 	}
 
-	if _, exists := pfcpConn.NodeAssociations[smfIP].Sessions[2].URRs[0xf]; exists {
+	if _, exists := pfcpConn.GetAssociation(smfIP).Sessions[2].URRs[0xf]; exists {
 		t.Errorf("URR wasn't removed")
 	}
 }

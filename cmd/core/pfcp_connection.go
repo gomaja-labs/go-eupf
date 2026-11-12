@@ -304,11 +304,27 @@ func (connection *PfcpConnection) GetDumper() utils.Dumper {
 	return connection.dumper
 }
 
-func (connection *PfcpConnection) GetAssociation(assocAddr string) *NodeAssociation {
-	if assoc, ok := connection.NodeAssociations[assocAddr]; ok {
+// GetAssociation requires stateMu. Identity lookup takes precedence; an address
+// resolves only when it belongs to exactly one association (heartbeats carry no
+// Node ID). Sessions always resolve through their local SEID instead.
+func (connection *PfcpConnection) GetAssociation(identity string) *NodeAssociation {
+	if assoc := connection.associationByID(identity); assoc != nil {
 		return assoc
 	}
-	return nil
+	var match *NodeAssociation
+	for _, assoc := range connection.NodeAssociations {
+		matches := assoc.Addr == identity || assoc.setupSource == identity
+		for _, session := range assoc.Sessions {
+			matches = matches || session.CPFSEIDIPv4.String() == identity || session.CPFSEIDIPv6.String() == identity
+		}
+		if matches {
+			if match != nil {
+				return nil
+			}
+			match = assoc
+		}
+	}
+	return match
 }
 
 func (connection *PfcpConnection) ValidateNetworkInstance(networkInstance string) bool {
@@ -598,7 +614,7 @@ func (connection *PfcpConnection) DeleteAssociation(addr string) {
 	connection.deleteAssociation(addr)
 }
 func (connection *PfcpConnection) deleteAssociation(addr string) {
-	assoc := connection.NodeAssociations[addr]
+	assoc := connection.GetAssociation(addr)
 	if assoc == nil {
 		return
 	}
@@ -613,7 +629,11 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 		delete(assoc.Sessions, id)
 	}
 	if len(assoc.Sessions) == 0 {
-		delete(connection.NodeAssociations, addr)
+		for key, current := range connection.NodeAssociations {
+			if current == assoc {
+				delete(connection.NodeAssociations, key)
+			}
+		}
 		connection.forgetPeer(addr)
 	}
 }
@@ -703,7 +723,7 @@ func (connection *PfcpConnection) SendReports() {
 
 				if urr.UrrInfo.VolumeTrigger && !urr.UrrInfo.VolumeReported && urr.UrrInfo.VolumeThreshold > 0 && uplink+downlink >= urr.UrrInfo.VolumeThreshold {
 					report := message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, urr.ReportSeqNumber, uplink, downlink)...)
-					peer, err := net.ResolveUDPAddr("udp", association.endpoint)
+					peer, err := net.ResolveUDPAddr("udp", net.JoinHostPort(session.controlIP(connection).String(), "8805"))
 					if err != nil {
 						continue
 					}
@@ -751,7 +771,7 @@ func (connection *PfcpConnection) SendReports() {
 					}
 
 					traced := session.IsSessionTraced()
-					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), association.endpoint, traced})
+					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), net.JoinHostPort(session.controlIP(connection).String(), "8805"), traced})
 				}
 			}
 		}
@@ -787,7 +807,7 @@ func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
 				connection,
 				session.RemoteSEID,
 				0,
-				association.Addr,
+				association.ID,
 				session.IsSessionTraced(),
 				pdrList)
 
@@ -810,7 +830,7 @@ func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn str
 					connection,
 					session.RemoteSEID,
 					0,
-					association.Addr,
+					association.ID,
 					session.IsSessionTraced(),
 					pdrList)
 				return true
@@ -908,7 +928,7 @@ func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
+	udpAddr, err := conn.sessionPeer(associationAddr, seid)
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -927,7 +947,7 @@ func SendSessionReportADC(conn *PfcpConnection, seid uint64, sequenceID uint32, 
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
+	udpAddr, err := conn.sessionPeer(associationAddr, seid)
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -955,7 +975,7 @@ func SendAssociationUpdate(
 
 	pfcpMsg := message.NewAssociationUpdateRequest(sequenceID, additionalIEs...)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(assoc.Addr))
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(assoc.ID))
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to resolve address for CP node: %s", assoc.ID)
 		return err
@@ -989,7 +1009,7 @@ func SendDownlinkNotificationReport(
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent DLDR Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
+	udpAddr, err := conn.sessionPeer(associationAddr, seid)
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -1004,7 +1024,7 @@ func SendSessionReportSessionRelease(conn *PfcpConnection, seid uint64, sequence
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
+	udpAddr, err := conn.sessionPeer(associationAddr, seid)
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
