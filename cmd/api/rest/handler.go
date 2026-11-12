@@ -5,7 +5,12 @@
 package rest
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"maps"
 	"net/http"
+	"slices"
+	"sync"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/gomaja-labs/go-eupf/cmd/config"
@@ -29,6 +34,9 @@ import (
 //	@license.url	http://www.apache.org/licenses/LICENSE-2.0.html
 
 type ApiHandler struct {
+	// cfgMu protects the API-owned configuration; editMu serializes runtime edits.
+	cfgMu                  sync.RWMutex
+	editMu                 sync.Mutex
 	BpfObjects             *ebpf.BpfObjects
 	pfcpSrv                map[string]*core.PfcpConnection
 	ForwardPlaneStats      *ebpf.UpfXdpActionStatistic
@@ -47,11 +55,19 @@ func NewApiHandler(
 	gtpPathManager *core.GtpPathManager,
 	releaseChan chan struct{},
 ) *ApiHandler {
+	snapshot := *cfg
+	snapshot.InterfaceName = slices.Clone(cfg.InterfaceName)
+	snapshot.PfcpRemoteNode = slices.Clone(cfg.PfcpRemoteNode)
+	snapshot.SxaRemoteNode = slices.Clone(cfg.SxaRemoteNode)
+	snapshot.SxbRemoteNode = slices.Clone(cfg.SxbRemoteNode)
+	snapshot.GtpPeer = slices.Clone(cfg.GtpPeer)
+	snapshot.ApiAllowedOrigins = slices.Clone(cfg.ApiAllowedOrigins)
+	snapshot.Qci2DscpMapping = maps.Clone(cfg.Qci2DscpMapping)
 	return &ApiHandler{
 		BpfObjects:             bpfObjects,
 		pfcpSrv:                pfcpSrv,
 		ForwardPlaneStats:      forwardPlaneStats,
-		Cfg:                    cfg,
+		Cfg:                    &snapshot,
 		Links:                  links,
 		GtpPathManager:         gtpPathManager,
 		associationReleaseChan: releaseChan,
@@ -63,16 +79,31 @@ func (h *ApiHandler) GetPFCPSrv() map[string]*core.PfcpConnection {
 }
 
 func (h *ApiHandler) InitRoutes() *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
-	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
-	router.Use(cors.New(config))
+	if len(h.Cfg.ApiAllowedOrigins) > 0 {
+		corsConfig := cors.DefaultConfig()
+		corsConfig.AllowOrigins = h.Cfg.ApiAllowedOrigins
+		corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Authorization"}
+		router.Use(cors.New(corsConfig))
+	}
+	token := h.Cfg.ApiToken
+	expected := sha256.Sum256([]byte("Bearer " + token))
+	router.Use(func(c *gin.Context) {
+		if token != "" && !(c.Request.Method == http.MethodGet && c.Request.URL.Path == "/api/v1/health") {
+			supplied := sha256.Sum256([]byte(c.GetHeader("Authorization")))
+			if subtle.ConstantTimeCompare(expected[:], supplied[:]) != 1 {
+				c.Header("WWW-Authenticate", "Bearer")
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+				return
+			}
+		}
+		c.Next()
+	})
 
 	v1 := router.Group("/api/v1")
 	{
-		v1.GET("/health", func(c *gin.Context) {
-			c.IndentedJSON(http.StatusOK, "OK")
-		})
+		v1.GET("/health", health)
 
 		h.initDefaultRoutes(v1)
 	}
@@ -88,7 +119,13 @@ func (h *ApiHandler) initDefaultRoutes(group *gin.RouterGroup) {
 	group.GET("packet_stats", h.displayPacketStats)
 	group.GET("route_stats", h.displayRouteStats)
 
-	config := group.Group("config")
+	config := group.Group("config", func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet {
+			h.editMu.Lock()
+			defer h.editMu.Unlock()
+		}
+		c.Next()
+	})
 	{
 		config.GET("", h.displayConfig)
 		config.POST("/logging_level", h.editLoggingLevelConfig)
@@ -159,9 +196,6 @@ func (h *ApiHandler) InitMetricsRoute() *gin.Engine {
 	core.RegisterMetrics(*h.ForwardPlaneStats, conns)
 
 	router := gin.Default()
-	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
-	router.Use(cors.New(config))
 
 	router.GET("/metrics", func() gin.HandlerFunc {
 		return func(c *gin.Context) {
@@ -172,3 +206,10 @@ func (h *ApiHandler) InitMetricsRoute() *gin.Engine {
 
 	return router
 }
+
+// health reports liveness without disclosing management state.
+// @Summary Liveness
+// @Produce json
+// @Success 200 {string} string "OK"
+// @Router /health [get]
+func health(c *gin.Context) { c.JSON(http.StatusOK, "OK") }

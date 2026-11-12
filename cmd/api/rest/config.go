@@ -5,10 +5,13 @@
 package rest
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/http"
 	"reflect"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
@@ -25,6 +28,8 @@ import (
 //	@Success		200	{object}	config.UpfConfig
 //	@Router			/config [get]
 func (h *ApiHandler) displayConfig(c *gin.Context) {
+	h.cfgMu.RLock()
+	defer h.cfgMu.RUnlock()
 	c.IndentedJSON(http.StatusOK, *h.Cfg)
 }
 
@@ -53,7 +58,8 @@ func (h *ApiHandler) editLoggingLevelConfig(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -80,7 +86,8 @@ func (h *ApiHandler) editLoggingCallerConfig(c *gin.Context) {
 	core.UpdateLogCaller(config.LoggingCaller)
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -105,6 +112,13 @@ func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 		return
 	}
 
+	h.cfgMu.RLock()
+	currentMode := h.Cfg.XDPAttachMode
+	h.cfgMu.RUnlock()
+	if h.Links != nil && len(*h.Links) > 0 && currentMode != config.XDPAttachMode {
+		c.JSON(http.StatusConflict, gin.H{"error": "remove active interfaces before changing xdp_attach_mode"})
+		return
+	}
 	err := core.BindDataPlaneInterfaces(h.BpfObjects, h.Links, config.InterfaceName, config.XDPAttachMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -113,7 +127,8 @@ func (h *ApiHandler) editDataPlaneConfig(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -152,6 +167,21 @@ func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 		return
 	}
 
+	if h.BpfObjects == nil || h.GtpPathManager == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "dataplane unavailable"})
+		return
+	}
+	var dataplane ebpf.IpEntrypointDataplaneConfig
+	if err := h.BpfObjects.GlobalConfig.Get(&dataplane); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	dataplane.N3Ipv4Address = binary.LittleEndian.Uint32(n3Addr.To4())
+	dataplane.N9Ipv4Address = binary.LittleEndian.Uint32(n9Addr.To4())
+	if err := h.BpfObjects.GlobalConfig.Set(dataplane); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	err := core.UpdateDataPlaneAddresses(h.GetPFCPSrv(), h.GtpPathManager, n3Addr, n9Addr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -160,7 +190,8 @@ func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -207,7 +238,8 @@ func (h *ApiHandler) editPFCPN4Config(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -254,7 +286,8 @@ func (h *ApiHandler) editPFCPSxaConfig(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -301,7 +334,8 @@ func (h *ApiHandler) editPFCPSxbConfig(c *gin.Context) {
 	}
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -323,6 +357,7 @@ func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 	var config PFCPTimersConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	pfcpSrv := h.GetPFCPSrv()
@@ -331,7 +366,8 @@ func (h *ApiHandler) editPFCPTimersConfig(c *gin.Context) {
 	core.UpdateHeartbeatTimeout(pfcpSrv, config.HeartbeatTimeout)
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
@@ -353,18 +389,22 @@ func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 	var config GTPPathConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	core.UpdateGTPManager(h.GtpPathManager, config.GtpPeer, config.GtpEchoInterval)
 
 	if err := h.updateConfigFile(config); err != nil {
-		log.Error().Msgf("Error updating config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "runtime edit applied but persistence failed: " + err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
 func (h *ApiHandler) updateConfigFile(data interface{}) error {
+	h.cfgMu.Lock()
+	defer h.cfgMu.Unlock()
 	cfgs := make(map[string]interface{})
 
 	val := reflect.ValueOf(data)
@@ -392,11 +432,6 @@ func (h *ApiHandler) updateConfigFile(data interface{}) error {
 		cfgs[jsonTag] = fieldValue.Interface()
 	}
 
-	if err := h.Cfg.UpdateFile(cfgs); err != nil {
-		log.Error().Err(err).Msgf("failed to update config: %s", err.Error())
-		return err
-	}
-
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:           h.Cfg,
 		WeaklyTypedInput: true,
@@ -409,5 +444,5 @@ func (h *ApiHandler) updateConfigFile(data interface{}) error {
 		return fmt.Errorf("decode to UpfConfig failed: %w", err)
 	}
 
-	return nil
+	return h.Cfg.UpdateFile(cfgs)
 }
