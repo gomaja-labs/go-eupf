@@ -154,7 +154,7 @@ func NewPfcpConnection(
 		return nil, fmt.Errorf("failed to init network instance validator: %s", err.Error())
 	}
 
-	udpConn, err := net.ListenUDP("udp", udpAddr)
+	udpConn, err := listenPFCP(udpAddr)
 	if err != nil {
 		log.Warn().Msgf("Can't listen UDP address: %s", err.Error())
 		return nil, err
@@ -217,7 +217,7 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 
 	var replacement *net.UDPConn
 	if !samePFCPEndpoint(connection.socket().LocalAddr().(*net.UDPAddr), udpAddr) {
-		replacement, err = net.ListenUDP("udp", udpAddr)
+		replacement, err = listenPFCP(udpAddr)
 		if err != nil {
 			return fmt.Errorf("listen updated PFCP endpoint: %w", err)
 		}
