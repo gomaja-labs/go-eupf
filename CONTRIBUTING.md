@@ -72,7 +72,11 @@ The best way to reach us with a question when contributing is to ask on:
 
 ## Development Environment Setup
 
-[Instructions](https://github.com/gomaja-labs/go-eupf?tab=readme-ov-file#running-from-sources)
+Follow [the build and test instructions](README.md#running-from-sources).
+Use the Dockerfile development stage for generation, whole-module lint and
+privileged eBPF tests. Go compilation runs as your user; test executables run
+with sudo inside the container. Run `scripts/ci/check.sh test`, `lint` and
+`smoke` inside that stage before submitting changes.
 
 ## Sign Your Commits
 
@@ -107,7 +111,7 @@ passes these checks, but we also have more criteria than just that before we can
 accept and merge it. We recommend that you check the following things locally
 before you submit your code:
 
-- [x]  It passes tests: run the following command to run all of the tests locally: `go test -v ./cmd/...`
+- [x]  It passes tests: run the following command to run all of the tests locally: `scripts/ci/check.sh test` inside the development container
 - [x]  Impacted code has new or updated tests
 - [x]  Documentation created/updated
 - [x]  All tests succeed when run by the CI build on a pull request before it is merged

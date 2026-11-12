@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /scripts/enb-load-test/enb-emulator
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Paris
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directories:
+      - /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Paris
+    groups:
+      dependencies:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /scripts/enb-load-test/enb-emulator
+      - /docs/deployments/oai-nfapi-sim-compose/nat
+      - /docs/deployments/open5gs-compose-4g/srslte
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Europe/Paris
+    groups:
+      dependencies:
+        patterns: ["*"]

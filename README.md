@@ -2,7 +2,6 @@
 
 [![Build][build-img]][build]
 [![Test][test-img]][test]
-[![Security][security-test-img]][security-test]
 [![License: Apache-2.0][license-img]][license]
 
 </div>
@@ -36,7 +35,7 @@ sudo docker run -d --rm \
 - 📝 *Linux Kernel **5.15.0-25-generic** is the minimum release version it has been tested on. Previous versions are not supported.*
 - ℹ The eBPF filesystem must be mounted in the host filesystem allowing the eUPF to persist eBPF resources across restarts so that the datapath can continue to operate while the eUPF is subsequently restarted or upgraded.
 Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
-- ℹ The eUPF container does not require root or `--privileged`: the required capabilities (NET_ADMIN & SYS_ADMIN) are granted to the eupf binary via file capabilities. The container's bounding set must still include them: add `--cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON` to `docker run` (the Helm chart sets this for you). Without them, exec of the binary fails with `Operation not permitted`
+- ℹ The eupf binary has file capabilities for NET_ADMIN, SYS_RESOURCE, BPF, PERFMON and DAC_OVERRIDE. Docker's bounding set must include them: DAC_OVERRIDE is included by default; add the other four with `--cap-add` as above. A non-root container needs a pre-mounted BPF filesystem (the Helm chart uses this mode). Without the required capabilities, exec of the binary fails with `Operation not permitted`.
 - ℹ During startup eupf sets rlimits, so corresponding privileges are required (ulimit)
 
 <details><summary><i>See startup parameters you might want to change</i></summary>
@@ -177,85 +176,50 @@ eUPF supports sending GTP Echo requests towards neighbour GTP nodes. Every neigh
 
 ### Prerequisites
 
--	Ubuntu 22.04 LTS or higher
--	Git 2.34
--	Golang 1.26+
--	Clang 14.0.0
--	LLVM 14.0
--	Gcc 11.4.0
--	libbpf-dev 0.5.0
--	Swag 1.8.12
--	Linux Kernel 5.15.0-25
+Linux kernel 5.15 or newer and Docker are required. The Dockerfile defines the
+shared build and CI toolchain: Go 1.27.4, Debian bookworm and clang/LLVM 14.
+The minimum supported Go version is the `go` directive in `go.mod` (1.26.0).
+Code generators are pinned by Go tool directives; no global generator install is needed.
 
-**On Ubuntu 22.04**, you can install these using the following commands:
-
-#### Basic dependencies
-```bash
-sudo apt install wget git clang llvm gcc-multilib libbpf-dev
-```
-#### Golang
-ℹ Please skip this step if you have golang 1.26 or newer already installed.
-
-```bash
-sudo rm -rf /usr/local/go
-wget https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
-export PATH="/usr/local/go/bin:${PATH}"
-```
-
-### Manual build
-
-#### Step 1: Install the Swag command line tool for Golang
-This is used to automatically generate RESTful API documentation.
-
-```bash
-go install github.com/swaggo/swag/cmd/swag@v1.8.12
-```
-
-#### Step 2: Clone the eUPF repository and change to the directory
+### Build and run
 
 ```bash
 git clone https://github.com/gomaja-labs/go-eupf.git
 cd go-eupf
+docker build -t local/eupf:latest .
+docker build --target cli -t local/eupf-cli:latest .
 ```
 
-#### Step 3: Run the code generators
+Run the application image with the capabilities and mounts shown in the quick
+start above. For CLI usage, run `docker run --rm local/eupf-cli:latest eupf --help`.
+Enable optional data-plane features at build time with
+`--build-arg BPF_ENABLE_LOG=1 --build-arg BPF_ENABLE_ROUTE_CACHE=1`.
+
+### Build and test from source
+
+Build the development stage with your user ID so generated files remain yours:
 
 ```bash
-go generate -v ./cmd/...
+docker build --target development --build-arg BUILD_UID="$(id -u)" \
+  --build-arg BUILD_GID="$(id -g)" -t eupf-development .
+docker run --rm --init --privileged -v "$PWD:/src" -w /src \
+  eupf-development scripts/ci/check.sh test
+docker run --rm --init -v "$PWD:/src" -w /src \
+  eupf-development scripts/ci/check.sh lint
+docker run --rm --init --privileged -v "$PWD:/src" -w /src \
+  eupf-development scripts/ci/check.sh smoke
 ```
 
-Sometimes during this step you may see errors like:
-```
-running "swag": exec: "swag": executable file not found in $PATH
-```
+The scripts compile as your user and run eBPF test executables with `sudo` inside
+the container's own network namespace. Smoke logs and PFCP captures are written
+under `ci-results/`. No host network or host BPF filesystem is mounted.
 
-Make sure that `swag` was successfuly installed(step 1) and path to swag binary is in the PATH environment variable.
-
-Usually GO Path is supposed to already be on the PATH environment variable.
-Use `export PATH=$(go env GOPATH)/bin:$PATH` otherwise and repeat current step again.
-
-
-#### Step 4: Build eUPF
-
-```bash
-go build -v -o bin/eupf ./cmd/
-```
-#### Step 5: Run the application
-
-Run binary with privileges allowing to increase [memory-ulimits](https://prototype-kernel.readthedocs.io/en/latest/bpf/troubleshooting.html#memory-ulimits)
-
-```bash
-sudo ./bin/eupf
-```
-
-This should start application with the default configuration. Please adjust the contents of the configuration file and the command-line arguments as needed for your application and environment.
-
-### Build docker image
-
-Use this command to build eupf's docker image: `docker build -t local/eupf:latest .`
-
-You can also define several build arguments to configure eUPF image: `docker build -t local/eupf:latest --build-arg BPF_ENABLE_LOG=1 --build-arg BPF_ENABLE_ROUTE_CACHE=1 .`
+For a native build, install Go 1.26 or newer and clang/LLVM 14, gcc-multilib and
+libbpf-dev, then run `go generate ./cmd/...` and `go build -o bin/eupf ./cmd`.
+Run `sudo ./bin/eupf` with appropriate network privileges in a test environment.
+CI tests minimum and stable Go using the same Dockerfile toolchain stage.
+Images are built and scanned on pull requests and published to GHCR only on
+pushes to `main` and tags. CI never creates another branch.
 
 ### Hardware requirements
 
@@ -276,9 +240,7 @@ This project is licensed under the [Apache License 2.0](https://www.apache.org/l
 
 [build]: https://github.com/gomaja-labs/go-eupf/actions/workflows/build.yml
 [build-img]: https://github.com/gomaja-labs/go-eupf/actions/workflows/build.yml/badge.svg
-[test]: https://github.com/gomaja-labs/go-eupf/actions/workflows/test.yml
-[test-img]: https://github.com/gomaja-labs/go-eupf/actions/workflows/test.yml/badge.svg
-[security-test]: https://github.com/gomaja-labs/go-eupf/actions/workflows/security-scan.yml
-[security-test-img]: https://github.com/gomaja-labs/go-eupf/actions/workflows/security-scan.yml/badge.svg
+[test]: https://github.com/gomaja-labs/go-eupf/actions/workflows/ci.yml
+[test-img]: https://github.com/gomaja-labs/go-eupf/actions/workflows/ci.yml/badge.svg
 [license]: https://github.com/gomaja-labs/go-eupf/blob/main/LICENSE
 [license-img]: https://img.shields.io/badge/License-Apache%202.0-blue.svg

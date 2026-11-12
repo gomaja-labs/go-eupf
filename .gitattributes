@@ -4,7 +4,6 @@
 *.yaml text eol=lf
 *.yml text eol=lf
 *.py text eol=lf
-*.robot text eol=lf
 *.sh text eol=lf
 *.env text eol=lf
 *.js text eol=lf

@@ -1,8 +1,13 @@
-FROM golang:1.24
+FROM golang:1.27.4-bookworm
 
+RUN groupadd -g 10001 build \
+    && useradd -m -u 10001 -g build build \
+    && mkdir /app \
+    && chown build:build /app /go
+USER build
 WORKDIR /app
 
-COPY . .
+COPY --chown=build:build . .
 
 RUN go mod download
 

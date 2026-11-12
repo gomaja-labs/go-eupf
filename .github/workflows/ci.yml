@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test / Go ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum
+            go-version-file: go.mod
+          - name: stable
+            go-version: stable
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-version-file: ${{ matrix.go-version-file }}
+      - name: Build shared toolchain
+        run: |
+          docker build --target development --build-arg GO_VERSION="$(go env GOVERSION | sed 's/^go//')" \
+            --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" -t eupf-development .
+      - name: Generate, build, vet and test
+        run: docker run --rm --init --privileged -v "$PWD:/src" -w /src eupf-development scripts/ci/check.sh test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: stable
+      - name: Build shared toolchain
+        run: |
+          docker build --target development --build-arg GO_VERSION="$(go env GOVERSION | sed 's/^go//')" \
+            --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" -t eupf-development .
+      - name: Check generators, modules and lint
+        run: |
+          docker run --rm --init -v "$PWD:/src" \
+            -w /src eupf-development scripts/ci/check.sh lint
+
+  pfcp-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build shared toolchain
+        run: |
+          docker build --target development --build-arg BUILD_UID="$(id -u)" \
+            --build-arg BUILD_GID="$(id -g)" -t eupf-development .
+      - name: PFCP integration smoke in an isolated network namespace
+        run: docker run --rm --init --privileged -v "$PWD:/src" -w /src eupf-development scripts/ci/check.sh smoke
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: pfcp-smoke
+          path: ci-results/

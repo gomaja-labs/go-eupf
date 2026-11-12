@@ -1,44 +1,71 @@
-FROM golang:1.26.10-bookworm AS builder
-
+# The toolchain stage is shared by the application build and CI. Override only
+# GO_VERSION for the minimum-Go CI job; clang stays identical in both builds.
+ARG GO_VERSION=1.27.4
+FROM golang:${GO_VERSION}-bookworm AS toolchain
+ARG BUILD_UID=10001
+ARG BUILD_GID=10001
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y clang-14 llvm-14 gcc-multilib libbpf-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g "${BUILD_GID}" build \
+    && useradd -m -u "${BUILD_UID}" -g build build \
+    && mkdir /app \
+    && chown build:build /app /go
+ENV BPF2GO_CC=clang-14 BPF2GO_STRIP=llvm-strip-14
+USER build
 WORKDIR /app
 
-# Install dependencies for ebpf compilation
-RUN apt update \
-    && apt install --no-install-recommends -y clang llvm gcc-multilib libbpf-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN go install github.com/swaggo/swag/cmd/swag@v1.8.12
-
-COPY go.mod go.sum ./
-COPY cmd cmd
-
-ARG BPF_ENABLE_LOG "0"
-ARG BPF_ENABLE_ROUTE_CACHE "0"
+FROM toolchain AS builder
+COPY --chown=build:build go.mod go.sum ./
+RUN go mod download
+COPY --chown=build:build cmd cmd
+ARG BPF_ENABLE_LOG=0
+ARG BPF_ENABLE_ROUTE_CACHE=0
 RUN BPF_CFLAGS="" \
     && if [ "$BPF_ENABLE_LOG" = "1" ]; then BPF_CFLAGS="$BPF_CFLAGS -DENABLE_LOG"; fi \
     && if [ "$BPF_ENABLE_ROUTE_CACHE" = "1" ]; then BPF_CFLAGS="$BPF_CFLAGS -DENABLE_ROUTE_CACHE"; fi \
     && BPF_CFLAGS=$BPF_CFLAGS go generate -v ./cmd/...
 RUN CGO_ENABLED=0 go build -v -o bin/eupf ./cmd/
 
-FROM alpine:3.22 AS runtime
-LABEL org.opencontainers.image.source="https://github.com/gomaja-labs/go-eupf"
+# Tests compile as the unprivileged build user. Only test executables, mounts,
+# and the integration server run through sudo in a private network namespace.
+FROM toolchain AS development
+COPY --from=golangci/golangci-lint:v2.15.0 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
+USER root
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y sudo python3-venv tcpdump iproute2 procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo 'build ALL=(root) NOPASSWD: ALL' > /etc/sudoers.d/build \
+    && python3 -m venv /opt/py \
+    && /opt/py/bin/pip install --no-cache-dir pytest==8.4.2 scapy==2.6.1
+ENV PATH=/opt/py/bin:/lint-tools:${PATH}
+USER build
 
+FROM toolchain AS cli-builder
+COPY --chown=build:build go.mod go.sum ./
+RUN go mod download
+COPY --chown=build:build cli cli
+RUN CGO_ENABLED=0 go build -o bin/eupf ./cli/app
+
+FROM ubuntu:26.10 AS cli
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y bash-completion \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /root
+ENV PATH=/root:${PATH}
+COPY --from=cli-builder /app/bin/eupf ./eupf
+RUN ./eupf completion > /etc/bash_completion.d/eupf \
+    && echo 'source /etc/bash_completion' >> /root/.bashrc \
+    && echo 'source /etc/bash_completion.d/eupf' >> /root/.bashrc
+CMD ["bash", "-c", "while true; do sleep 60; done"]
+
+FROM alpine:3.24.4 AS runtime
+LABEL org.opencontainers.image.source="https://github.com/gomaja-labs/go-eupf"
 COPY --from=builder /app/bin/ /app/bin/
 COPY --from=builder /app/cmd/docs/swagger.* /app/
 COPY --from=builder /app/cmd/ebpf/zeroentrypoint_bpf.o /app/
-COPY ./entrypoint.sh /app/bin/entrypoint.sh
-
-# File capabilities, so eupf gets what it needs without running as root:
-# BPF and PERFMON load the eBPF programs (kernel 5.8+, the chart requires
-# 5.15), NET_ADMIN attaches XDP and sets routes, SYS_RESOURCE raises
-# RLIMIT_MEMLOCK, and DAC_OVERRIDE creates the pin directory under
-# /sys/fs/bpf, which is owned by root. Whoever runs the image, as root or
-# not, must grant all of them (the chart does; docker needs --privileged or
-# --cap-add): exec of a binary with the effective bit set fails with EPERM
-# when one is missing from the bounding set.
+COPY entrypoint.sh /app/bin/entrypoint.sh
 RUN apk add --no-cache libcap \
     && setcap cap_net_admin,cap_sys_resource,cap_bpf,cap_perfmon,cap_dac_override=ep /app/bin/eupf \
     && apk del libcap
-
-# CMD is overridden if arguments are passed.
-ENTRYPOINT [ "sh", "/app/bin/entrypoint.sh" ]
+ENTRYPOINT ["sh", "/app/bin/entrypoint.sh"]

@@ -7,3 +7,6 @@ README.md
 cmd/eupf/docs
 *.o
 *_bpf.go
+ci-results/
+dumps/
+scripts/enb-load-test/enb-emulator/test_proj

@@ -1,106 +1,85 @@
-name: Build and publish docker image
+name: images
 
 on:
-  workflow_dispatch:
-    inputs:
-      debug:
-        type: boolean
-        description: Enable debug output
-        required: true
-  workflow_call:
   push:
-    branches:
-      - "main"
-    tags:
-      - "*"
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-app:
-    name: Build and Push App
+  images:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
+    timeout-minutes: 45
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with: 
-          driver-opts: |
-            image=moby/buildkit:v0.19.0
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v7.0.1
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata for app
-        id: meta-app
-        uses: docker/metadata-action@v5
+          persist-credentials: false
+      - name: Build both images
+        run: |
+          docker build -t eupf:scan .
+          docker build --target cli -t eupf-cli:scan .
+      - name: Scan filesystem
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.76.2 fs --config trivy.yaml --ignorefile .trivyignore .
+      - name: Scan configuration
+        if: success() || failure()
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.76.2 config --config trivy.yaml --ignorefile .trivyignore .
+      - name: Scan both images
+        if: success() || failure()
+        run: |
+          failed=0
+          for image in eupf:scan eupf-cli:scan; do
+            docker save "$image" -o image.tar
+            docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.76.2 image --config trivy.yaml --ignorefile .trivyignore --input image.tar || failed=1
+            rm image.tar
+          done
+          exit "$failed"
+      - name: Save scanned images
+        if: github.event_name == 'push'
+        run: docker save eupf:scan eupf-cli:scan | gzip > images.tar.gz
+      - uses: actions/upload-artifact@v7.0.2
+        if: github.event_name == 'push'
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,format=long,prefix=
-            type=semver,pattern={{version}}
+          name: images
+          path: images.tar.gz
+          retention-days: 1
 
-      - name: Build and Push Docker Image (App)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta-app.outputs.tags }}
-          labels: ${{ steps.meta-app.outputs.labels }}
-          build-args: |
-            BPF_ENABLE_LOG=${{ fromJSON('["0", "1"]')[github.event.inputs.debug == 'true'] }}
-          #cache-from: type=registry,ref=user/app:cache
-          #cache-to: type=registry,ref=user/app:cache,mode=max
-
-  build-cli:
-    name: Build and Push CLI
+  publish:
+    if: github.event_name == 'push'
+    needs: images
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: read
       packages: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/download-artifact@v8.0.2
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata for CLI
-        id: meta-cli
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cli
-          tags: |
-            type=ref,event=branch
-            type=sha,format=long,prefix=
-            type=semver,pattern={{version}}
-
-      - name: Build and Push Docker Image (CLI)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.cli
-          push: true
-          tags: ${{ steps.meta-cli.outputs.tags }}
-          labels: ${{ steps.meta-cli.outputs.labels }}
+          name: images
+      - name: Load scanned images
+        run: gunzip -c images.tar.gz | docker load
+      - name: Publish on main and tags
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          repository="${REPOSITORY,,}"
+          for suffix in '' '-cli'; do
+            docker tag "eupf$suffix:scan" "ghcr.io/$repository$suffix:$REF_NAME"
+            docker tag "eupf$suffix:scan" "ghcr.io/$repository$suffix:$GITHUB_SHA"
+            docker push "ghcr.io/$repository$suffix:$REF_NAME"
+            docker push "ghcr.io/$repository$suffix:$GITHUB_SHA"
+          done
+          docker logout ghcr.io
