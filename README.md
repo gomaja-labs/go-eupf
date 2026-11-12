@@ -22,13 +22,15 @@ User plane function (UPF) is the "decapsulating and routing" function that extra
 
 ## Quick start guide
 
-Super fast & simple way is to download and run our docker image. It will start standalone eUPF with the default configuration:
+Super fast & simple way is to download and run our docker image. The example exposes the API on host loopback and supplies a fresh management token:
 ```bash
+export UPF_API_TOKEN="$(openssl rand -hex 32)"
 sudo docker run -d --rm \
   --cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
   -v /sys/fs/bpf:/sys/fs/bpf \
   -v /sys/kernel/debug:/sys/kernel/debug:ro \
-  -p 8080:8080 -p 9090:9090 --name your-eupf-def \
+  -e UPF_API_ADDRESS=:8080 -e UPF_API_TOKEN="$UPF_API_TOKEN" \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 --name your-eupf-def \
    ghcr.io/gomaja-labs/go-eupf:main
 ```
 ### Notes
@@ -65,9 +67,9 @@ sudo docker run -d --rm \
   --cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
   -v /sys/fs/bpf:/sys/fs/bpf \
   -v /sys/kernel/debug:/sys/kernel/debug:ro \
-  -p 8081 -p 9091 --name your-eupf-custom \
-  -e UPF_INTERFACE_NAME=[eth0,n6] -e UPF_XDP_ATTACH_MODE=generic \
-  -e UPF_API_ADDRESS=:8081 -e UPF_PFCP_ADDRESS=:8806 \
+  -p 127.0.0.1:8081:8081 -p 127.0.0.1:9091:9091 --name your-eupf-custom \
+  -e UPF_INTERFACE_NAME=eth0,n6 -e UPF_XDP_ATTACH_MODE=generic \
+  -e UPF_API_ADDRESS=:8081 -e UPF_API_TOKEN="$UPF_API_TOKEN" -e UPF_PFCP_ADDRESS=:8806 \
   -e UPF_METRICS_ADDRESS=:9091 -e UPF_PFCP_NODE_ID=10.100.50.241 \
   -e UPF_N3_ADDRESS=10.100.50.233 \
   ghcr.io/gomaja-labs/go-eupf:main
