@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -72,6 +73,15 @@ func safeReleaseConn(conn *core.PfcpConnection) {
 	conn.DeleteAllAssociations()
 }
 
+// newStartupDumper returns capture initialization errors to the startup boundary.
+func newStartupDumper(path string, files, size, packets int) (*utils.PacketDumper, error) {
+	dumper, err := utils.NewPacketDumper(path, files, size, packets)
+	if err != nil {
+		return nil, fmt.Errorf("initialize packet capture: %w", err)
+	}
+	return dumper, nil
+}
+
 func main() {
 	stopper := make(chan os.Signal, 1)
 	signal.Notify(stopper, os.Interrupt, syscall.SIGTERM)
@@ -103,18 +113,17 @@ func main() {
 	defer func() { _ = bpfObjects.Close() }()
 
 	var err error
-	dumper, err := utils.NewPacketDumper(
+	dumper, err := newStartupDumper(
 		"dumps/",
 		config.Conf.TraceMaxDumpFiles,
 		config.Conf.TraceMaxDumpSize,
 		config.Conf.TraceMaxDumpPackets,
 	)
 	if err != nil {
-		log.Error().Msgf("Can't start dumper: %s", err.Error())
+		log.Fatal().Err(err).Msg("Cannot start packet capture")
 	} else {
 		defer dumper.Close(false)
 		go dumper.ReadTraceMap(bpfObjects.TraceMap)
-		go dumper.Write()
 	}
 
 	entrypointConfig := ebpf.IpEntrypointDataplaneConfig{

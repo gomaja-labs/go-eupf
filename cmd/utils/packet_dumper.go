@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopacket/gopacket/layers"
@@ -30,7 +32,12 @@ type PacketDumper struct {
 	sigInInterface   int
 	sigOutInterface  int
 	writeC           chan PacketToWrite
-	packetsWritten   uint64
+	packetsWritten   atomic.Uint64
+	mu               sync.RWMutex
+	closed           bool
+	closeOnce        sync.Once
+	done             chan struct{}
+	reader           *perf.Reader
 	maxFiles         int
 	maxSizeBytes     int
 	maxPackets       int
@@ -49,9 +56,12 @@ func makeNgInterface(name string, linkType layers.LinkType) pcapgo.NgInterface {
 }
 
 func NewPacketDumper(dumpPath string, maxFiles, maxSizeBytes, maxPackets int) (*PacketDumper, error) {
-	dir := filepath.Dir(dumpPath)
-	if dir == "." {
-		dir = os.TempDir()
+	if maxFiles < 0 || maxSizeBytes < 1 || maxPackets < 1 {
+		return nil, fmt.Errorf("invalid capture limits: trace_files, trace_max_size and trace_max_packets")
+	}
+	dir := dumpPath
+	if dir == "" {
+		dir = "."
 	}
 
 	err := os.MkdirAll(dir, os.ModePerm)
@@ -60,18 +70,19 @@ func NewPacketDumper(dumpPath string, maxFiles, maxSizeBytes, maxPackets int) (*
 	}
 
 	dumper := &PacketDumper{
-		writeC:         make(chan PacketToWrite, 1024),
-		packetsWritten: 0,
-		maxFiles:       maxFiles,
-		maxSizeBytes:   maxSizeBytes,
-		maxPackets:     maxPackets,
-		dumpPath:       dumpPath,
+		writeC:       make(chan PacketToWrite, 1024),
+		done:         make(chan struct{}),
+		maxFiles:     maxFiles,
+		maxSizeBytes: maxSizeBytes,
+		maxPackets:   maxPackets,
+		dumpPath:     dumpPath,
 	}
 
 	if err := dumper.rotate(); err != nil {
 		return nil, err
 	}
 
+	go dumper.writeLoop()
 	return dumper, nil
 }
 
@@ -81,15 +92,15 @@ func (dumper *PacketDumper) rotate() error {
 		_ = dumper.f.Close()
 	}
 
-	filename := fmt.Sprintf("%strace.pcap", dumper.dumpPath)
+	filename := filepath.Join(dumper.dumpPath, "trace.pcap")
 	if _, err := os.Stat(filename); err == nil {
-		newFilename := fmt.Sprintf("%strace-%s.pcap", dumper.dumpPath, time.Now().Format(time.RFC3339))
+		newFilename := filepath.Join(dumper.dumpPath, fmt.Sprintf("trace-%d.pcap", time.Now().UnixNano()))
 		if err := os.Rename(filename, newFilename); err != nil {
 			log.Error().Err(err).Msgf("Can't rename trace file: %s -> %s", filename, newFilename)
 		}
 	}
 
-	if files, err := filepath.Glob(fmt.Sprintf("%strace-*.pcap", dumper.dumpPath)); err == nil {
+	if files, err := filepath.Glob(filepath.Join(dumper.dumpPath, "trace-*.pcap")); err == nil {
 		if len(files) > dumper.maxFiles {
 			filesToRemove := len(files) - dumper.maxFiles
 			for idx, file := range files[0:filesToRemove] {
@@ -146,10 +157,12 @@ func (dumper *PacketDumper) createDumpFile(filename string) error {
 		return fmt.Errorf("can't add sig out ng pcap interface:: %s", err.Error())
 	}
 
+	if dumper.w == nil {
+		dumper.sigInInterface = sigIn
+		dumper.sigOutInterface = sigOut
+	}
 	dumper.f = f
 	dumper.w = w
-	dumper.sigInInterface = sigIn
-	dumper.sigOutInterface = sigOut
 
 	return nil
 }
@@ -161,6 +174,14 @@ func (dumper *PacketDumper) ReadTraceMap(traceMap *ebpf.Map) {
 		log.Error().Msgf(" can't create perf reader: %s", err.Error())
 		return
 	}
+	dumper.mu.Lock()
+	if dumper.closed {
+		dumper.mu.Unlock()
+		_ = rd.Close()
+		return
+	}
+	dumper.reader = rd
+	dumper.mu.Unlock()
 	defer func() { _ = rd.Close() }()
 
 	var rec perf.Record
@@ -188,9 +209,13 @@ func (dumper *PacketDumper) ReadTraceMap(traceMap *ebpf.Map) {
 
 		packetLength := binary.LittleEndian.Uint16(rec.RawSample[2:4])
 		packetIface := binary.LittleEndian.Uint32(rec.RawSample[4:8]) + 1
-		packet := rec.RawSample[8 : 8+packetLength]
+		if int(packetLength) > len(rec.RawSample)-8 {
+			log.Error().Msg("truncated capture sample")
+			continue
+		}
+		packet := append([]byte(nil), rec.RawSample[8:8+int(packetLength)]...)
 
-		dumper.writeC <- PacketToWrite{
+		dumper.enqueue(PacketToWrite{
 			gopacket.CaptureInfo{
 				Timestamp:      time.Now(),
 				Length:         int(packetLength),
@@ -198,7 +223,7 @@ func (dumper *PacketDumper) ReadTraceMap(traceMap *ebpf.Map) {
 				InterfaceIndex: int(packetIface),
 			},
 			packet,
-		}
+		})
 	}
 }
 
@@ -248,12 +273,12 @@ func (dumper *PacketDumper) dumpRaw(srcIP net.IP, srcPort uint16, dstIP net.IP, 
 	}
 	outgoingPacket := buffer.Bytes()
 
-	dumper.writeC <- PacketToWrite{gopacket.CaptureInfo{
+	dumper.enqueue(PacketToWrite{gopacket.CaptureInfo{
 		Timestamp:      time.Now(),
 		Length:         len(outgoingPacket),
 		CaptureLength:  len(outgoingPacket),
 		InterfaceIndex: iface,
-	}, outgoingPacket}
+	}, outgoingPacket})
 
 	// if err := dumper.w.WritePacket(gopacket.CaptureInfo{
 	// 	Timestamp:      time.Now(),
@@ -265,21 +290,39 @@ func (dumper *PacketDumper) dumpRaw(srcIP net.IP, srcPort uint16, dstIP net.IP, 
 	// }
 }
 
-func (dumper *PacketDumper) Write() {
+// Write waits for the capture writer to finish. The constructor starts it.
+func (dumper *PacketDumper) Write() { <-dumper.done }
+
+func (dumper *PacketDumper) enqueue(pkt PacketToWrite) {
+	dumper.mu.RLock()
+	defer dumper.mu.RUnlock()
+	if !dumper.closed {
+		dumper.writeC <- pkt
+	}
+}
+
+func (dumper *PacketDumper) writeLoop() {
+	defer close(dumper.done)
+	failed := false
 	for pkt := range dumper.writeC {
+		if failed {
+			continue
+		}
 		if dumper.currentPacketCnt >= dumper.maxPackets || dumper.currentFileSize >= dumper.maxSizeBytes {
 			if err := dumper.rotate(); err != nil {
 				log.Error().Err(err).Msg("failed to rotate dump file")
-				break
+				failed = true
+				continue
 			}
 		}
 
 		if err := dumper.w.WritePacket(pkt.info, pkt.packet); err != nil {
 			log.Error().Err(err).Msgf("can't write sample to pcap")
-			break
+			failed = true
+			continue
 		}
 
-		dumper.packetsWritten++
+		dumper.packetsWritten.Add(1)
 		dumper.currentPacketCnt++
 		dumper.currentFileSize += len(pkt.packet)
 	}
@@ -287,21 +330,28 @@ func (dumper *PacketDumper) Write() {
 
 func (dumper *PacketDumper) GetPacketsWritten() uint64 {
 
-	return dumper.packetsWritten
+	return dumper.packetsWritten.Load()
 }
 
+// Close stops producers, drains all accepted packets and closes the capture.
 func (dumper *PacketDumper) Close(removeTrace bool) {
-	if dumper.w != nil {
-		_ = dumper.w.Flush()
-	}
-
-	if dumper.f != nil {
-		_ = dumper.f.Close()
-	}
-
-	close(dumper.writeC)
-
-	if removeTrace {
-		_ = os.Remove(dumper.f.Name())
-	}
+	dumper.closeOnce.Do(func() {
+		dumper.mu.Lock()
+		dumper.closed = true
+		if dumper.reader != nil {
+			_ = dumper.reader.Close()
+		}
+		close(dumper.writeC)
+		dumper.mu.Unlock()
+		<-dumper.done
+		if dumper.w != nil {
+			_ = dumper.w.Flush()
+		}
+		if dumper.f != nil {
+			_ = dumper.f.Close()
+			if removeTrace {
+				_ = os.Remove(dumper.f.Name())
+			}
+		}
+	})
 }
