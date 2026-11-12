@@ -88,8 +88,13 @@ func TestTimerEditKeepsStartupValidity(t *testing.T) {
 	router := h.InitRoutes()
 	for _, timeout := range []int{16, 3601} {
 		out := httptest.NewRecorder()
-		router.ServeHTTP(out, httptest.NewRequest(http.MethodPost, "/api/v1/config/pfcp_timers",
-			strings.NewReader(`{"association_setup_timeout":5,"heartbeat_timeout":`+strconv.Itoa(timeout)+`}`)))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/pfcp_timers", strings.NewReader(`{"association_setup_timeout":5,"heartbeat_timeout":`+strconv.Itoa(timeout)+`}`))
+		req.Host = "127.0.0.1:8080"
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(out, req)
+		if out.Code != http.StatusBadRequest {
+			t.Errorf("invalid timer status=%d body=%s", out.Code, out.Body)
+		}
 		h.cfgMu.RLock()
 		err := h.Cfg.ValidatePFCP()
 		h.cfgMu.RUnlock()
@@ -123,8 +128,13 @@ func TestPFCPEndpointEditIsAtomic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := h.InitRoutes()
 	out := httptest.NewRecorder()
-	router.ServeHTTP(out, httptest.NewRequest(http.MethodPost, "/api/v1/config/pfcp_n4",
-		strings.NewReader(`{"pfcp_address":"`+target+`","pfcp_node_id":"127.0.0.1","pfcp_remote_node":["bad host name"]}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/pfcp_n4", strings.NewReader(`{"pfcp_address":"`+target+`","pfcp_node_id":"127.0.0.1","pfcp_remote_node":["bad host name"]}`))
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(out, req)
+	if out.Code != http.StatusBadRequest {
+		t.Errorf("invalid endpoint status=%d body=%s", out.Code, out.Body)
+	}
 	h.cfgMu.RLock()
 	view := h.Cfg.PfcpAddress
 	h.cfgMu.RUnlock()
