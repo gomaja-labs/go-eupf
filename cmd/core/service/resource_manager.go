@@ -8,40 +8,56 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/korylprince/ipnetgen"
 )
 
-type ResourceManager struct {
-	IPAM   *IPAM
-	FTEIDM *FTEIDM
-}
-
-// MaxResourcePoolSize bounds each eagerly materialized resource pool to one
-// million entries. IPv4 pools exclude their network address. IPv6 allocation
-// requires a prefix allocator and is not supported by this address allocator.
+// MaxResourcePoolSize bounds each eagerly materialized pool to one million
+// entries. IPv4 pools omit the network address. IPv6 prefix allocation is not
+// implemented by this allocator.
 const MaxResourcePoolSize = 1 << 20
 
+var ErrResourceCollision = errors.New("resource belongs to another session")
+var ErrResourceExhausted = errors.New("resource pool exhausted")
+
+type ResourceManager struct {
+	nextSEID      atomic.Uint64
+	transactionMu sync.Mutex
+	IPAM          *IPAM
+	FTEIDM        *FTEIDM
+}
 type FTEIDM struct {
-	freeTEIDs []uint32
-	busyTEIDs map[uint64]map[uint32]uint32 // map[seID]map[pdrID]teid
 	sync.RWMutex
+	freeTEIDs     []uint32
+	busyTEIDs     map[uint64]map[uint32]uint32
+	reservedTEIDs map[uint32]uint64
+	maximum       uint32
+}
+type ipPrefixLease struct {
+	Owner   uint64
+	Address string
+	Prefix  net.IPNet
 }
 
 type IPAM struct {
-	freeIPs []net.IP
-	busyIPs map[uint64]net.IP
 	sync.RWMutex
+	freeIPs      []net.IP
+	busyIPs      map[uint64]net.IP
+	reservedIPs  map[string]uint64
+	ownerIPs     map[uint64]map[string]net.IP
+	pool         *net.IPNet
+	prefixLeases map[string]ipPrefixLease
 }
 
 func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, error) {
-	// Validate cardinality before enumerating. In particular uint32's maximum
-	// would wrap the TEID loop, and IPv6 /64 would enumerate 2^64 addresses.
 	if teidRange > MaxResourcePoolSize {
 		return nil, fmt.Errorf("fteid_pool %d exceeds limit %d", teidRange, MaxResourcePoolSize)
 	}
+	var prefix *net.IPNet
 	if ipRange != "" {
-		_, prefix, err := net.ParseCIDR(ipRange)
+		var err error
+		_, prefix, err = net.ParseCIDR(ipRange)
 		if err != nil {
 			return nil, fmt.Errorf("ueip_pool: %w", err)
 		}
@@ -53,113 +69,272 @@ func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, err
 			return nil, fmt.Errorf("ueip_pool %s exceeds limit %d", ipRange, MaxResourcePoolSize)
 		}
 	}
-
-	var ipam IPAM
-	var fteidm FTEIDM
-
+	manager := &ResourceManager{
+		IPAM:   &IPAM{busyIPs: make(map[uint64]net.IP), reservedIPs: make(map[string]uint64), ownerIPs: make(map[uint64]map[string]net.IP), prefixLeases: make(map[string]ipPrefixLease), pool: prefix},
+		FTEIDM: &FTEIDM{busyTEIDs: make(map[uint64]map[uint32]uint32), reservedTEIDs: make(map[uint32]uint64), maximum: teidRange},
+	}
 	if ipRange != "" {
-		ipGenerator, err := ipnetgen.New(ipRange)
+		generator, err := ipnetgen.New(ipRange)
 		if err != nil {
 			return nil, err
 		}
-		ipGenerator.Next() //Skip first 0-IP
-
-		freeIPs := make([]net.IP, 0, 1024)
-		for ip := ipGenerator.Next(); ip != nil; ip = ipGenerator.Next() {
-			freeIPs = append(freeIPs, ip)
-		}
-
-		ipam = IPAM{
-			freeIPs: freeIPs,
-			busyIPs: make(map[uint64]net.IP),
+		generator.Next()
+		for ip := generator.Next(); ip != nil; ip = generator.Next() {
+			manager.IPAM.freeIPs = append(manager.IPAM.freeIPs, ip)
 		}
 	}
-
-	if teidRange != 0 {
-		freeTEIDs := make([]uint32, 0, 10000)
-		busyTEIDs := make(map[uint64]map[uint32]uint32)
-
-		var teid uint32
-
-		for teid = 1; teid <= teidRange; teid++ {
-			freeTEIDs = append(freeTEIDs, teid)
-		}
-
-		fteidm = FTEIDM{
-			freeTEIDs: freeTEIDs,
-			busyTEIDs: busyTEIDs,
-		}
+	for teid := uint32(1); teid <= teidRange; teid++ {
+		manager.FTEIDM.freeTEIDs = append(manager.FTEIDM.freeTEIDs, teid)
 	}
-
-	return &ResourceManager{
-		IPAM:   &ipam,
-		FTEIDM: &fteidm,
-	}, nil
+	return manager, nil
 }
-
-func (ipam *IPAM) AllocateIP(key uint64) (net.IP, error) {
-	ipam.Lock()
-	defer ipam.Unlock()
-
-	// Keep the session's existing address when several PDRs request it.
-	// TS 29.244 V20.1.0 clause 5.21.3.1.
-	if ip, ok := ipam.busyIPs[key]; ok {
+func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
+	pool.Lock()
+	defer pool.Unlock()
+	if ip, ok := pool.busyIPs[owner]; ok {
 		return append(net.IP(nil), ip...), nil
 	}
-
-	if len(ipam.freeIPs) > 0 {
-		ip := ipam.freeIPs[0]
-		ipam.freeIPs = ipam.freeIPs[1:]
-		ipam.busyIPs[key] = ip
-		return append(net.IP(nil), ip...), nil
-	} else {
-		return nil, errors.New("no free ip available")
+	if len(pool.freeIPs) == 0 {
+		return nil, ErrResourceExhausted
 	}
+	ip := pool.freeIPs[0]
+	pool.freeIPs = pool.freeIPs[1:]
+	pool.record(owner, ip)
+	pool.busyIPs[owner] = ip
+	return append(net.IP(nil), ip...), nil
+}
+func (pool *IPAM) record(owner uint64, ip net.IP) {
+	key := ip.String()
+	pool.reservedIPs[key] = owner
+	if pool.ownerIPs[owner] == nil {
+		pool.ownerIPs[owner] = make(map[string]net.IP)
+	}
+	pool.ownerIPs[owner][key] = append(net.IP(nil), ip...)
 }
 
-func (ipam *FTEIDM) AllocateTEID(seID uint64, pdrID uint32) (uint32, error) {
-	ipam.Lock()
-	defer ipam.Unlock()
+// ReserveIP keeps explicit addresses out of the allocation pool as well.
+// TS 29.244 V20.1.0 clauses 5.2.1 and 5.21.
+func (pool *IPAM) ReserveIP(owner uint64, ip net.IP) error {
+	if ip.To16() == nil {
+		return fmt.Errorf("invalid UE IP address")
+	}
+	pool.Lock()
+	defer pool.Unlock()
+	key := ip.String()
+	for _, lease := range pool.prefixLeases {
+		if lease.Owner != owner && lease.Prefix.Contains(ip) {
+			return ErrResourceCollision
+		}
+	}
+	if current, ok := pool.reservedIPs[key]; ok {
+		if current != owner {
+			return ErrResourceCollision
+		}
+		return nil
+	}
+	for i, free := range pool.freeIPs {
+		if free.Equal(ip) {
+			pool.freeIPs = append(pool.freeIPs[:i], pool.freeIPs[i+1:]...)
+			break
+		}
+	}
+	pool.record(owner, ip)
+	return nil
+}
+func (pool *IPAM) ReleaseIP(owner uint64) {
+	pool.Lock()
+	defer pool.Unlock()
+	for key, ip := range pool.ownerIPs[owner] {
+		if pool.pool != nil && pool.pool.Contains(ip) && !pool.pool.IP.Equal(ip) {
+			pool.freeIPs = append(pool.freeIPs, ip)
+		}
+		delete(pool.reservedIPs, key)
+	}
+	for key, lease := range pool.prefixLeases {
+		if lease.Owner == owner {
+			delete(pool.prefixLeases, key)
+		}
+	}
+	delete(pool.ownerIPs, owner)
+	delete(pool.busyIPs, owner)
+}
 
-	// A retry for an already allocated PDR must not consume another F-TEID.
-	// TS 29.244 V20.1.0 clause 5.5.3.
-	if teid, ok := ipam.busyTEIDs[seID][pdrID]; ok {
+// ReleaseUnused retains the chosen address only while a PDR still references it.
+func (pool *IPAM) ReleaseUnused(owner uint64, active []net.IP) {
+	pool.Lock()
+	defer pool.Unlock()
+	keep := make(map[string]bool, len(active))
+	for _, ip := range active {
+		keep[ip.String()] = true
+	}
+	for key, ip := range pool.ownerIPs[owner] {
+		if keep[key] {
+			continue
+		}
+		if pool.pool != nil && pool.pool.Contains(ip) && !pool.pool.IP.Equal(ip) {
+			pool.freeIPs = append(pool.freeIPs, ip)
+		}
+		delete(pool.reservedIPs, key)
+		delete(pool.ownerIPs[owner], key)
+		if pool.busyIPs[owner].Equal(ip) {
+			delete(pool.busyIPs, owner)
+		}
+	}
+}
+func (pool *FTEIDM) AllocateTEID(owner uint64, pdr uint32) (uint32, error) {
+	pool.Lock()
+	defer pool.Unlock()
+	if teid, ok := pool.busyTEIDs[owner][pdr]; ok {
 		return teid, nil
 	}
+	if len(pool.freeTEIDs) == 0 {
+		return 0, ErrResourceExhausted
+	}
+	teid := pool.freeTEIDs[0]
+	pool.freeTEIDs = pool.freeTEIDs[1:]
+	pool.record(owner, pdr, teid)
+	return teid, nil
+}
+func (pool *FTEIDM) record(owner uint64, pdr, teid uint32) {
+	if pool.busyTEIDs[owner] == nil {
+		pool.busyTEIDs[owner] = make(map[uint32]uint32)
+	}
+	pool.busyTEIDs[owner][pdr] = teid
+	pool.reservedTEIDs[teid] = owner
+}
 
-	if len(ipam.freeTEIDs) > 0 {
-		teid := ipam.freeTEIDs[0]
-		ipam.freeTEIDs = ipam.freeTEIDs[1:]
-		if _, ok := ipam.busyTEIDs[seID]; !ok {
-			pdr := make(map[uint32]uint32)
-			pdr[pdrID] = teid
-			ipam.busyTEIDs[seID] = pdr
-		} else {
-			ipam.busyTEIDs[seID][pdrID] = teid
+// ReserveTEID also permits same-session CHOOSE-ID sharing, while keeping every
+// explicit TEID out of subsequent allocations. TS 29.244 clause 5.5.3.
+func (pool *FTEIDM) ReserveTEID(owner uint64, pdr, teid uint32) error {
+	if teid == 0 {
+		return fmt.Errorf("TEID zero cannot identify a user-plane tunnel")
+	}
+	pool.Lock()
+	defer pool.Unlock()
+	if current, ok := pool.reservedTEIDs[teid]; ok && current != owner {
+		return ErrResourceCollision
+	}
+	for i, free := range pool.freeTEIDs {
+		if free == teid {
+			pool.freeTEIDs = append(pool.freeTEIDs[:i], pool.freeTEIDs[i+1:]...)
+			break
 		}
-		return teid, nil
-	} else {
-		return 0, errors.New("no free TEID available")
+	}
+	pool.record(owner, pdr, teid)
+	return nil
+}
+func (pool *FTEIDM) ReleaseTEID(owner uint64) {
+	pool.Lock()
+	defer pool.Unlock()
+	for teid, current := range pool.reservedTEIDs {
+		if current == owner {
+			if teid <= pool.maximum {
+				pool.freeTEIDs = append(pool.freeTEIDs, teid)
+			}
+			delete(pool.reservedTEIDs, teid)
+		}
+	}
+	delete(pool.busyTEIDs, owner)
+}
+
+// ReleaseUnused frees a shared F-TEID only after its final PDR reference.
+// TS 29.244 V20.1.0 clause 5.5.3.
+func (pool *FTEIDM) ReleaseUnused(owner uint64, active map[uint32]uint32) {
+	pool.Lock()
+	defer pool.Unlock()
+	keep := make(map[uint32]bool, len(active))
+	for _, teid := range active {
+		keep[teid] = true
+	}
+	for teid, current := range pool.reservedTEIDs {
+		if current == owner && !keep[teid] {
+			if teid <= pool.maximum {
+				pool.freeTEIDs = append(pool.freeTEIDs, teid)
+			}
+			delete(pool.reservedTEIDs, teid)
+		}
+	}
+	delete(pool.busyTEIDs, owner)
+	for pdr, teid := range active {
+		if current, ok := pool.reservedTEIDs[teid]; ok && current == owner {
+			if pool.busyTEIDs[owner] == nil {
+				pool.busyTEIDs[owner] = make(map[uint32]uint32)
+			}
+			pool.busyTEIDs[owner][pdr] = teid
+		}
 	}
 }
 
-func (ipam *IPAM) ReleaseIP(seID uint64) {
-	ipam.Lock()
-	defer ipam.Unlock()
-	if ip, ok := ipam.busyIPs[seID]; ok {
-		ipam.freeIPs = append(ipam.freeIPs, ip)
-		delete(ipam.busyIPs, seID)
+// ReserveIPv6Prefix claims the UE prefix, even for uplink-only PDRs. Exact
+// address reservations alone cannot prevent another session taking its subnet.
+// TS 29.244 V20.1.0 clauses 5.21 and 8.2.62.
+func (pool *IPAM) ReserveIPv6Prefix(owner uint64, ip net.IP, mask net.IPMask) error {
+	ones, bits := mask.Size()
+	if ip.To4() != nil || ip.To16() == nil || bits != 128 {
+		return fmt.Errorf("invalid IPv6 prefix")
+	}
+	prefix := net.IPNet{IP: append(net.IP(nil), ip.To16().Mask(mask)...), Mask: append(net.IPMask(nil), mask...)}
+	pool.Lock()
+	defer pool.Unlock()
+	for _, lease := range pool.prefixLeases {
+		if lease.Owner != owner && (prefix.Contains(lease.Prefix.IP) || lease.Prefix.Contains(prefix.IP)) {
+			return ErrResourceCollision
+		}
+	}
+	for address, current := range pool.reservedIPs {
+		if current != owner && prefix.Contains(net.ParseIP(address)) {
+			return ErrResourceCollision
+		}
+	}
+	if pool.prefixLeases == nil {
+		pool.prefixLeases = make(map[string]ipPrefixLease)
+	}
+	key := fmt.Sprintf("%s/%d", ip.String(), ones)
+	pool.prefixLeases[key] = ipPrefixLease{owner, ip.String(), prefix}
+	pool.record(owner, ip)
+	return nil
+}
+
+// ReleaseUnusedPrefixes removes superseded prefix lengths as well as addresses.
+func (pool *IPAM) ReleaseUnusedPrefixes(owner uint64, active []net.IPNet) {
+	keep := make(map[string]bool, len(active))
+	for _, prefix := range active {
+		ones, _ := prefix.Mask.Size()
+		keep[fmt.Sprintf("%s/%d", prefix.IP.String(), ones)] = true
+	}
+	pool.Lock()
+	defer pool.Unlock()
+	for key, lease := range pool.prefixLeases {
+		if lease.Owner == owner && !keep[key] {
+			delete(pool.prefixLeases, key)
+		}
 	}
 }
 
-func (fteidm *FTEIDM) ReleaseTEID(seID uint64) {
-	fteidm.Lock()
-	defer fteidm.Unlock()
-
-	if teid, ok := fteidm.busyTEIDs[seID]; ok {
-		for _, t := range teid {
-			fteidm.freeTEIDs = append(fteidm.freeTEIDs, t)
+// NextSessionID allocates a process-lifetime identity across every PFCP endpoint
+// sharing this forwarding plane. Zero signals exhaustion; live IDs never wrap.
+func (manager *ResourceManager) NextSessionID() uint64 {
+	for {
+		previous := manager.nextSEID.Load()
+		if previous == ^uint64(0) {
+			return 0
 		}
-		delete(fteidm.busyTEIDs, seID)
+		next := previous + 1
+		if next == 1 {
+			next = 2
+		}
+		if manager.nextSEID.CompareAndSwap(previous, next) {
+			return next
+		}
 	}
+}
+
+// LockReservations serializes private reservation snapshots across N4/Sxa/Sxb.
+// Lock order is connection state, shared reservations, then the map journal.
+func (manager *ResourceManager) LockReservations() func() {
+	if manager == nil {
+		return func() {}
+	}
+	manager.transactionMu.Lock()
+	return manager.transactionMu.Unlock
 }
