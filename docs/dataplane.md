@@ -171,9 +171,9 @@ EPC and 5GC always advertise FTUP and allocate F-TEIDs in the UP function
 (clause 5.5.1). A new CP-allocated F-TEID receives Cause 71 unless RESTI permits
 restoration. There is no FTUP configuration mode.
 
-Network Instance names admitted by `allowed_apns` are aliases of the same
-kernel routing domain. An unconfigured name is rejected with Cause 73, Failed
-Rule ID and Offending IE 22. No network-instance isolation is provided. See the
+Network Instance names admitted by `allow_apn` and `deny_apn` are aliases of the same
+kernel routing domain. A name denied by the configured admission policy is rejected with Cause 73,
+Failed Rule ID and Offending IE 22. Empty allow and deny policies admit any name. No network-instance isolation is provided. See the
 [IE capability and bound audit](rule-capabilities.md).
 
 Map capacities are configured before Load. Live resizing returns an error

@@ -28,7 +28,12 @@ func TestRuleGraceBatchesRetirementsAfterReadersFinish(t *testing.T) {
 		return nil
 	}
 	go g.run()
-	t.Cleanup(func() { once.Do(func() { close(release) }); close(g.stop); <-g.done })
+	t.Cleanup(func() {
+		once.Do(func() { close(release) })
+		secondOnce.Do(func() { close(secondRelease) })
+		close(g.stop)
+		<-g.done
+	})
 	g.enqueue(graceWork{})
 	select {
 	case <-entered:
