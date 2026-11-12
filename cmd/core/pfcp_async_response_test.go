@@ -15,19 +15,21 @@ import (
 
 type delayedUsagePlane struct {
 	MapOperationsMock
-	transaction    *delayedUsageTransaction
-	holdRetirement bool
+	transaction      *delayedUsageTransaction
+	holdRetirement   bool
+	completeOnCommit bool
 }
 type delayedUsageTransaction struct {
 	ebpf.ForwardingPlaneController
-	callbacks      []func(ebpf.UrrInfo)
-	ready          chan error
-	reclaim        func() error
-	holdRetirement bool
+	callbacks        []func(ebpf.UrrInfo)
+	ready            chan error
+	reclaim          func() error
+	holdRetirement   bool
+	completeOnCommit bool
 }
 
 func (plane *delayedUsagePlane) BeginRuleTransaction(uint64) (ebpf.RuleTransaction, error) {
-	tx := &delayedUsageTransaction{ForwardingPlaneController: plane, ready: make(chan error, 1), holdRetirement: plane.holdRetirement}
+	tx := &delayedUsageTransaction{ForwardingPlaneController: plane, ready: make(chan error, 1), holdRetirement: plane.holdRetirement, completeOnCommit: plane.completeOnCommit}
 	plane.transaction = tx
 	return tx, nil
 }
@@ -43,6 +45,18 @@ func (tx *delayedUsageTransaction) UsageCompletion() <-chan error {
 	return tx.ready
 }
 func (tx *delayedUsageTransaction) Commit() error {
+	if tx.completeOnCommit && len(tx.callbacks) > 0 {
+		go func() {
+			for _, callback := range tx.callbacks {
+				callback(ebpf.UrrInfo{UplinkVolume: 40, DownlinkVolume: 20})
+			}
+			var err error
+			if tx.reclaim != nil {
+				err = tx.reclaim()
+			}
+			tx.ready <- err
+		}()
+	}
 	if len(tx.callbacks) == 0 && tx.reclaim != nil && !tx.holdRetirement {
 		return tx.reclaim()
 	}
@@ -171,5 +185,45 @@ func TestDeletionWithoutUsageRetainsIdentifiersUntilBackgroundGrace(t *testing.T
 	plane.transaction.finish(t)
 	if err := resources.FTEIDM.ReserveTEID(12, 1, 1); err != nil {
 		t.Fatal("grace did not release the TEID")
+	}
+}
+
+func TestFinalUsageMayCompleteDuringResponseConstruction(t *testing.T) {
+	for _, deletion := range []bool{false, true} {
+		t.Run(map[bool]string{false: "modification", true: "deletion"}[deletion], func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			conn.mapOperations = &delayedUsagePlane{completeOnCommit: true}
+			cp := identityPeer(t, "127.0.0.42", 0)
+			identitySetup(t, conn, cp, "async.example")
+			assoc := conn.associationByID("async.example")
+			for sequence := uint32(2); sequence < 18; sequence++ {
+				session := NewSession(uint64(sequence), 77, "", "", false)
+				session.CPFSEIDIPv4 = net.ParseIP("127.0.0.42")
+				var removes []*ie.IE
+				for id := uint32(1); id <= 32; id++ {
+					session.NewUrr(id, id, ebpf.UrrInfo{})
+					removes = append(removes, ie.NewRemoveURR(ie.NewURRID(id)))
+				}
+				assoc.Sessions[session.LocalSEID] = session
+				var request message.Message = message.NewSessionModificationRequest(session.LocalSEID, sequence, removes...)
+				if deletion {
+					request = message.NewSessionDeletionRequest(session.LocalSEID, sequence)
+				}
+				conn.Handle(protocolWire(t, request), cp.LocalAddr().(*net.UDPAddr))
+				reply := identityRead(t, cp)
+				var reports []*ie.IE
+				switch response := reply.(type) {
+				case *message.SessionModificationResponse:
+					reports = response.UsageReport
+				case *message.SessionDeletionResponse:
+					reports = response.UsageReport
+				default:
+					t.Fatalf("unexpected response %T", reply)
+				}
+				if len(reports) != 32 {
+					t.Fatalf("final reports=%d, want 32", len(reports))
+				}
+			}
+		})
 	}
 }

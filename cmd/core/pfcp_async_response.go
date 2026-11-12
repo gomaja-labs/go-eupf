@@ -17,6 +17,7 @@ type usageResponse struct {
 
 func (conn *PfcpConnection) deferredUsageResponse(msg message.Message, finalize func()) message.Message {
 	if conn.responseWait == nil {
+		finalize()
 		return msg
 	}
 	result := &usageResponse{Message: msg, ready: conn.responseWait, finalize: finalize}

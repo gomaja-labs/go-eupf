@@ -231,9 +231,6 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	additionalIEs := []*ie.IE{
 		ie.NewCause(ie.CauseRequestAccepted),
 	}
-	if len(deletedURRs) != 0 {
-		additionalIEs = append(additionalIEs, deletedURRs...)
-	}
 
 	logger.Debug().Msgf("Deleting session: %d", req.SEID())
 	conn.forgetSession(association, req.SEID())
@@ -353,9 +350,6 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	pdrIEs := processCreatedPDRs(createdPDRs, cloneIP(defaultN3Address), cloneIP(defaultN9Address))
 	additionalIEs = append(additionalIEs, pdrIEs...)
 	additionalIEs = append(additionalIEs, processUpdatedPDRs(updatedPDRs, cloneIP(defaultN3Address), cloneIP(defaultN9Address))...)
-	if len(removedURRs) != 0 {
-		additionalIEs = append(additionalIEs, removedURRs...)
-	}
 
 	// Send SessionEstablishmentResponse
 	modResp := message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), additionalIEs...)
