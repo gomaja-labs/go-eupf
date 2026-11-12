@@ -7,12 +7,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cli/config"
 	"github.com/gomaja-labs/go-eupf/cli/domain"
 	"gopkg.in/yaml.v3"
+)
+
+// Restore budgets apply to every member, including unused members.
+const (
+	MaxArchiveEntries      = 32
+	MaxArchiveEntrySize    = 4 << 20
+	MaxArchiveExpandedSize = 16 << 20
 )
 
 type FileRepository struct {
@@ -93,13 +101,44 @@ func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (_ *dom
 		name = name + ".zip"
 	}
 
-	zipPath := fmt.Sprintf("%s/%s", r.backupDir, name)
-
-	zipReader, err := zip.OpenReader(zipPath)
+	if name == ".zip" || filepath.Base(name) != name || strings.ContainsAny(name, `/\`) {
+		return nil, fmt.Errorf("backup name must be a filename within the backup directory")
+	}
+	root, err := os.OpenRoot(r.backupDir)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { retErr = errors.Join(retErr, zipReader.Close()) }()
+	defer func() { retErr = errors.Join(retErr, root.Close()) }()
+	archive, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, archive.Close()) }()
+	info, err := archive.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > MaxArchiveExpandedSize {
+		return nil, fmt.Errorf("backup archive exceeds %d bytes", MaxArchiveExpandedSize)
+	}
+
+	zipReader, err := zip.NewReader(archive, info.Size())
+	if err != nil {
+		return nil, err
+	}
+	if len(zipReader.File) > MaxArchiveEntries {
+		return nil, fmt.Errorf("backup exceeds %d archive entries", MaxArchiveEntries)
+	}
+	var expanded uint64
+	for _, member := range zipReader.File {
+		if member.UncompressedSize64 > MaxArchiveEntrySize {
+			return nil, fmt.Errorf("archive entry exceeds %d bytes", MaxArchiveEntrySize)
+		}
+		expanded += member.UncompressedSize64
+		if expanded > MaxArchiveExpandedSize {
+			return nil, fmt.Errorf("archive expands beyond %d bytes", MaxArchiveExpandedSize)
+		}
+	}
 
 	var configFile *zip.File
 	for _, file := range zipReader.File {
@@ -119,11 +158,14 @@ func (r *FileRepository) ReadUpfConfig(ctx context.Context, name string) (_ *dom
 	}
 	defer func() { retErr = errors.Join(retErr, rc.Close()) }()
 
-	configData, err := io.ReadAll(rc)
+	configData, err := io.ReadAll(io.LimitReader(rc, MaxArchiveEntrySize+1))
 	if err != nil {
 		return nil, err
 	}
 
+	if len(configData) > MaxArchiveEntrySize {
+		return nil, fmt.Errorf("config.yaml exceeds %d bytes", MaxArchiveEntrySize)
+	}
 	var config domain.UpfConfig
 	err = yaml.Unmarshal(configData, &config)
 	if err != nil {

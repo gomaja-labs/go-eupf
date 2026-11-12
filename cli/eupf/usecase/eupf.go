@@ -8,7 +8,6 @@ import (
 
 	"github.com/gomaja-labs/go-eupf/cli/config"
 	"github.com/gomaja-labs/go-eupf/cli/domain"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -115,43 +114,44 @@ func (e *Eupf) BackupRestore(ctx context.Context, tempBaseURL string, name strin
 		return err
 	}
 
+	var failures []error
 	if err := e.eupfRepo.RestoreConfigLoggingLevel(ctx, config.LoggingLevel, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore logging level: %s", err)
+		failures = append(failures, fmt.Errorf("restore logging level: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigLoggingCaller(ctx, config.LoggingCaller, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore logging caller: %s", err)
+		failures = append(failures, fmt.Errorf("restore logging caller: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigDataPlaneEbpf(ctx, config.InterfaceName, config.XDPAttachMode, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore data plane ebpf: %s", err)
+		failures = append(failures, fmt.Errorf("restore data plane ebpf: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigDataPlaneAddresses(ctx, config.N3Address, config.N9Address, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore data plane addresses: %s", err)
+		failures = append(failures, fmt.Errorf("restore data plane addresses: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigPFCPN4(ctx, config.PfcpAddress, config.PfcpNodeId, config.PfcpRemoteNode, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore PFCP N4: %s", err)
+		failures = append(failures, fmt.Errorf("restore PFCP N4: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigPFCPSxa(ctx, config.SxaLocalAddress, config.SxaLocalNodeId, config.SxaRemoteNode, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore PFCP SXA: %s", err)
+		failures = append(failures, fmt.Errorf("restore PFCP SXA: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigPFCPSxb(ctx, config.SxbLocalAddress, config.SxbLocalNodeId, config.SxbRemoteNode, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore PFCP SXB: %s", err)
+		failures = append(failures, fmt.Errorf("restore PFCP SXB: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigPFCPTimers(ctx, config.AssociationSetupTimeout, config.HeartbeatTimeout, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore PFCP timers: %s", err)
+		failures = append(failures, fmt.Errorf("restore PFCP timers: %w", err))
 	}
 
 	if err := e.eupfRepo.RestoreConfigGTPPath(ctx, config.GtpPeer, config.GtpEchoInterval, baseURL); err != nil {
-		log.Warn().Msgf("Failed to restore GTP path: %s", err)
+		failures = append(failures, fmt.Errorf("restore GTP path: %w", err))
 	}
 
-	return nil
+	return errors.Join(failures...)
 }
 
 // validateBaseURL checks if the provided URL is a valid HTTP(S) address.
