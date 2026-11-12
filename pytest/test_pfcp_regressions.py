@@ -122,6 +122,7 @@ def peer(request, evidence):
             "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
             "--n3addr", "127.0.0.1", "--aaddr", "127.0.0.1:18080",
             "--maddr", "127.0.0.1:19090", "--hbinterval", "3600", "--loglvl", "debug",
+            "--pfcp_profile", getattr(request, "param", "default"),
         ], stdout=output, stderr=output,
            env={**os.environ, "GORACE": "halt_on_error=1"})
         try:
@@ -178,7 +179,9 @@ def test_truncated_outer_header_is_rejected(peer):
     # TS 29.244 V20.1.0 clauses 7.6.8 and 8.2.56.
     truncated = pfcp.IE_NotImplemented(ietype=84, data=b"\x01\x00\x00\x00\x00\x01")
     response = peer.establish([far(outer=truncated), pdr()])
-    assert response[pfcp.IE_Cause].cause != 1
+    assert response[pfcp.IE_Cause].cause == 73
+    assert response[pfcp.IE_FailedRuleId].type == 1
+    assert response[pfcp.IE_FailedRuleId].far_id == 1
 
 
 def test_valid_create_far_modification_does_not_crash(peer):
@@ -196,7 +199,10 @@ def test_valid_create_far_modification_does_not_crash(peer):
 def test_unknown_far_removal_preserves_other_session(peer):
     # TS 29.244 V20.1.0 table 7.5.4.7-1: FAR ID identifies the FAR to delete.
     peer.session()
-    second = peer.establish([far(2)])
+    second_pdr = pdr(identifier=2)
+    second_pdr[pfcp.IE_FAR_Id].id = 2
+    second_pdr[pfcp.IE_UE_IP_Address].ipv4 = "192.0.2.11"
+    second = peer.establish([far(2), second_pdr])
     assert second[pfcp.IE_Cause].cause == 1
     seid = second[pfcp.IE_FSEID].seid
     before = {identifier: get_json(f"/api/v1/far_map/{identifier}")
@@ -219,9 +225,11 @@ def test_invalid_sdf_rejects_session_without_leaving_state(peer):
             far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=b"invalid")),
         ])
         causes.append(response[pfcp.IE_Cause].cause)
+        assert response[pfcp.IE_FailedRuleId].type == 0
+        assert response[pfcp.IE_FailedRuleId].pdr_id == 1
     after = get_json("/api/v1/pfcp_sessions") or []
     print(f"invalid SDF: causes={causes}, sessions before={len(before)}, after={len(after)}")
-    assert all(cause != 1 for cause in causes)
+    assert all(cause == 73 for cause in causes)
     assert after == before
 
 
@@ -259,3 +267,22 @@ def test_session_creation_is_safe_during_http_reads(peer, endpoint):
         for reader in readers:
             reader.result()
     assert peer.process.poll() is None
+
+
+@pytest.mark.parametrize("peer", ["huawei"], indirect=True)
+def test_empty_huawei_subscriber_value_does_not_crash(peer):
+    empty_subscriber = pfcp.IE_EnterpriseSpecific(ietype=32769, enterprise_id=2011, data=b"")
+    response = peer.establish([far(), pdr(), empty_subscriber])
+    assert response[pfcp.IE_Cause].cause == 1
+    assert peer.process.poll() is None
+
+
+def test_unknown_predefined_rule_is_rejected(peer):
+    unknown = pdr()
+    unknown.IE_list.append(pfcp.IE_ActivatePredefinedRules(name=b"unconfigured"))
+    before = get_json("/api/v1/pfcp_sessions") or []
+    response = peer.establish([far(), unknown])
+    assert response[pfcp.IE_Cause].cause == 73
+    assert response[pfcp.IE_FailedRuleId].type == 0
+    assert response[pfcp.IE_FailedRuleId].pdr_id == 1
+    assert (get_json("/api/v1/pfcp_sessions") or []) == before

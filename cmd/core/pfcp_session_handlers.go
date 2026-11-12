@@ -6,6 +6,7 @@ package core
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -70,7 +71,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Establishment Request: (error in applying IEs): %s", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), append([]*ie.IE{conn.profile.NodeID(conn.nodeId)}, ruleFailureIEs(err)...)...), isTraced, nil
 	}
 
 	logger.Debug().Msgf("session rules before commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
@@ -78,7 +79,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Establishment Request from %s failed, rolling back", addr)
 		logger.Debug().Msgf("session rules after failed commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
-		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), append([]*ie.IE{conn.profile.NodeID(conn.nodeId)}, ruleFailureIEs(err)...)...), isTraced, nil
 	}
 
 	logger.Debug().Msgf("session rules arter commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
@@ -227,13 +228,13 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
+		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
+		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
 	association.Sessions[req.SEID()] = session
@@ -352,11 +353,34 @@ func serializeSdfFilter(filter ebpf.SdfFilter) string {
 	return result
 }
 
+// ruleFailure identifies a rule that could not be stored or applied.
+// TS 29.244 V20.1.0 clauses 6.3.2.3, 6.3.3.3 and 8.2.80.
+type ruleFailure struct {
+	kind uint8
+	id   uint32
+	err  error
+}
+
+func (failure *ruleFailure) Error() string {
+	return fmt.Sprintf("rule type %d ID %d: %v", failure.kind, failure.id, failure.err)
+}
+
+func (failure *ruleFailure) Unwrap() error { return failure.err }
+
+func ruleFailureIEs(err error) []*ie.IE {
+	result := []*ie.IE{ie.NewCause(ie.CauseRuleCreationModificationFailure)}
+	var failure *ruleFailure
+	if errors.As(err, &failure) {
+		result = append(result, ie.NewFailedRuleID(failure.kind, failure.id))
+	}
+	return result
+}
+
 func convertErrorToIeCause(err error) *ie.IE {
-	switch err {
-	case errMandatoryIeMissing:
+	switch {
+	case errors.Is(err, errMandatoryIeMissing):
 		return ie.NewCause(ie.CauseMandatoryIEMissing)
-	case errNoEstablishedAssociation:
+	case errors.Is(err, errNoEstablishedAssociation):
 		return ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)
 	default:
 		log.Info().Msgf("Unknown error: %s", err.Error())
@@ -881,13 +905,16 @@ func createFARs(
 		if decodeErr != nil {
 			return decodeErr
 		}
+		farID, err := fields.FARID.FARID()
+		if err != nil {
+			return err
+		}
 		farInfo, err := composeFarInfo(far, ebpf.FarInfo{}, profile)
 		if err != nil {
 			logger.Warn().Msgf("Error extracting FAR info: %s", err.Error())
-			continue
+			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
 		}
 
-		farID, _ := fields.FARID.FARID()
 		logger.Info().Msgf("Saving FAR info to session: %d, %+v", farID, farInfo)
 
 		var created bool
@@ -1085,41 +1112,46 @@ func createPDRs(
 			PdrInfo: ebpf.PdrInfo{TraceFlag: isTraced, NRFlag: session.Is5G},
 		}
 
+		stored := false
 		operationPool.Add(Operation{
 			Apply: func() func() error {
 				return func() error {
-					if err := pdrContext.extractPDR(pdrCopy, &spdrInfo); err == nil {
-						if spdrInfo.PCCInfo != nil {
-							rule, ok := conn.PCCRules[spdrInfo.PCCInfo.PCCName]
-							if !ok {
-								logger.Warn().
-									Str("pcc rule name", spdrInfo.PCCInfo.PCCName).
-									Uint16("pdrID", pdrID).
-									Msgf("PCC rule not found. PDR not created")
-
-								return nil
-							}
-
-							spdrInfo.PCCInfo = &rule
-							sdfFilters = append(sdfFilters, spdrInfo.PCCInfo.SDFFilter)
-							logger.Debug().
+					if err := pdrContext.extractPDR(pdrCopy, &spdrInfo); err != nil {
+						return &ruleFailure{ie.RuleIDTypePDR, uint32(pdrID), err}
+					}
+					if spdrInfo.PCCInfo != nil {
+						rule, ok := conn.PCCRules[spdrInfo.PCCInfo.PCCName]
+						if !ok {
+							logger.Warn().
 								Str("pcc rule name", spdrInfo.PCCInfo.PCCName).
 								Uint16("pdrID", pdrID).
-								Msgf("PCC rule found: %+v", spdrInfo.PCCInfo)
+								Msgf("PCC rule not found. PDR not created")
+
+							return &ruleFailure{ie.RuleIDTypePDR, uint32(pdrID), fmt.Errorf("predefined rule %q is not configured", spdrInfo.PCCInfo.PCCName)}
 						}
 
-						logger.Debug().Msgf("pdr: %+v", spdrInfo)
-						session.PutPDR(spdrInfo.PdrID, spdrInfo)
-						applyPDR(spdrInfo, mapOperations)
-						*createdPDRs = append(*createdPDRs, spdrInfo)
-						return nil
+						spdrInfo.PCCInfo = &rule
+						sdfFilters = append(sdfFilters, spdrInfo.PCCInfo.SDFFilter)
+						logger.Debug().
+							Str("pcc rule name", spdrInfo.PCCInfo.PCCName).
+							Uint16("pdrID", pdrID).
+							Msgf("PCC rule found: %+v", spdrInfo.PCCInfo)
 					}
-					return err
+
+					logger.Debug().Msgf("pdr: %+v", spdrInfo)
+					session.PutPDR(spdrInfo.PdrID, spdrInfo)
+					stored = true
+					applyPDR(spdrInfo, mapOperations)
+					*createdPDRs = append(*createdPDRs, spdrInfo)
+					return nil
 				}
 			}(),
 
 			Rollback: func() func() error {
 				return func() error {
+					if !stored {
+						return nil
+					}
 					if _, err := session.RemovePDR(spdrInfo.PdrID); err != nil {
 						return err
 					}
@@ -1157,7 +1189,7 @@ func updateFARs(
 		newFarInfo, err := composeFarInfo(far, oldFar.FarInfo, profile)
 		if err != nil {
 			logger.Info().Msgf("Error extracting FAR info: %s", err.Error())
-			continue
+			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
 		}
 
 		newFar := oldFar
