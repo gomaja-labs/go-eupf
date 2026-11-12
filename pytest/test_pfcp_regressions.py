@@ -28,14 +28,21 @@ def evidence():
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "tcpdump.log").open("w") as output:
         capture = subprocess.Popen(
-            ["tcpdump", "-U", "-i", "lo", "-w", str(directory / "synthetic.pcap"),
+            ["tcpdump", "-U", "--immediate-mode", "-i", "lo", "-w", str(directory / "synthetic.pcap"),
              "udp", "port", "8805"], stdout=output, stderr=output,
         )
-        time.sleep(0.2)
-        assert capture.poll() is None, "tcpdump failed to start"
-        yield directory
-        capture.send_signal(signal.SIGINT)
-        capture.wait(timeout=5)
+        try:
+            deadline = time.monotonic() + 5
+            while "listening on lo" not in (directory / "tcpdump.log").read_text():
+                assert capture.poll() is None, "tcpdump failed to start"
+                assert time.monotonic() < deadline, "tcpdump did not become ready"
+                time.sleep(0.02)
+            yield directory
+        finally:
+            if capture.poll() is None:
+                capture.send_signal(signal.SIGINT)
+            capture.wait(timeout=5)
+
 
 
 class Peer:
