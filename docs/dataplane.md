@@ -13,8 +13,22 @@ UPF from forwarding the extension. Unknown extensions that an intermediate
 node must remove currently take the intact kernel slow path. Extension-chain
 rewriting for this last case is not implemented.
 
-IPv4 fragments and inner IPv6 extension/fragment headers take the intact kernel
-slow path. Direct IPv6 packets with extension headers also go to the kernel.
+IPv4 fragments take the intact kernel slow path. IPv6 classification on N6
+and inside GTP-U walks up to eight Hop-by-Hop, Routing, Destination Options,
+Fragment and Authentication headers to find the final Next Header (RFC 8200
+section 4, as updated by RFC 9673; Errata 5256 uses the common extension-header
+length definition). ESP is an encrypted terminal protocol with no visible ports.
+Incomplete headers, invalid lengths and chains exceeding eight extensions drop
+before any PDR is selected. They cannot bypass a higher-precedence rule by
+appearing to have no ports. Transit Hop-by-Hop options are not processed, as
+permitted by RFC 9673; extension contents remain unchanged.
+
+Non-first IPv6 fragments retain the final protocol only when the Fragment
+header identifies it directly. They never match an explicit port constraint,
+even `0-65535` (RFC 6733 section 4.3.1). A fragment whose next extension cannot
+be located drops. Offset-one fragments drop under that same section. Atomic
+and first fragments can match ports when their complete transport header is
+present. No fragment reassembly is performed in XDP.
 The XDP program does not reassemble fragments or process Hop-by-Hop options.
 Deployment must provide the required kernel slow path; XDP_PASS alone does
 not establish successful reassembly or GTP processing. See RFC 791 section 3.2
@@ -101,6 +115,13 @@ Access PDRs reverse the CP description's addresses and ports (clause 5.2.1A.2A).
 An unavailable address family never widens the match. Malformed optional SDF
 Flow Descriptions are logged and ignored (clause 7.6.8); valid descriptions that
 request unsupported semantics return Service not supported with Failed Rule ID.
+Every ignored filter increments `upf_ignored_sdf_filters_total` and logs its
+session and PDR. Numeric protocols cover 0-255; `ip` is a separate wildcard.
+Names resolve through the deployment's `/etc/protocols` database. Ports are
+classified for TCP, UDP and SCTP (RFC 6733 section 4.3.1); explicit ports on
+other protocols reject with Cause 76. Unknown protocol names, deny rules,
+address negation, port lists and filter options are recognised as unsupported
+and rejected, preserving the PDR's intended restriction.
 A known key with no matching PDR drops. Unowned N6 destinations, non-IP traffic,
 and explicitly documented kernel slow paths retain XDP_PASS; an unknown GTP
 TEID follows the Error Indication procedure above. IPv6 prefixes use an LPM

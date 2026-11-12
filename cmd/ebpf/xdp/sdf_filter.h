@@ -32,24 +32,14 @@ struct port_range {
 };
 
 struct sdf_filter {
-    __u8 protocol; // Required by SDF. 0: icmp, 1: ip, 2: tcp, 3: udp
+    __u16 protocol; // IP protocol number, or 256 for any protocol
+    __u8 ports_present;
     struct ip_subnet src_addr;
     struct port_range src_port;
     struct ip_subnet dst_addr;
     struct port_range dst_port;
 };
 
-
-static __always_inline __u8 get_sdf_protocol(__u8 ip_protocol) {
-    switch(ip_protocol)
-    {
-        case IPPROTO_ICMP: return 0;
-        case IPPROTO_ICMPV6: return 4;
-        case IPPROTO_TCP: return 2;
-        case IPPROTO_UDP: return 3;
-        default: return 1;
-    }
-}
 
 #define MAX_CPUS 4096
 #define SAMPLE_SIZE 1024ul

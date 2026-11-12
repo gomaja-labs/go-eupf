@@ -52,7 +52,7 @@ func (e *SdfEvent) String() string {
 		return ""
 	}
 
-	if e.proto == 6 || e.proto == 17 {
+	if e.proto == 6 || e.proto == 17 || e.proto == 132 {
 		return fmt.Sprintf("permit in %d from %v/%d %d to %v/%d %d", e.proto, e.srcIP, len(e.srcIP)*8, e.srcPort, e.dstIP, len(e.srcIP)*8, e.dstPort)
 	} else {
 		return fmt.Sprintf("permit in %d from %v/%d to %v/%d", e.proto, e.srcIP, len(e.srcIP)*8, e.dstIP, len(e.srcIP)*8)

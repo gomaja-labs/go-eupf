@@ -67,9 +67,13 @@ type PdrInfo struct {
 	NRFlag                    bool        `json:"nr"`
 }
 
+// SDFProtocolAny is distinct from all eight-bit IP protocol numbers.
+const SDFProtocolAny uint16 = 256
+
 type SdfFilter struct {
 	Direction    string `json:"direction,omitempty"`
-	Protocol     uint8  // 0: icmp, 1: ip, 2: tcp, 3: udp, 4: icmp6
+	Protocol     uint16 // IP protocol number, or SDFProtocolAny
+	PortsPresent bool
 	SrcAddress   IpWMask
 	SrcPortRange PortRange
 	DstAddress   IpWMask
@@ -573,6 +577,9 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 	for i, source := range info.SdfFilter {
 		target := &entry.SdfFilters[i]
 		target.Protocol = source.Protocol
+		if source.PortsPresent || source.SrcPortRange != (PortRange{0, 65535}) || source.DstPortRange != (PortRange{0, 65535}) {
+			target.PortsPresent = 1
+		}
 		target.SrcAddr.Type = source.SrcAddress.Type
 		target.SrcAddr.Ip = Copy16Ip(source.SrcAddress.Ip)
 		target.SrcAddr.Mask = Copy16Ip(source.SrcAddress.Mask)

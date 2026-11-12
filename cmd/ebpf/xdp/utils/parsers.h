@@ -60,21 +60,96 @@ static __always_inline int parse_ip4(struct packet_context *ctx) {
     return ip4->protocol;
 }
 
-static __always_inline int parse_ip6(struct packet_context *ctx) {
-    struct ipv6hdr *ip6 = (struct ipv6hdr *)ctx->data;
-    if ((const char *)(ip6 + 1) > ctx->data_end)
-        return -1;
-    
-    // RFC 8200 sections 3-4 (updated by RFC 9673): only a direct L4 header
-    // is accelerated. Extension headers go to the kernel, without L4 guessing.
-    __u64 payload_len = bounded_wire_length(ip6->payload_len);
-    if (ip6->version != 6 || (const char *)(ip6 + 1) + payload_len > ctx->data_end)
-        return -1;
-    ctx->ip_end = (const char *)(ip6 + 1) + payload_len;
+struct ipv6_metadata {
+    __u32 offset;
+    __u8 protocol;
+    __u8 fragmented;
+    __u8 nonfirst_fragment;
+    __u8 reserved;
+};
 
-    ctx->data += sizeof(*ip6);
-    ctx->ip6 = ip6;
-    return ip6->nexthdr;
+// Verify the bounded walker separately from policy selection. Only scalar
+// offsets and flags cross this boundary; no packet pointer escapes it.
+int walk_ipv6_headers(struct xdp_md *xdp, __u32 ip_offset, struct ipv6_metadata *meta) {
+    const char *end=(const void *)(long)xdp->data_end;
+    char *base=(void *)(long)xdp->data;
+    if (!meta || ip_offset>32767) return -1;
+    __u64 bounded_offset=ip_offset;
+    asm volatile("" : "+r"(bounded_offset));
+    bounded_offset &= 0x7fff;
+    struct ipv6hdr *ip6=(void *)(base+bounded_offset);
+    if ((const char *)(ip6+1)>end) return -1;
+    const char *ip_end;
+    // RFC 8200 section 4, updated by RFC 9673: find the final Next Header
+    // through at most eight extension headers. Incomplete/long chains are
+    // unclassifiable (-2); callers drop them before selecting any PDR.
+    __u64 payload_len = bounded_wire_length(ip6->payload_len);
+    if (ip6->version != 6 || (const char *)(ip6 + 1) + payload_len > end)
+        return -1;
+    ip_end = (const char *)(ip6 + 1) + payload_len;
+    meta->fragmented = 0;
+    meta->nonfirst_fragment = 0;
+    char *cursor = (char *)(ip6 + 1);
+    __u8 next = ip6->nexthdr;
+    int saw_fragment = 0;
+    for (int i=0; i<8; i++) {
+        if (next!=IPPROTO_HOPOPTS && next!=IPPROTO_ROUTING &&
+            next!=IPPROTO_DSTOPTS && next!=IPPROTO_FRAGMENT && next!=IPPROTO_AH) {
+            meta->offset=cursor-(char *)ip6;meta->protocol=next;return 0;
+        }
+        if (cursor+8>end || cursor+8>ip_end) return -2;
+        const __u8 *header=(const void *)cursor;
+        __u8 following=header[0];
+        __u32 length;
+        if (next==IPPROTO_FRAGMENT) {
+            if (saw_fragment) return -2;
+            saw_fragment=1;
+            __u16 bits=bpf_ntohs(*(__be16 *)(cursor+2));
+            __u16 offset=bits & 0xfff8;
+            // RFC 6733 section 4.3.1: offset-one fragments are discarded.
+            if (offset==8) return -2;
+            meta->fragmented=(offset!=0 || (bits&1));
+            meta->nonfirst_fragment=offset!=0;
+            length=8;
+        } else if (next==IPPROTO_AH) {
+            length=((__u32)header[1]+2)*4;
+        } else {
+            length=((__u32)header[1]+1)*8;
+        }
+        if (length<8 || cursor+length>end || cursor+length>ip_end) return -2;
+        cursor+=length;
+        next=following;
+        if (meta->nonfirst_fragment) {
+            // Extension headers after the fragment header cannot be found in
+            // a non-first fragment. Never guess a transport tuple from data.
+            if (next==IPPROTO_HOPOPTS || next==IPPROTO_ROUTING || next==IPPROTO_DSTOPTS || next==IPPROTO_FRAGMENT || next==IPPROTO_AH) return -2;
+            meta->offset=cursor-(char *)ip6;meta->protocol=next;return 0;
+        }
+    }
+    if (next==IPPROTO_HOPOPTS || next==IPPROTO_ROUTING || next==IPPROTO_DSTOPTS || next==IPPROTO_FRAGMENT || next==IPPROTO_AH) return -2;
+    meta->offset=cursor-(char *)ip6;meta->protocol=next;return 0;
+}
+
+static __always_inline int parse_ip6(struct packet_context *ctx) {
+    struct ipv6hdr *ip6=(void *)ctx->data;
+    if ((const char *)(ip6+1)>ctx->data_end) return -1;
+    struct ipv6_metadata meta={0};
+    __u64 offset=ctx->data-(char *)(long)ctx->xdp_ctx->data;
+    if (offset>32767) return -1;
+    int result=walk_ipv6_headers(ctx->xdp_ctx,offset,&meta);
+    if (result<0) return result;
+    // Bound every scalar exported by the independently verified walker.
+    __u32 length=meta.offset & 0x7fff;
+    if (length>16424 || length<sizeof(*ip6) || (char *)ip6+length>ctx->data_end) return -2;
+    __u64 payload_len=bounded_wire_length(ip6->payload_len);
+    if ((const char *)(ip6+1)+payload_len>ctx->data_end) return -1;
+    ctx->ip_end=(const char *)(ip6+1)+payload_len;
+    ctx->ip6=ip6;ctx->data=(char *)ip6+length;
+    ctx->ip_protocol=meta.protocol;
+    ctx->fragmented=meta.fragmented;
+    ctx->nonfirst_fragment=meta.nonfirst_fragment;
+    ctx->ports_present=0;
+    return meta.protocol;
 }
 
 static __always_inline int parse_udp(struct packet_context *ctx) {
@@ -84,11 +159,14 @@ static __always_inline int parse_udp(struct packet_context *ctx) {
 
     // RFC 768: UDP Length includes its header and excludes Ethernet padding.
     __u32 len = bounded_wire_length(udp->len);
-    if (len < sizeof(*udp) || (const char *)udp + len > ctx->data_end ||
-        (ctx->ip_end && (const char *)udp + len > ctx->ip_end))
+    if (len < sizeof(*udp) || (!ctx->fragmented && (const char *)udp + len > ctx->data_end) ||
+        (ctx->ip_end && ((const char *)(udp+1)>ctx->ip_end || (!ctx->fragmented && (const char *)udp + len > ctx->ip_end))))
         return -1;
     ctx->data += sizeof(*udp);
     ctx->udp = udp;
+    ctx->source_port = bpf_ntohs(udp->source);
+    ctx->destination_port = bpf_ntohs(udp->dest);
+    ctx->ports_present = 1;
     return bpf_ntohs(udp->dest);
 }
 
@@ -104,16 +182,35 @@ static __always_inline int parse_tcp(struct packet_context *ctx) {
 
     ctx->data += len;
     ctx->tcp = tcp;
+    ctx->source_port = bpf_ntohs(tcp->source);
+    ctx->destination_port = bpf_ntohs(tcp->dest);
+    ctx->ports_present = 1;
     return bpf_ntohs(tcp->dest);
+}
+
+// RFC 6733 section 4.3.1: SCTP has source/destination ports too.
+// Only the common 12-byte header is needed for classification.
+static __always_inline int parse_sctp(struct packet_context *ctx) {
+    const __be16 *ports = (const void *)ctx->data;
+    if (ctx->data + 12 > ctx->data_end ||
+        (ctx->ip_end && ctx->data + 12 > ctx->ip_end)) return -1;
+    ctx->source_port = bpf_ntohs(ports[0]);
+    ctx->destination_port = bpf_ntohs(ports[1]);
+    ctx->ports_present = 1;
+    return 0;
 }
 
 static __always_inline int parse_l4(int ip_protocol, struct packet_context *ctx)
 {
+    ctx->ports_present=0;
+    if (ctx->nonfirst_fragment) return 0;
     switch (ip_protocol) {
         case IPPROTO_UDP:
             return parse_udp(ctx);
         case IPPROTO_TCP:
             return parse_tcp(ctx);
+        case IPPROTO_SCTP:
+            return parse_sctp(ctx);
         default:
             return 0;
     }
@@ -182,6 +279,7 @@ static __always_inline void context_reset(struct packet_context *ctx, char *data
     ctx->gtp = 0;
     ctx->tcp = 0;
     ctx->ip_end = 0;
+    ctx->source_port = 0; ctx->destination_port = 0; ctx->ports_present = 0;
     ctx->locally_generated = 0;
 }
 

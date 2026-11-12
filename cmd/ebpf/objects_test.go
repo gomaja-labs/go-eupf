@@ -331,7 +331,7 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	}
 
 	sdf := SdfFilter{
-		Protocol:     1,
+		Protocol:     SDFProtocolAny,
 		SrcAddress:   IpWMask{Type: 1, Ip: net.IP{10, 60, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}},
 		DstAddress:   IpWMask{Type: 1, Ip: net.IP{1, 1, 1, 1}, Mask: net.IPMask{255, 255, 255, 255}},
 		SrcPortRange: PortRange{LowerBound: 0, UpperBound: 65535},
@@ -504,7 +504,7 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	}
 
 	sdf := SdfFilter{
-		Protocol:     4,
+		Protocol:     58,
 		SrcAddress:   IpWMask{Type: 2, Ip: srcIP, Mask: srcNet.Mask},
 		DstAddress:   IpWMask{Type: 0},
 		SrcPortRange: PortRange{LowerBound: 0, UpperBound: 65535},
@@ -601,7 +601,7 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	}
 
 	sdf := SdfFilter{
-		Protocol:     1,
+		Protocol:     SDFProtocolAny,
 		SrcAddress:   IpWMask{Type: 2, Ip: srcIP, Mask: srcNet.Mask},
 		DstAddress:   IpWMask{Type: 2, Ip: dstIP, Mask: dstNet.Mask},
 		SrcPortRange: PortRange{LowerBound: 0, UpperBound: 65535},
@@ -703,7 +703,7 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 	}
 
 	sdf := SdfFilter{
-		Protocol:     1,
+		Protocol:     SDFProtocolAny,
 		SrcAddress:   IpWMask{Type: 1, Ip: net.IP{10, 60, 0, 1}, Mask: net.IPMask{255, 255, 255, 255}},
 		DstAddress:   IpWMask{Type: 1, Ip: net.IP{1, 1, 1, 1}, Mask: net.IPMask{255, 255, 255, 255}},
 		SrcPortRange: PortRange{LowerBound: 0, UpperBound: 65535},

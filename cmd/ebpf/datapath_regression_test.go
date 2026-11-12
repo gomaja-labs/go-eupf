@@ -264,7 +264,7 @@ func TestDatapathDecapsulateHeaderLengths(t *testing.T) {
 	}
 }
 
-func anyDatapathFilter(proto uint8) SdfFilter {
+func anyDatapathFilter(proto uint16) SdfFilter {
 	return SdfFilter{Protocol: proto, SrcPortRange: PortRange{0, 65535}, DstPortRange: PortRange{0, 65535}}
 }
 
@@ -272,7 +272,7 @@ func TestDatapathICMPSdfSelection(t *testing.T) {
 	// TS 29.244 V20.1.0 clauses 5.2.1A and 8.2.5: match the protocol in
 	// the provisioned SDF filter before applying its FAR.
 	b := loadDatapath(t)
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(0)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(1)}}); err != nil {
 		t.Fatal(err)
 	}
 	inner := serializeDatapath(t, &layers.IPv4{Version: 4, TTL: 64, Protocol: layers.IPProtocolICMPv4,
@@ -290,7 +290,7 @@ func TestDatapathIPv6DownlinkUDPSdfSelection(t *testing.T) {
 	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{OuterHeaderRemovalPresent: true, PdrID: 1, Precedence: ^uint32(0), ReturnFarID: 3, ReturnQerIDs: []uint32{1}, FarId: 1, QerIDs: []uint32{1}}); err != nil {
 		t.Fatal(err)
 	}
-	f := anyDatapathFilter(3)
+	f := anyDatapathFilter(17)
 	f.DstPortRange = PortRange{4321, 4321}
 	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{f}}); err != nil {
 		t.Fatal(err)
@@ -303,7 +303,7 @@ func TestDatapathIPv6DownlinkUDPSdfSelection(t *testing.T) {
 
 func TestDatapathIPv6SubnetSdfSelection(t *testing.T) {
 	b := loadDatapath(t)
-	f := anyDatapathFilter(1)
+	f := anyDatapathFilter(SDFProtocolAny)
 	ip, subnet, err := net.ParseCIDR("2001:db8::/64")
 	if err != nil {
 		t.Fatal(err)
@@ -918,7 +918,7 @@ func TestDatapathRouterSolicitationOptions(t *testing.T) {
 
 func TestDatapathICMPv6SdfSelection(t *testing.T) {
 	b := loadDatapath(t)
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(4)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(58)}}); err != nil {
 		t.Fatal(err)
 	}
 	ip := &layers.IPv6{Version: 6, HopLimit: 64, NextHeader: layers.IPProtocolICMPv6, SrcIP: net.ParseIP("2001:db8::1"), DstIP: net.ParseIP("2001:db8::2")}

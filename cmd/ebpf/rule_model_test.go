@@ -18,7 +18,7 @@ func TestDatapathAdditionalSdfPreservesExistingRule(t *testing.T) {
 	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PutPdrUplink(10, PdrInfo{OuterHeaderRemovalPresent: true, PdrID: 1, FarId: 1, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{OuterHeaderRemovalPresent: true, PdrID: 1, FarId: 1, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(17)}}); err != nil {
 		t.Fatal(err)
 	}
 	packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
@@ -26,7 +26,7 @@ func TestDatapathAdditionalSdfPreservesExistingRule(t *testing.T) {
 	if before == 1 {
 		t.Fatalf("first PDR did not forward before insertion: %d", before)
 	}
-	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 2, FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(2)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 2, FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(6)}}); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := runDatapath(t, b, packet)
@@ -72,8 +72,8 @@ func TestDatapathOrderedCompletePDI(t *testing.T) {
 		}
 	}
 	udp := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
-	first := PdrInfo{SessionID: 9, PdrID: 1, Precedence: 100, OuterHeaderRemovalPresent: true, FarId: 1, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}
-	second := PdrInfo{SessionID: 9, PdrID: 2, Precedence: 10, FarId: 2, UEIPv4: net.IP{192, 0, 2, 99}, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}
+	first := PdrInfo{SessionID: 9, PdrID: 1, Precedence: 100, OuterHeaderRemovalPresent: true, FarId: 1, SdfFilter: []SdfFilter{anyDatapathFilter(17)}}
+	second := PdrInfo{SessionID: 9, PdrID: 2, Precedence: 10, FarId: 2, UEIPv4: net.IP{192, 0, 2, 99}, SdfFilter: []SdfFilter{anyDatapathFilter(17)}}
 	put(first)
 	put(second)
 	check := func(name string, packet []byte, drop bool) {
@@ -109,7 +109,7 @@ func TestDatapathOrderedCompletePDI(t *testing.T) {
 	put(second)
 	check("present_zero_QFI_matches", zero, false)
 	second.QFIs = nil
-	second.SdfFilter = []SdfFilter{anyDatapathFilter(2), anyDatapathFilter(3)}
+	second.SdfFilter = []SdfFilter{anyDatapathFilter(6), anyDatapathFilter(17)}
 	put(second)
 	check("repeated_SDF_is_OR", udp, false)
 	second.SourceInterfacePresent = true
@@ -232,7 +232,7 @@ func TestDatapathAssignedSDFMatchesTerminalAddressSet(t *testing.T) {
 	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 		t.Fatal(err)
 	}
-	filter := anyDatapathFilter(1)
+	filter := anyDatapathFilter(SDFProtocolAny)
 	filter.DstAddress.Type = 3
 	p := PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, AssignedIPv4: net.ParseIP("198.51.100.2"), AssignedIPv6: net.ParseIP("2001:db8::"), AssignedIPv6Mask: net.CIDRMask(64, 128), SdfFilter: []SdfFilter{filter}}
 	check := func(v6 bool, drop bool) {
@@ -266,9 +266,9 @@ func TestDatapathFifthSDFFilterIsSelectable(t *testing.T) {
 	b := loadDatapath(t)
 	filters := make([]SdfFilter, 5)
 	for i := range filters {
-		filters[i] = anyDatapathFilter(2)
+		filters[i] = anyDatapathFilter(6)
 	}
-	filters[4] = anyDatapathFilter(3)
+	filters[4] = anyDatapathFilter(17)
 	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, SdfFilter: filters}); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestDatapathUnfilteredSelectionKeepsConstraints(t *testing.T) {
 		{"source_interface", func(p *PdrInfo) { p.SourceInterfacePresent = true; p.SourceInterface = 1 }, true},
 		{"ue_address", func(p *PdrInfo) { p.UEIPv4 = net.IP{203, 0, 113, 1} }, true},
 		{"qfi", func(p *PdrInfo) { p.QFIs = []uint8{9} }, true},
-		{"sdf", func(p *PdrInfo) { p.SdfFilter = []SdfFilter{anyDatapathFilter(2)} }, true},
+		{"sdf", func(p *PdrInfo) { p.SdfFilter = []SdfFilter{anyDatapathFilter(6)} }, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := p

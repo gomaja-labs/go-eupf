@@ -35,7 +35,7 @@ func TestValidUnsupportedSDFFilterIsRejected(t *testing.T) {
 	s := NewSession(9, 42, "", "", false)
 	ctx := NewPDRCreationContext(s, nil)
 	info := SPDRInfo{PdrID: 1}
-	request := ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.2", "", 0, 0), ie.NewSDFFilter("permit out 132 from any to any", nil, nil, nil, 0)))
+	request := ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.2", "", 0, 0), ie.NewSDFFilter("permit out tcp from any to any established", nil, nil, nil, 0)))
 	if err := ctx.extractPDR(request, &info); !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
 		t.Fatalf("unsupported filter must reject: %v", err)
 	}
@@ -58,7 +58,7 @@ func FuzzSdfFlowDescription(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if filter.Protocol > 4 || filter.SrcPortRange.LowerBound > filter.SrcPortRange.UpperBound || filter.DstPortRange.LowerBound > filter.DstPortRange.UpperBound {
+		if filter.Protocol > ebpf.SDFProtocolAny || filter.SrcPortRange.LowerBound > filter.SrcPortRange.UpperBound || filter.DstPortRange.LowerBound > filter.DstPortRange.UpperBound {
 			t.Fatal("accepted a classifier tuple outside its representable bounds")
 		}
 		for _, address := range []ebpf.IpWMask{filter.SrcAddress, filter.DstAddress} {

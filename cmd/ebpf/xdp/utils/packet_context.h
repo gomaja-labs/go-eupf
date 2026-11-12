@@ -36,4 +36,10 @@ struct packet_context {
     __u8 locally_generated;
     __u8 source_interface;
     __u8 nr_flag;
+    __u16 source_port;
+    __u16 destination_port;
+    __u8 ports_present;
+    __u8 ip_protocol;
+    __u8 fragmented;
+    __u8 nonfirst_fragment;
 };

@@ -183,7 +183,7 @@ func TestIPv6SdfNotification(t *testing.T) {
 	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PutPdrUplink(10, PdrInfo{SessionID: (1 << 40) + 9, PdrID: 7, FarId: 1, QerIDs: []uint32{1}, NotifyFlag: true, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{SessionID: (1 << 40) + 9, PdrID: 7, FarId: 1, QerIDs: []uint32{1}, NotifyFlag: true, SdfFilter: []SdfFilter{anyDatapathFilter(17)}}); err != nil {
 		t.Fatal(err)
 	}
 	runDatapath(t, b, gtpDatapath(t, udpDatapath(t, true), nil, 0x30, false))

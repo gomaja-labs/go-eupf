@@ -104,11 +104,11 @@ def test_malformed_optional_sdf_is_ignored(peer):
 
 
 def test_valid_unsupported_sdf_rejects_without_leaving_state(peer):
-    # RFC 6733 section 4.3.1: numeric protocol 132 is valid syntax.
+    # RFC 6733 section 4.3.1: established is valid but unsupported.
     before = get_json("/api/v1/pfcp_sessions") or []
     response = peer.establish([
         far(), pdr(sdf=pfcp.IE_SDF_Filter(
-            FD=1, flow_description=b"permit out 132 from any to any")),
+            FD=1, flow_description=b"permit out tcp from any to any established")),
     ])
     assert response[pfcp.IE_Cause].cause == 76
     assert response[pfcp.IE_FailedRuleId].type == 0
@@ -295,3 +295,40 @@ def test_live_precedence_qers_and_unmatched_drop(peer):
         traffic.send("final-control-delivered")
     finally:
         traffic.close()
+
+
+@pytest.mark.parametrize("protocol", ["0", "1", "6", "17", "47", "50", "58", "132", "253", "255", "gre", "esp", "sctp", "ip"])
+def test_sdf_protocol_number_establishment(peer, protocol):
+    # RFC 6733 section 4.3.1: preserve the complete IP protocol number.
+    description = f"permit out {protocol} from any to any".encode()
+    response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(
+        FD=1, flow_description=description))])
+    assert response[pfcp.IE_Cause].cause == 1
+    seid = response[pfcp.IE_FSEID].seid
+    assert peer.request(pfcp.PFCPSessionDeletionRequest(), seid)[pfcp.IE_Cause].cause == 1
+
+
+@pytest.mark.parametrize("option", ["frag", "ipoptions ssrr,!lsrr,rr,ts", "tcpoptions mss,!window,sack,ts,cc", "established", "setup", "tcpflags syn,!ack", "icmptypes 0,8-11", "icmptypes echo reply"])
+def test_valid_unsupported_sdf_option_rejected(peer, option):
+    # Valid IPFilterRule options must not be discarded as malformed optional IEs.
+    description = f"permit out tcp from any to assigned {option}".encode()
+    response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=description))])
+    assert response[pfcp.IE_Cause].cause == 76
+    assert response[pfcp.IE_FailedRuleId].type == 0
+    assert response[pfcp.IE_FailedRuleId].pdr_id == 1
+
+
+def test_ignored_sdf_metric_counts_each_filter(peer):
+    # TS 29.244 V20.1.0 clause 7.6.8: ignoring an optional filter is observable.
+    def count():
+        with urllib.request.urlopen("http://127.0.0.1:19090/metrics", timeout=2) as response:
+            for line in response.read().decode().splitlines():
+                if line.startswith("upf_ignored_sdf_filters_total "):
+                    return float(line.split()[1])
+        pytest.fail("ignored-SDF counter is missing")
+    before = count()
+    for description in (b"invalid", b"", b"permit out udp from any 2000-1000 to any"):
+        response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=description))])
+        assert response[pfcp.IE_Cause].cause == 1
+        assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
+    assert count() - before == 3

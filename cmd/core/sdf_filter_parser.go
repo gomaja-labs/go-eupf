@@ -5,12 +5,15 @@
 package core
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
@@ -69,6 +72,7 @@ func ParseSdfFilter(description string) (ebpf.SdfFilter, error) {
 			}
 		}
 		if index < len(fields) && len(fields[index]) > 0 && fields[index][0] >= '0' && fields[index][0] <= '9' {
+			filter.PortsPresent = true
 			parts := strings.Split(fields[index], ",")
 			index++
 			for n, part := range parts {
@@ -109,12 +113,22 @@ func ParseSdfFilter(description string) (ebpf.SdfFilter, error) {
 			}
 			argument := fields[index]
 			index++
+			if option == "icmptypes" {
+				for index < len(fields) && !isSDFOption(fields[index]) {
+					argument += " " + fields[index]
+					index++
+				}
+			}
 			if !validSDFOption(option, argument) {
 				return bad()
 			}
 		default:
 			return bad()
 		}
+		unsupported = true
+	}
+	// RFC 6733 section 4.3.1 defines ports for TCP, UDP and SCTP only.
+	if filter.PortsPresent && filter.Protocol != 6 && filter.Protocol != 17 && filter.Protocol != 132 {
 		unsupported = true
 	}
 	if unsupported {
@@ -128,7 +142,7 @@ func validSDFOption(option, argument string) bool {
 	for _, part := range strings.Split(argument, ",") {
 		if option == "icmptypes" {
 			ports, err := ParsePortRange(part)
-			if err != nil || ports.UpperBound > 255 {
+			if (err != nil || ports.UpperBound > 255) && !validICMPTypeName(part) {
 				return false
 			}
 		} else if part == "" || !strings.Contains(names[option], ","+strings.TrimPrefix(part, "!")+",") {
@@ -138,39 +152,61 @@ func validSDFOption(option, argument string) bool {
 	return true
 }
 
-func ParseProtocol(protocol string) (uint8, error) {
+// protocolNames is immutable after first use. Read the deployment's protocol
+// database once, as required for locally configured IPFilterRule names.
+var protocolNames = sync.OnceValue(func() map[string]uint16 {
+	names := map[string]uint16{"icmp": 1, "tcp": 6, "udp": 17, "icmp6": 58, "ipv6-icmp": 58, "sctp": 132, "gre": 47, "esp": 50}
+	file, err := os.Open("/etc/protocols")
+	if err != nil {
+		return names
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line, _, _ := strings.Cut(scanner.Text(), "#")
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		number, err := strconv.ParseUint(fields[1], 10, 8)
+		if err != nil {
+			continue
+		}
+		names[strings.ToLower(fields[0])] = uint16(number)
+		for _, alias := range fields[2:] {
+			names[strings.ToLower(alias)] = uint16(number)
+		}
+	}
+	return names
+})
+
+// ParseProtocol returns an IP protocol number, or SDFProtocolAny for "ip".
+// RFC 6733 section 4.3.1 permits the complete eight-bit protocol space.
+func ParseProtocol(protocol string) (uint16, error) {
+	if protocol == "ip" {
+		return ebpf.SDFProtocolAny, nil
+	}
 	if len(protocol) > 0 && protocol[0] >= '0' && protocol[0] <= '9' {
-		if _, err := strconv.ParseUint(protocol, 10, 8); err != nil {
+		number, err := strconv.ParseUint(protocol, 10, 8)
+		if err != nil {
 			return 0, fmt.Errorf("invalid SDF protocol: %w", err)
 		}
-	} else if protocol != "icmp" && protocol != "icmp6" && protocol != "ip" && protocol != "tcp" && protocol != "udp" {
-		return 0, fmt.Errorf("invalid SDF protocol name")
+		return uint16(number), nil
 	}
-
-	switch protocol {
-	case "58":
-		protocol = "icmp6"
-	case "1":
-		protocol = "icmp"
-	case "17":
-		protocol = "udp"
-	case "6":
-		protocol = "tcp"
-	}
-
-	protocolMap := map[string]uint8{
-		"icmp":  0,
-		"ip":    1,
-		"tcp":   2,
-		"udp":   3,
-		"icmp6": 4,
-	}
-	number, ok := protocolMap[protocol]
-	if ok {
+	if number, ok := protocolNames()[strings.ToLower(protocol)]; ok {
 		return number, nil
-	} else {
-		return 0, fmt.Errorf("SDF filter protocol %s: %w", protocol, ebpf.ErrUnsupportedRuleContent)
 	}
+	for i, c := range protocol {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '-' || c == '_')) {
+			return 0, fmt.Errorf("invalid SDF protocol name")
+		}
+	}
+	if protocol == "" {
+		return 0, fmt.Errorf("empty SDF protocol")
+	}
+	// A syntactically valid name unknown on this host must never silently
+	// discard an optional SDF and widen its PDR.
+	return 0, fmt.Errorf("unknown SDF protocol name %s: %w", protocol, ebpf.ErrUnsupportedRuleContent)
 }
 
 func ParseCidrIp(ipStr, maskStr string) (ebpf.IpWMask, error) {
@@ -237,4 +273,22 @@ func ParsePort(str string) (uint16, error) {
 	} else {
 		return 0, err
 	}
+}
+
+// RFC 6733 section 4.3.1 also permits symbolic ICMP type names.
+func validICMPTypeName(name string) bool {
+	name = strings.NewReplacer(" ", "", "-", "").Replace(name)
+	switch name {
+	case "echoreply", "unreach", "quench", "redirect", "echo", "routeradv", "routersol", "timex", "paramprob", "tstamp", "tstampreply", "ireq", "ireqreply", "maskreq", "maskreply", "destinationunreachable", "sourcequench", "echorequest", "routeradvertisement", "routersolicitation", "timetoliveexceeded", "ipheaderbad", "timestamprequest", "timestampreply", "informationrequest", "informationreply", "addressmaskrequest", "addressmaskreply":
+		return true
+	}
+	return false
+}
+
+func isSDFOption(s string) bool {
+	switch s {
+	case "frag", "ipoptions", "tcpoptions", "established", "setup", "tcpflags", "icmptypes":
+		return true
+	}
+	return false
 }

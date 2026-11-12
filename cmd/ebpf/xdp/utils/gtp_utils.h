@@ -84,7 +84,7 @@ static __noinline int parse_gtp(struct packet_context *ctx) {
     if (gtp->message_type == GTPU_G_PDU) {
         // Only IP PDU sessions are supported. Validate the entire T-PDU before
         // policy or accounting; optional GTP words are never subscriber bytes.
-        struct packet_context inner = { .data=cursor, .data_end=ctx->data_end };
+        struct packet_context inner = { .data=cursor, .data_end=ctx->data_end, .xdp_ctx=ctx->xdp_ctx };
         if (cursor + 1 > ctx->data_end || cursor + 1 > end) return -1;
         __u8 version = (__u8)*cursor >> 4;
         if (version == 4) {
@@ -95,11 +95,9 @@ static __noinline int parse_gtp(struct packet_context *ctx) {
             if (parse_ip4(&inner) < 0 || inner.ip_end != end) return -1;
             if (parse_l4(ip->protocol,&inner)<0) return -1;
         } else if (version == 6) {
-            if (parse_ip6(&inner) < 0 || inner.ip_end != end) return -1;
-            if (inner.ip6->nexthdr==IPPROTO_HOPOPTS || inner.ip6->nexthdr==IPPROTO_ROUTING ||
-                inner.ip6->nexthdr==IPPROTO_FRAGMENT || inner.ip6->nexthdr==IPPROTO_DSTOPTS ||
-                inner.ip6->nexthdr==IPPROTO_AH || inner.ip6->nexthdr==IPPROTO_ESP) return -3;
-            if (parse_l4(inner.ip6->nexthdr,&inner)<0) return -1;
+            int protocol=parse_ip6(&inner);
+            if (protocol < 0 || inner.ip_end != end) return -1;
+            if (parse_l4(protocol,&inner)<0) return -1;
         } else return -1;
     }
     return gtp->message_type;

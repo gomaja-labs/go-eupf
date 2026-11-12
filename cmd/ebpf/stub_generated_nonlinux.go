@@ -88,9 +88,10 @@ type IpEntrypointPdrEntry struct {
 	Qfis                   [8]uint8
 	_                      [7]byte
 	SdfFilters             [5]struct {
-		Protocol uint8
-		_        [15]byte
-		SrcAddr  struct {
+		Protocol     uint16
+		PortsPresent uint8
+		_            [13]byte
+		SrcAddr      struct {
 			Type uint8
 			_    [15]byte
 			Ip   [16]byte /* uint128 */

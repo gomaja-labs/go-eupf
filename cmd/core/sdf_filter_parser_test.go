@@ -13,31 +13,31 @@ import (
 
 func TestSdfFilterParseValid(t *testing.T) {
 	fds := [...]SdfFilterTestStruct{
-		{FlowDescription: "permit out ip from 10.62.0.1 to 8.8.8.8/32", Protocol: 1,
+		{FlowDescription: "permit out ip from 10.62.0.1 to 8.8.8.8/32", Protocol: ebpf.SDFProtocolAny,
 			SrcType: 1, SrcAddress: "10.62.0.1", SrcMask: "ffffffff", SrcPortLower: 0, SrcPortUpper: 65535,
 			DstType: 1, DstAddress: "8.8.8.8", DstMask: "ffffffff", DstPortLower: 0, DstPortUpper: 65535},
-		{FlowDescription: "permit out tcp from 1.1.1.1/20 80 to 100.1.2.3 9121-10202", Protocol: 2,
+		{FlowDescription: "permit out tcp from 1.1.1.1/20 80 to 100.1.2.3 9121-10202", Protocol: 6,
 			SrcType: 1, SrcAddress: "1.1.0.0", SrcMask: "fffff000", SrcPortLower: 80, SrcPortUpper: 80,
 			DstType: 1, DstAddress: "100.1.2.3", DstMask: "ffffffff", DstPortLower: 9121, DstPortUpper: 10202},
-		{FlowDescription: "permit out udp from 2001:db8:3333:4444:CCCC:DDDD:EEEE:FFFF 8080-8081 to 2001:0db8::42/30", Protocol: 3,
+		{FlowDescription: "permit out udp from 2001:db8:3333:4444:CCCC:DDDD:EEEE:FFFF 8080-8081 to 2001:0db8::42/30", Protocol: 17,
 			SrcType: 2, SrcAddress: "2001:db8:3333:4444:cccc:dddd:eeee:ffff", SrcMask: "ffffffffffffffffffffffffffffffff", SrcPortLower: 8080, SrcPortUpper: 8081,
 			DstType: 2, DstAddress: "2001:db8::", DstMask: "fffffffc000000000000000000000000", DstPortLower: 0, DstPortUpper: 65535},
-		{FlowDescription: "permit out icmp from any 4-5 to ::1234:5678/2 2", Protocol: 0,
-			SrcType: 0, SrcAddress: "<nil>", SrcMask: "<nil>", SrcPortLower: 4, SrcPortUpper: 5,
-			DstType: 2, DstAddress: "::", DstMask: "c0000000000000000000000000000000", DstPortLower: 2, DstPortUpper: 2},
-		{FlowDescription: "permit out 58 from ff02::2/128 to any", Protocol: 4,
+		{FlowDescription: "permit out icmp from any to ::1234:5678/2", Protocol: 1,
+			SrcType: 0, SrcAddress: "<nil>", SrcMask: "<nil>", SrcPortLower: 0, SrcPortUpper: 65535,
+			DstType: 2, DstAddress: "::", DstMask: "c0000000000000000000000000000000", DstPortLower: 0, DstPortUpper: 65535},
+		{FlowDescription: "permit out 58 from ff02::2/128 to any", Protocol: 58,
 			SrcType: 2, SrcAddress: "ff02::2", SrcMask: "ffffffffffffffffffffffffffffffff", SrcPortLower: 0, SrcPortUpper: 65535,
 			DstType: 0, DstAddress: "<nil>", DstMask: "<nil>", DstPortLower: 0, DstPortUpper: 65535},
-		{FlowDescription: "permit out ip from 10.60.0.0/16 to any", Protocol: 1,
+		{FlowDescription: "permit out ip from 10.60.0.0/16 to any", Protocol: ebpf.SDFProtocolAny,
 			SrcType: 1, SrcAddress: "10.60.0.0", SrcMask: "ffff0000", SrcPortLower: 0, SrcPortUpper: 65535,
 			DstType: 0, DstAddress: "<nil>", DstMask: "<nil>", DstPortLower: 0, DstPortUpper: 65535},
-		{FlowDescription: "permit out ip from any to any", Protocol: 1,
+		{FlowDescription: "permit out ip from any to any", Protocol: ebpf.SDFProtocolAny,
 			SrcType: 0, SrcAddress: "<nil>", SrcMask: "<nil>", SrcPortLower: 0, SrcPortUpper: 65535,
 			DstType: 0, DstAddress: "<nil>", DstMask: "<nil>", DstPortLower: 0, DstPortUpper: 65535},
-		{FlowDescription: "permit in 17 from 10.169.145.130/32 1235 to 10.169.247.161/32 13033", Protocol: 3,
+		{FlowDescription: "permit in 17 from 10.169.145.130/32 1235 to 10.169.247.161/32 13033", Protocol: 17,
 			SrcType: 1, SrcAddress: "10.169.145.130", SrcMask: "ffffffff", SrcPortLower: 1235, SrcPortUpper: 1235,
 			DstType: 1, DstAddress: "10.169.247.161", DstMask: "ffffffff", DstPortLower: 13033, DstPortUpper: 13033},
-		{FlowDescription: "permit out 17 from 10.169.247.161/32 13033 to 10.169.145.130/32 1235", Protocol: 3,
+		{FlowDescription: "permit out 17 from 10.169.247.161/32 13033 to 10.169.145.130/32 1235", Protocol: 17,
 			SrcType: 1, SrcAddress: "10.169.247.161", SrcMask: "ffffffff", SrcPortLower: 13033, SrcPortUpper: 13033,
 			DstType: 1, DstAddress: "10.169.145.130", DstMask: "ffffffff", DstPortLower: 1235, DstPortUpper: 1235},
 	}
@@ -87,7 +87,7 @@ func TestSdfFilterParseInvalid(t *testing.T) {
 
 type SdfFilterTestStruct struct {
 	FlowDescription string
-	Protocol        uint8
+	Protocol        uint16
 	SrcType         uint8
 	SrcAddress      string
 	SrcMask         string

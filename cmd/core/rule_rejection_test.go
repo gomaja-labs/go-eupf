@@ -18,7 +18,7 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 		id   uint32
 	}{
 		{"unsupported-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out 132 from any to any", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out tcp from any to any established", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
 		{"unknown-predefined-rule", ie.NewCreatePDR(ie.NewPDRID(8), ie.NewPrecedence(10),
 			ie.NewActivatePredefinedRules("unconfigured"), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.11", "", 0, 0))), ie.RuleIDTypePDR, 8},
 		{"truncated-outer-header", ie.NewCreateFAR(ie.NewFARID(9), ie.NewApplyAction(2),
@@ -65,7 +65,7 @@ func TestInvalidRulesPreserveModification(t *testing.T) {
 		id   uint32
 	}{
 		{"unsupported-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out 132 from any to any", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out tcp from any to any established", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
 		{"truncated-outer-header", ie.NewUpdateFAR(ie.NewFARID(9),
 			ie.NewUpdateForwardingParameters(ie.New(ie.OuterHeaderCreation, []byte{1, 0, 1}))), ie.RuleIDTypeFAR, 9},
 	} {

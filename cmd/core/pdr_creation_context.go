@@ -14,8 +14,20 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
 )
+
+var ignoredSDFFilters = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "upf_ignored_sdf_filters_total",
+	Help: "Semantically incorrect optional SDF filters ignored under TS 29.244 clause 7.6.8",
+})
+
+func ignoreSDFFilter(info *SPDRInfo, err error) {
+	ignoredSDFFilters.Inc()
+	log.Warn().Err(err).Uint64("SEID", info.PdrInfo.SessionID).Uint32("PDRID", info.PdrID).Msg("Ignore semantically incorrect optional SDF Filter")
+}
 
 type PDRCreationContext struct {
 	Session              *Session
@@ -226,7 +238,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		{
 			if sdfFilter, err := x.SDFFilter(); err == nil {
 				if sdfFilter.FlowDescription == "" {
-					log.Warn().Msgf("SDFFilter is empty")
+					ignoreSDFFilter(spdrInfo, fmt.Errorf("empty Flow Description"))
 				} else if sdfFilterParsed, err := ParseSdfFilter(sdfFilter.FlowDescription); err == nil {
 					if spdrInfo.PdrInfo.SdfFilter == nil {
 						spdrInfo.PdrInfo.SdfFilter = make([]ebpf.SdfFilter, 0, 2)
@@ -247,8 +259,10 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 					}
 					// TS 29.244 V20.1.0 clause 7.6.8 and Table 7.5.2.2-2:
 					// a semantically incorrect optional SDF Filter is absent.
-					log.Warn().Err(err).Uint32("PDRID", spdrInfo.PdrID).Msg("Ignore semantically incorrect optional SDF Filter")
+					ignoreSDFFilter(spdrInfo, err)
 				}
+			} else {
+				ignoreSDFFilter(spdrInfo, err)
 			}
 		}
 	}

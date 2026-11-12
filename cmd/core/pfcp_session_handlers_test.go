@@ -244,7 +244,7 @@ func TestSdfFilterStoreValid(t *testing.T) {
 
 	ip1, _ := net.ResolveIPAddr("ip", "1.1.1.1")
 
-	fd := SdfFilterTestStruct{FlowDescription: "permit out ip from 10.62.0.1 to 8.8.8.8/32", Protocol: 1,
+	fd := SdfFilterTestStruct{FlowDescription: "permit out ip from 10.62.0.1 to 8.8.8.8/32", Protocol: ebpf.SDFProtocolAny,
 		SrcType: 1, SrcAddress: "10.62.0.1", SrcMask: "ffffffff", SrcPortLower: 0, SrcPortUpper: 65535,
 		DstType: 1, DstAddress: "8.8.8.8", DstMask: "ffffffff", DstPortLower: 0, DstPortUpper: 65535}
 
@@ -360,7 +360,7 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 
 	fd1 := SdfFilterTestStruct{
 		FlowDescription: "permit out 17 from 10.169.247.161/32 13033 to 10.169.145.130/32 1235",
-		Protocol:        3,
+		Protocol:        17,
 		SrcType:         1,
 		SrcAddress:      "10.169.247.161",
 		SrcMask:         "ffffffff",
@@ -374,7 +374,7 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 
 	fd2 := SdfFilterTestStruct{
 		FlowDescription: "permit out 17 from 10.169.247.161/32 13034 to 10.169.145.130/32 1236",
-		Protocol:        3,
+		Protocol:        17,
 		SrcType:         1,
 		SrcAddress:      "10.169.247.161",
 		SrcMask:         "ffffffff",

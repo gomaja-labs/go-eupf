@@ -101,7 +101,8 @@ struct pdi_packet {
     __u8 qfi;
     __u8 qfi_present;
     __u8 source_interface;
-    __u8 reserved[7];
+    __u8 ports_present;
+    __u8 reserved[6];
 };
 
 // This scalar metadata helper does not re-parse packet headers for each PDR.
@@ -159,7 +160,7 @@ int match_pdr_entry(const struct pdr_entry *entry, const struct pdi_packet *pack
     for (int i=0;i<SDF_LIST_SIZE;i++) {
         if (i>=entry->sdf_count) break;
         const struct sdf_filter *filter=&entry->sdf_filters[i];
-        if (filter->protocol!=1 && filter->protocol!=get_sdf_protocol(packet->protocol)) continue;
+        if (filter->protocol!=256 && filter->protocol!=packet->protocol) continue;
         if ((filter->src_addr.type && filter->src_addr.type!=3 && filter->src_addr.type!=packet->family) || (filter->dst_addr.type && filter->dst_addr.type!=3 && filter->dst_addr.type!=packet->family)) continue;
         __u128 src=packet->family==1?bpf_htonl((__u32)filter->src_addr.ip):bpf_htonlll(filter->src_addr.ip);
         __u128 dst=packet->family==1?bpf_htonl((__u32)filter->dst_addr.ip):bpf_htonlll(filter->dst_addr.ip);
@@ -169,7 +170,8 @@ int match_pdr_entry(const struct pdr_entry *entry, const struct pdi_packet *pack
         else if (filter->src_addr.type && ((packet->source^src)&src_mask)) continue;
         if (filter->dst_addr.type == 3) { if (!match_assigned(entry, packet, packet->destination)) continue; }
         else if (filter->dst_addr.type && ((packet->destination^dst)&dst_mask)) continue;
-        if (packet->source_port<filter->src_port.lower_bound || packet->source_port>filter->src_port.upper_bound || packet->destination_port<filter->dst_port.lower_bound || packet->destination_port>filter->dst_port.upper_bound) continue;
+        if (filter->ports_present && !packet->ports_present) continue;
+        if (filter->ports_present && (packet->source_port<filter->src_port.lower_bound || packet->source_port>filter->src_port.upper_bound || packet->destination_port<filter->dst_port.lower_bound || packet->destination_port>filter->dst_port.upper_bound)) continue;
         return 1;
     }
     return 0;
@@ -206,8 +208,9 @@ static __always_inline const struct pdr *select_unfiltered_pdr(struct packet_con
     return &entry->pdr;
 }
 static __always_inline void pdi_ports(struct packet_context *ctx,struct pdi_packet *tuple) {
-    if (ctx->udp) {tuple->source_port=bpf_ntohs(ctx->udp->source);tuple->destination_port=bpf_ntohs(ctx->udp->dest);}
-    else if (ctx->tcp) {tuple->source_port=bpf_ntohs(ctx->tcp->source);tuple->destination_port=bpf_ntohs(ctx->tcp->dest);}
+    tuple->source_port=ctx->source_port;
+    tuple->destination_port=ctx->destination_port;
+    tuple->ports_present=ctx->ports_present;
 }
 static __always_inline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
     const struct pdr *unfiltered = select_unfiltered_pdr(ctx, session);
@@ -219,7 +222,7 @@ static __always_inline const struct pdr* check_sdf_filters_ipv4(struct packet_co
 static __always_inline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
     const struct pdr *unfiltered = select_unfiltered_pdr(ctx, session);
     if (unfiltered) return unfiltered;
-    struct pdi_packet packet={.family=2,.protocol=ctx->ip6->nexthdr,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
+    struct pdi_packet packet={.family=2,.protocol=ctx->ip_protocol,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
     __builtin_memcpy(&packet.source,&ctx->ip6->saddr,16);__builtin_memcpy(&packet.destination,&ctx->ip6->daddr,16);
     pdi_ports(ctx,&packet);
     return select_pdr(ctx,session,&packet,ref);
@@ -237,6 +240,7 @@ static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_con
     const char *outer_end = ctx->ip_end;
     const struct pdr *found = 0;
     ctx->ip4=0; ctx->ip6=0; ctx->udp=0; ctx->tcp=0; ctx->ip_end=0;
+    ctx->source_port=0;ctx->destination_port=0;ctx->ports_present=0;
     if (payload+1 > ctx->data_end) goto done;
     int protocol = guess_eth_protocol(payload);
     if (protocol == ETH_P_IP_BE) {
@@ -637,6 +641,9 @@ static __always_inline enum xdp_action handle_ip4(struct packet_context *ctx) {
             increment_counter(ctx->counters, rx_tcp);
             if (parse_tcp(ctx) < 0) return XDP_PASS;
             break;
+        case IPPROTO_SCTP:
+            if (parse_sctp(ctx) < 0) return XDP_PASS;
+            break;
         default:
             increment_counter(ctx->counters, rx_other);
             if (l4_protocol < 0) return DEFAULT_XDP_ACTION;
@@ -648,31 +655,17 @@ static __always_inline enum xdp_action handle_ip4(struct packet_context *ctx) {
 }
 
 static __always_inline enum xdp_action handle_ip6(struct packet_context *ctx) {
-    int l4_protocol = parse_ip6(ctx);
-    switch (l4_protocol) {
-        case IPPROTO_ICMPV6:
-            increment_counter(ctx->counters, rx_icmp6);
-            break;
-        case IPPROTO_UDP:
-            increment_counter(ctx->counters, rx_udp);
-            if (parse_udp(ctx) < 0) return XDP_PASS;
-            // Don't expect GTP over IPv6 at the moment
-            // if (GTP_UDP_PORT == parse_udp(ctx))
-            // {
-            //     upf_printk("upf: gtp-u received");
-            //     return handle_gtpu(ctx);
-            // }
-            break;
-        case IPPROTO_TCP:
-            increment_counter(ctx->counters, rx_tcp);
-            if (parse_tcp(ctx) < 0) return XDP_PASS;
-            break;
-        default:
-            increment_counter(ctx->counters, rx_other);
-            if (l4_protocol < 0) return DEFAULT_XDP_ACTION;
-            break;
+    int l4_protocol=parse_ip6(ctx);
+    if (l4_protocol==-2) return XDP_DROP;
+    if (l4_protocol<0) return DEFAULT_XDP_ACTION;
+    if (parse_l4(l4_protocol,ctx)<0) return XDP_DROP;
+    switch(l4_protocol) {
+        case IPPROTO_ICMPV6: increment_counter(ctx->counters,rx_icmp6);break;
+        case IPPROTO_UDP: increment_counter(ctx->counters,rx_udp);break;
+        case IPPROTO_TCP: increment_counter(ctx->counters,rx_tcp);break;
+        default: increment_counter(ctx->counters,rx_other);break;
     }
-    increment_counter(ctx->n3_n6_counter, rx_n6);
+    increment_counter(ctx->n3_n6_counter,rx_n6);
     return handle_n6_packet_ipv6(ctx);
 }
 
