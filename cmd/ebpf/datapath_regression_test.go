@@ -366,6 +366,7 @@ func TestDatapathIDZeroRemainsReserved(t *testing.T) {
 
 func TestDatapathUrrCountsTPDU(t *testing.T) {
 	// TS 29.244 V20.1.0 clause 8.2.44 measures user traffic volume;
+	// TS 32.255 V19.7.0 clause 5.2.1.4 counts user plane payload at the UPF.
 	// GTP sequence/extension words and Ethernet padding are not T-PDU data.
 	for _, tc := range []struct {
 		name     string
@@ -821,6 +822,27 @@ func TestDatapathIPv6MTUIncludesHeader(t *testing.T) {
 			forwarded := action == 3 || action == 4
 			if forwarded != tc.forward {
 				t.Errorf("IPv6 packet=%d link MTU=1460 forwarded=%t, want %t", len(inner), forwarded, tc.forward)
+			}
+		})
+	}
+}
+
+func TestDatapathIPv4PdrAddressForms(t *testing.T) {
+	// A net.IP representing IPv4 may have either four or sixteen bytes.
+	// Both must install the same IPv4 datapath rule.
+	for _, short := range []bool{true, false} {
+		t.Run(map[bool]string{true: "four_bytes", false: "sixteen_bytes"}[short], func(t *testing.T) {
+			b := loadDatapath(t)
+			ip := net.ParseIP("198.51.100.2")
+			if short {
+				ip = ip.To4()
+			}
+			if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 2, QerId: 1}); err != nil {
+				t.Fatal(err)
+			}
+			action, _ := runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false)))
+			if action != 1 {
+				t.Errorf("IPv4 address length=%d did not install a DROP rule: action=%d", len(ip), action)
 			}
 		})
 	}
