@@ -6,7 +6,7 @@ and retransmissions share the receive loop, with no goroutine per association.
 
 The following startup options use the listed YAML key. The environment name is
 `UPF_` followed by the uppercase key, and the CLI flag replaces underscores with
-hyphens. All seven policy options in the table require a configuration file update and restart; REST does not edit them. The existing timer API can
+hyphens. Startup policy options in the table require a configuration file update and restart; REST does not edit them. The existing timer API can
 change `heartbeat_timeout` and `association_setup_timeout` while running.
 
 | Key | Default | Meaning |
@@ -15,7 +15,9 @@ change `heartbeat_timeout` and `association_setup_timeout` while running.
 | `pfcp_request_timeout` | `5` | T1 in seconds for originated requests other than heartbeat. Range 1–3600; zero selects 5. |
 | `pfcp_request_retries` | `3` | N1 retransmissions after the initial request, 0–100. Zero sends once. |
 | `pfcp_response_retention` | `60` | Duplicate request response cache lifetime in seconds, 20–86400. Zero selects 60. Must cover the configured local retry windows; align it with the peer's maximum retransmission window too. |
-| `pfcp_max_transactions` | `4096` | Maximum outstanding originated requests and maximum cached request outcomes per connection. At most 65536; zero selects 4096. |
+| `pfcp_max_originated_requests` | `4096` | Outstanding originated requests per connection, 1–65536; zero selects 4096. |
+| `pfcp_max_replay_entries` | `131072` | Retained request outcomes per connection, 1–1048576; zero selects 131072. |
+| `pfcp_replay_memory_mib` | `128` | Replay accounting budget per connection in MiB, 16–1024; zero selects 128. |
 | `pfcp_max_associations` | `1024` | Maximum simultaneous associations per connection. At most 65536; zero selects 1024. Existing Node IDs may replace their association at this limit. |
 | `heartbeat_failure_grace` | `0` | Extra unreachable seconds after exhausting heartbeat retransmissions, at most 86400. During this interval sessions remain installed and probes continue. Zero deletes the failed peer and its sessions after the retry budget. A valid heartbeat clears the failure period. |
 
@@ -32,7 +34,9 @@ pfcp_peer_allow_list: [192.0.2.0/24, '2001:db8::/32']
 pfcp_request_timeout: 5
 pfcp_request_retries: 3
 pfcp_response_retention: 60
-pfcp_max_transactions: 4096
+pfcp_max_originated_requests: 4096
+pfcp_max_replay_entries: 131072
+pfcp_replay_memory_mib: 128
 pfcp_max_associations: 1024
 heartbeat_timeout: 5
 heartbeat_retries: 3
@@ -41,35 +45,46 @@ heartbeat_failure_grace: 30
 ```
 
 TS 29.244 clause 6.4 requires identical retransmissions and endpoint/sequence
-matching. Originated sequence numbers are allocated across the local endpoint
-and are never reused while outstanding. Duplicate requests replay their encoded
-response without repeating session operations. Cache retention is local policy;
-clause 6.4 specifies no numeric lifetime. Cached responses have one connection-wide
-entry limit (`pfcp_max_transactions`) and one 16 MiB total accounting limit.
-Accounting includes the encoded response, stored peer/entity strings, and a
-conservative 1024-byte metadata charge per entry for both indexes and the map.
-The bound is shared by all associations; adding associations does not multiply
-it. The originated-request queue has a separate 16 MiB encoded-payload ceiling.
-These are retained-state limits, not a bound on process RSS, transient decoding
-allocations or the Go allocator's overhead. Unassociated sources consume no
-replay entries. Initial successful Setup is charged to the new Node ID.
+matching. Originated sequence numbers are unique across the local endpoint
+while outstanding. A duplicate request replays the encoded outcome without
+repeating session operations. The entire configured `pfcp_response_retention`
+protects an outcome; there is no shorter eviction window. A duplicate whose
+final-usage response is still waiting is dropped until that response is ready.
+Its state change has already committed, so a later request sees the changed
+session. Responses can leave in sequence-independent order.
 
-Before executing new work, admission reserves room for a maximum-size response
-and its metadata. On saturation, an association below its entry and byte fair
-shares may evict the oldest eligible response of the association most above its
-share. Other associations may replace only their own old responses. No response
-is evicted within the 20-second minimum replay window. If none is eligible, new
-work is left unexecuted and unanswered for retransmission, without Cause 75.
-Both Heartbeat and Association Release bypass this gate. The fair shares adapt
-to the number of associations; all of a Node ID's source addresses share them.
-Expiry and association cleanup use linked indexes: forgetting an association
-visits only its own responses and removes their accounting immediately.
+Replay entries and memory have independent connection-wide bounds. Accounting
+charges the encoded response, stored peer/entity strings and 640 bytes of
+metadata per completed outcome. A pending final-usage response reserves the
+maximum 65535-byte encoding plus metadata. This covers the measured retained
+metadata; it is not a bound on process RSS, transient IE trees, decoding or Go
+allocator overhead. The originated queue has its own entry bound and a separate
+16 MiB encoded-payload ceiling. Unassociated sources allocate no replay entries;
+a successful initial Setup is charged to the learned Node ID.
 
-With default limits, at most 4096 small outcomes fit in one protected window
-across the entire connection: 4096 / 20 = 204.8 distinct requests per second,
-shared between associations. Large responses can reach the byte bound earlier.
-These are admission-budget calculations, not measured throughput. Size limits
-and replay retention must cover the peer's N1/T1 window and expected bursts.
+New cacheable work reserves global capacity before execution. Fair shares use
+the associations currently holding entries: entry bound / holders and memory
+bound / holders, with a new entrant included. A peer already at either share
+waits for expiry; a peer below both shares uses available global space. No
+unexpired outcome is evicted. A peer arriving at a full cache must therefore
+wait for expiry even when the current holders exceed its eventual share. A
+single admitted response can exceed its byte share, after which further new
+work is deferred. Heartbeat and Association Release always bypass replay
+capacity. `upf_pfcp_replay_capacity_drops_total` counts capacity deferrals.
+
+Capacity planning uses `rate * retention` entries and
+`entries * (encoded response bytes + peer/entity bytes + 640)` accounting bytes,
+plus one maximum-response reservation. At 2000 small cacheable requests/second
+and 60 seconds, 120000 outcomes fit the default 131072 entries and 128 MiB.
+A Linux/amd64 Go 1.27.4 heap probe retaining 120000 80-byte replies measured
+approximately 75 MB of heap, with approximately 90 MB charged by the cache.
+Large replies consume the memory bound sooner. Reproduce the heap measurement
+with `EUPF_REPLAY_HEAP=/tmp/replay.heap go test ./cmd/core -run
+TestReplayOutcomeHeapProfile -count=1 -v`. Budget each PFCP connection separately
+and leave deployment headroom for sessions, maps and transient allocations.
+
+Expiry and association invalidation unlink entries from both indexes in O(1)
+per removed outcome. Every address of one Node ID uses the same budget.
 
 Bundling requires both UP and CP BUNDL bits from that association's own Setup
 or Update exchange, including UP-initiated Sxa/Sxb (TS 29.244 V20.1.0 clause
@@ -89,9 +104,12 @@ deleting affected sessions after restart or the configured unreachable period.
 TS 23.007 V19.2.0 clause 19A distinguishes an increased timestamp (restart) from
 a smaller reordered timestamp (discard). An indefinite keep-sessions-on-failure
 mode would conflict with these requirements for a UPF without SMF-set support.
-Association Setup with an existing Node ID replaces the association; only
+A CP-initiated Association Setup Request with an existing Node ID replaces the association; only
 sessions requested by the PFCP Session Retention Information IE survive
-(TS 29.244 clause 6.2.6.2.2 and Table 7.4.4.1-2).
+(TS 29.244 clause 6.2.6.2.2 and Table 7.4.4.1-2). A UP-initiated Setup Response
+for an established Node ID retains that association and its sessions (clause
+6.2.6.3). Configured connectors remember the Node ID learned from the response
+and stop Setup attempts while that identity remains associated.
 
 PFCP receives use a 65535-byte buffer so reassembled UDP datagrams larger than a
 link MTU are not truncated. Unknown message types and unmatched responses are
@@ -124,7 +142,11 @@ addresses are not accumulated as a growing address registry.
 Session requests use the session's CP F-SEID address on port 8805 (clause
 4.3.2), including an accepted Modification that changes it. Both IPv4 and IPv6
 are retained; IPv4 is preferred on an IPv4 socket and IPv6 on an IPv6 socket.
-A session's advertised addresses also identify its CP entity for recovery.
+A session's advertised addresses also identify its CP entity for recovery. Every
+session originator carries the local UP SEID through destination selection and
+completion; CP SEID values can collide between entities of one association
+(clauses 5.6.2 and 5.22.2). The address index counts Setup, association and CP
+F-SEID references, removing each only after its final session reference leaves.
 
 The CLI retains every configuration field returned by `GET /config` in `eupf show`
 and backup archives. Archives use the server's YAML key names. Restore checks all
@@ -138,54 +160,61 @@ REST edits (range 1–1048576 seconds). An existing unreadable or malformed conf
 file fails startup; an explicitly selected missing `--config` or `--pcc-config`
 file also fails. Only an absent implicit default file uses defaults.
 
-SIGTERM and SIGINT stop HTTP listeners and run deferred socket, map, XDP-link,
-SDF-listener and capture cleanup. Normal shutdown exits zero. HTTP shutdown has a
-three-second deadline and force-closes remaining connections; the process gives
-all shutdown work at most 15 seconds and reports deadline expiry as failure.
-Shutdown and POST `/pfcp_associations/release` start the same UP-initiated
-procedure (TS 29.244 V20.1.0 clauses 6.2.7.3.1 and 6.2.8). Each CP receives an
-Association Update Request with the release indication and Graceful Release
-Period. The period is `T1 * (N1 + 1)` using `pfcp_request_timeout` and
-`pfcp_request_retries`, rounded up to two-second IE units and limited to 2–8
-seconds. The queued Update retransmits normally. Its acknowledgement or failure
-does not remove the association or sessions. CP Release, or expiry of that
-period, starts rule cleanup. An originated-queue admission failure is logged;
-indication admission is retried while at least two seconds of the same bounded
-local timer remain. Heartbeat failure cannot shorten an initiated release.
-New Setup is refused while the connection is releasing; established sessions
-continue to accept CP changes until cleanup starts.
+SIGTERM and SIGINT latch process-wide Setup refusal on every PFCP endpoint,
+including idle endpoints while a REST release waiter runs. New Setup receives
+Cause 75, No resources available (table 7.4.4.2-1 and clause 8.2.1). Pending
+UP-initiated Setups complete as canceled and no new ones are admitted. Final
+usage responses waiting at socket Close are canceled; shutdown never waits on
+those goroutines while holding the connection lock.
 
-The UPF always accepts CP Association Release, including retries and unknown
-Node IDs. Cleanup commits each session through the existing rule transaction
-API. A failed session remains owned with its IDs reserved; no release waiter
-reports completion while any rules remain. Cleanup retries after 100, 200, 400,
-then at most 500 milliseconds, for three seconds from the first cleanup attempt.
-Exhaustion logs the affected session IDs and sends a terminal error to the
-supervisor, which exits non-zero after deferred cleanup. No failed session's
-IDs are recycled. During cleanup, session admission to that association stops.
-The release waiter observes locked counts and fatal state. The grace period,
-three-second cleanup allowance and HTTP shutdown fit the process deadline.
+Shutdown and POST `/pfcp_associations/release` send an Association Update with
+the release indication and Graceful Release Period (clauses 6.2.7.3.1 and
+6.2.8). The period is `T1 * (N1 + 1)`, rounded up to two-second units and limited
+to 2–8 seconds. Identical retransmissions advertise that same full period.
+The local deadline grants the full period from an accepted Update Response,
+or from the last transmission when no accepted response arrives. It never
+expires earlier than that grant. Admission failures are retried within a
+bounded delivery window. Heartbeat failure cannot shorten release. Established
+sessions accept CP changes until cleanup starts.
 
-Rule maps are not pinned: the only pinned map is the program dispatch array.
-Startup loads fresh rule maps and replaces the dispatch programs. Restart
-therefore does not restore rules from the failed process. The retained tests
-and wire evidence exercise this with synthetic state; no persistent session
-restoration is claimed.
+A REST release selects only the associations present at initiation. Setup is
+refused while that connection drains; once those associations leave, management
+release permits new associations again. New associations do not extend its
+waiter. A management wait timeout is logged and does not terminate the UPF.
 
-Every originated procedure has one terminal completion: accepted response, peer
-rejection, invalid response, no response after N1, or local cancellation. An
-invalid matching response stops retransmission and notifies the procedure even
-when it is discarded (clauses 7.6.1 and 7.6.3). Heartbeat clears its probe state;
-retry exhaustion applies the configured unreachable policy. A failed Setup
-waits a full setup interval before another configured connector attempt. Session
-Report failures are recorded for their live session and logged with procedure,
-peer and remote SEID; failure does not imply acknowledgement, and no new report
-transaction is invented beyond N1. An accepted later report clears that failure.
-Association Update completion never substitutes for the CP's Release Request.
+CP Association Release is always accepted, including unknown Node IDs and
+retransmissions. Its response precedes cleanup. Admission to that association
+stops immediately, and receive-loop maintenance deletes sessions in batches of
+64, releasing locks between batches. Successful progress has no cleanup time
+limit. An actual deletion failure starts a three-second retry window, with
+100, 200, 400 and then at most 500 ms backoff. Retired-map reclamation and failed
+rollback use the same bounded recovery policy. Affected IDs stay reserved.
+Exhaustion logs affected sessions and exits non-zero through the supervisor;
+it never silently leaves admission poisoned indefinitely.
 
-A complete Request header with inconsistent Length receives Cause 68; session
-responses use the known CP SEID or zero (clauses 7.6.3 and 7.2.2.4.2). Too-short
-headers are discarded. An inconsistent-length Heartbeat Request is logged and
-discarded because its Response has no Cause IE, consistent with the Heartbeat
-exemptions in clauses 7.6.6 and 7.6.7. Valid frames before an untrustworthy bundle
-length are processed; decoding never guesses a subsequent boundary.
+During process shutdown, an already released association, or an expired release
+period, requires no per-session map deletion: the UPF closes its bpf_link XDP
+attachments and map descriptors. Rule maps are unpinned; the only pinned map is
+an empty program dispatch array. Startup creates fresh rule maps. No persistent
+session restoration is provided. The process deadline is the delivery window,
+full graceful period and four seconds for HTTP shutdown/scheduling: 32 seconds
+with default T1=5, N1=3. The chart uses 40 seconds. Raise the chart's
+`terminationGracePeriodSeconds` above the derived process deadline when changing
+transport retries/timeouts. HTTP shutdown itself has a three-second deadline.
+
+Every originated procedure has one terminal completion: accepted, rejected,
+invalid, timed out, or canceled. Changing heartbeat timeout cancels every old
+probe through that completion path. A failed Setup backs off for a setup
+interval. A Session Report accepted by the CP marks its information delivered
+(clause 6.3.5.2). Cause 65 queues local deletion of exactly its original local
+session. Other failures and timeouts are logged and counted in
+`upf_pfcp_report_failures_total`. Admitted usage from a failed transfer is added
+to the live URR's next report, including a later termination report.
+
+If the session or the original global URR slot has already been removed or
+replaced when failure arrives, those reported octets cannot be merged into a
+new rule. They are logged and counted in
+`upf_pfcp_undelivered_usage_octets_total`. A timeout cannot establish whether the
+CP processed a report whose responses were lost; retrying its information in a
+new report can therefore duplicate usage in that case. Association Update
+completion never substitutes for the CP Release procedure.

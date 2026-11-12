@@ -64,14 +64,18 @@ its slot. A dummy map-in-map update invokes the kernel's BPF synchronization;
 there are no packet-path instructions for this synchronization. Native and
 generic XDP, test runs and tail calls remain inside the kernel RCU reader.
 Local-tunnel recursion and Router Advertisement continuation use tail calls.
-A failed rollback poisons control-plane admission until restart; packets keep
-using the remaining map state. A grace-period failure retains retired slots.
+Failed rollback restoration and reclamation retry with bounded exponential
+backoff for three seconds. Affected slots remain reserved. Exhaustion notifies
+the supervisor and exits non-zero; restored rollback state reopens admission.
 
-The current implementation waits synchronously for final usage and removed
-keys. Normal kernel RCU latency can therefore limit deletion throughput; a
-background queue batches FAR/QER reclamation but does not batch synchronous
-PFCP responses across requests. This is a performance limitation, not an
-accepted throughput claim.
+PFCP responses wait asynchronously only when they need final URR usage. Removed
+URRs are reported in the Modification Response (TS 29.244 V20.1.0 clause
+5.2.2.3.1); Deletion includes every final URR report without depending on ARDR.
+No connection or journal lock crosses that wait. Work queued before a grace
+period starts shares that period; detachment arriving during a period uses the
+next batch. Unrelated requests continue and retransmissions of a waiting request
+are not executed again. FAR/QER slots, retired counter slots, lookup keys, TEIDs
+and UE leases remain unavailable for reuse until reclamation completes.
 
 Every bound QER applies in received binding order, up to four per PDR
 (TS 29.244 V20.1.0 clause 5.4.4). Each gate and bitrate is enforced; a later
@@ -159,19 +163,23 @@ Updated PDR.
 PFCP mutations validate into a private session and resource view, reserve every
 new slot, write dependencies, publish final PDR buckets, detach obsolete
 references, and retire unreachable slots. The journal records actual map
-publications. Rollback restores previous bindings and values, waits for any
-invocation that saw the failed draft, and releases only newly allocated slots.
-It does not replace allocator snapshots that asynchronous reclamation may have
-updated. Live URR configuration updates preserve counters throughout.
+publications. Rollback restores previous bindings and values, then retires newly allocated
+slots after old invocations return. Failed allocations are quarantined until
+that retirement, avoiding late callbacks freeing a reused slot. Live URR configuration updates preserve counters throughout.
 The existing PFCP state lock serializes session mutations,
 association cleanup and snapshots; diagnostic map readers also exclude the
 journal. Local SEIDs are allocated by the shared resource manager across N4/Sxa/Sxb
-and never wrap. A shared reservation lock serializes private pool snapshots
+and never wrap. A shared reservation lock serializes reservation journals
 across these endpoints, after the connection state lock and before the map
 journal lock. Local SEIDs are UPF-wide. TEIDs and UE IP leases use that same local
 identity, including explicit reservations, shared CHOOSE IDs and last-reference
 release. Pools are limited to 1,048,576 entries; UE allocation is IPv4 only.
-The private resource view currently copies the bounded pools on each request.
+Each request records only its own reservations and active references. Indexed
+FIFO free pools, per-session ownership lists and IPv6 prefix tries avoid pool
+scans. Lease generations prevent a late reclamation callback from freeing a
+new reservation. Rule-plan preflight and detachment use a published-key index
+and touch only the requesting session keys; unchanged PDR buckets are not
+republished.
 
 Session Establishment Recovery Time Stamps are associated with CP F-SEID IP,
 compared with previous values, and stale requests are discarded (TS 23.007

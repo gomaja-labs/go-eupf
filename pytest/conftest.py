@@ -1,4 +1,6 @@
 """Shared bounded PFCP server, capture and synthetic-peer fixtures."""
+import ipaddress
+import itertools
 import json
 import os
 from pathlib import Path
@@ -80,7 +82,7 @@ def server(request, evidence):
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
             try:
-                process.wait(timeout=16)
+                process.wait(timeout=34)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
@@ -163,12 +165,19 @@ def far(identifier=1, outer=None):
     ])
 
 
-def pdr(identifier=1, source=True, address=True, sdf=None):
+_ue_addresses = itertools.count(int(ipaddress.IPv4Address("198.18.0.10")))
+
+
+def pdr(identifier=1, source=True, address=True, sdf=None, ue_address=None):
     detection = []
     if source:
         detection.append(pfcp.IE_SourceInterface(interface=1))
     if address:
-        detection.append(pfcp.IE_UE_IP_Address(V4=1, SD=1, ipv4="192.0.2.10"))
+        # No-usage Deletion responds before old address leases are reclaimed.
+        # Each independent synthetic PDR uses a fresh address; shared-key tests
+        # can pass the same ue_address explicitly.
+        chosen = ue_address or str(ipaddress.IPv4Address(next(_ue_addresses)))
+        detection.append(pfcp.IE_UE_IP_Address(V4=1, SD=1, ipv4=chosen))
     if sdf is not None:
         detection.append(sdf)
     return pfcp.IE_CreatePDR(IE_list=[
