@@ -145,6 +145,7 @@ static __always_inline __u32 prepare_icmp_echo_reply(struct packet_context *ctx,
     icmp->code = 0;
     
     ipv4_csum_replace(&icmp->checksum, old, *(__u16*)&icmp->type);
+    ctx->locally_generated = 1;
 
     return 0;
 }
@@ -240,5 +241,6 @@ static __always_inline __u32 prepare_icmp6_ra(struct packet_context *ctx, const 
     ra->icmp6_cksum=icmp6_csum(ip,0,ICMPV6_ROUTER_ADVERTISEMENT,ra,sizeof(*ra)+sizeof(*opt));
     ctx->data=data;ctx->data_end=end;ctx->eth=eth;ctx->ip6=ip;ctx->ip4=0;ctx->udp=0;ctx->tcp=0;ctx->gtp=0;
     ctx->ip_end=(const char *)(opt+1);
+    ctx->locally_generated = 1;
     return 0;
 }

@@ -155,7 +155,7 @@ static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_con
 
 static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *ctx) {
     if (!ctx->ip4 || (const char *)(ctx->ip4+1) > ctx->data_end) return XDP_ABORTED;
-    const struct iphdr *ip4 = ctx->ip4;
+    struct iphdr *ip4 = ctx->ip4;
     struct pdr_info *session = bpf_map_lookup_elem(&pdr_map_downlink_ip4, &ip4->daddr);
     if (!session) {
         upf_printk("upf: [n6] no downlink session for ip:%pI4", &ip4->daddr);
@@ -215,6 +215,15 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
     if (XDP_DROP == rate_result)
         return XDP_DROP;
 
+    // RFC 1812 section 5.3.1: decrement the forwarded inner datagram before
+    // encapsulation. Leave exhausted packets intact for kernel ICMP handling.
+    if (!ctx->locally_generated) {
+        if (ip4->ttl <= 1) return XDP_PASS;
+        __u16 old = *(__u16 *)&ip4->ttl;
+        ip4->ttl--;
+        ipv4_csum_replace(&ip4->check, old, *(__u16 *)&ip4->ttl);
+    }
+
     __u8 tos = qer->dscp ? qer->dscp : far->transport_level_marking >> 8;
 
     const int urr_size = sizeof(pdr->urr_id)/sizeof(pdr->urr_id[0]);
@@ -228,7 +237,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
 
 static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *ctx) {
     if (!ctx->ip6 || (const char *)(ctx->ip6+1) > ctx->data_end) return XDP_ABORTED;
-    const struct ipv6hdr *ip6 = ctx->ip6;
+    struct ipv6hdr *ip6 = ctx->ip6;
     struct pdr_info *session = bpf_map_lookup_elem(&pdr_map_downlink_ip6, &ip6->daddr);
     if (!session) {
         upf_printk("upf: [n6] no downlink session for ip:%pI6c", &ip6->daddr);
@@ -285,6 +294,13 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
     enum xdp_action rate_result = limit_rate_sliding_window(packet_size, &qer->dl_start, qer->dl_maximum_bitrate);
     if (XDP_DROP == rate_result)
         return XDP_DROP;
+
+    // RFC 8200 section 3. Locally originated advertisements retain Hop
+    // Limit 255 (RFC 4861 section 4.2); their tunnel outer packet is routed.
+    if (!ctx->locally_generated) {
+        if (ip6->hop_limit <= 1) return XDP_PASS;
+        ip6->hop_limit--;
+    }
 
     __u8 tos = qer->dscp ? qer->dscp : far->transport_level_marking >> 8;
 

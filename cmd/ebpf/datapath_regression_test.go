@@ -708,14 +708,17 @@ func TestDatapathEchoRecoveryWithIPv4Options(t *testing.T) {
 			if err := u.SetNetworkLayerForChecksum(ip); err != nil {
 				t.Fatal(err)
 			}
-			g := make([]byte, 12)
+			g := make([]byte, 18)
 			g[0], g[1] = 0x32, 1
-			binary.BigEndian.PutUint16(g[2:4], 4)
+			binary.BigEndian.PutUint16(g[2:4], uint16(len(g)-8))
 			binary.BigEndian.PutUint16(g[8:10], 0x1234)
+			// A permitted Private Extension in the request must not become
+			// stray bytes in the fresh mandatory-only Echo Response.
+			copy(g[12:], []byte{255, 0, 3, 0x12, 0x34, 0xaa})
 			packet := ethernetDatapath(t, layers.EthernetTypeIPv4, serializeDatapath(t, ip, u, gopacket.Payload(g)))
 			action, out := runDatapath(t, b, packet)
 			offset := 14 + 20 + count + 8
-			if action != 3 || len(out) < offset+14 || binary.BigEndian.Uint16(out[offset+2:offset+4]) < 6 || out[offset+12] != 14 || out[offset+13] != 0 {
+			if action != 3 || len(out) < offset+14 || binary.BigEndian.Uint16(out[offset+2:offset+4]) != 6 || binary.BigEndian.Uint16(out[offset+8:offset+10]) != 0x1234 || out[offset+12] != 14 || out[offset+13] != 0 {
 				t.Error("Echo Response omitted its mandatory Recovery IE")
 			}
 		})
@@ -926,5 +929,47 @@ func TestDatapathICMPv6SdfSelection(t *testing.T) {
 	action, _ := runDatapath(t, b, gtpDatapath(t, inner, nil, 0x30, false))
 	if action != 1 {
 		t.Errorf("ICMPv6 DROP filter was bypassed: action=%d", action)
+	}
+}
+
+func TestDatapathDownlinkHopLimit(t *testing.T) {
+	for _, v6 := range []bool{false, true} {
+		for _, ttl := range []uint8{1, 64} {
+			name := map[bool]string{false: "ipv4", true: "ipv6"}[v6] + "_" + map[uint8]string{1: "expired", 64: "forward"}[ttl]
+			t.Run(name, func(t *testing.T) {
+				b := loadDatapath(t)
+				putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+				inner := udpDatapath(t, v6)
+				ip := net.IP{198, 51, 100, 2}
+				etherType := layers.EthernetTypeIPv4
+				hopOffset := 8
+				if v6 {
+					ip = net.ParseIP("2001:db8::2")
+					etherType = layers.EthernetTypeIPv6
+					hopOffset = 7
+				}
+				inner[hopOffset] = ttl
+				if !v6 {
+					inner[10], inner[11] = 0, 0
+					binary.BigEndian.PutUint16(inner[10:12], checksumDatapath(inner[:20]))
+				}
+				if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 1, QerId: 1}); err != nil {
+					t.Fatal(err)
+				}
+				action, out := runDatapath(t, b, ethernetDatapath(t, etherType, inner))
+				if ttl == 1 {
+					if action == 3 || action == 4 {
+						t.Error("exhausted inner packet was encapsulated and forwarded")
+					}
+					return
+				}
+				if action != 4 {
+					t.Fatalf("tunnel route action=%d", action)
+				}
+				if out[50+hopOffset] != 63 {
+					t.Errorf("forwarded inner lifetime=%d, want 63", out[50+hopOffset])
+				}
+			})
+		}
 	}
 }

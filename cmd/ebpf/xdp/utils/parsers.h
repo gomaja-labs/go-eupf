@@ -174,6 +174,7 @@ static __always_inline void context_reset(struct packet_context *ctx, char *data
     ctx->gtp = 0;
     ctx->tcp = 0;
     ctx->ip_end = 0;
+    ctx->locally_generated = 0;
 }
 
 

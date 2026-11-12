@@ -29,4 +29,5 @@ struct packet_context {
     __u8 qfi;
     __u8 unknown_extensions;
     __u8 trace;
+    __u8 locally_generated;
 };

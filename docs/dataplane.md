@@ -51,8 +51,9 @@ once and pays its complete transmission interval. Rate zero means unlimited.
 Contention is retried four times, then fails closed. This policy bounds rate;
 it does not guarantee fairness or minimum throughput under contention.
 
-FIB forwarding decrements IPv4 TTL or IPv6 Hop Limit once, only on a successful
-redirect. Exhausted packets and MTU/neighbor failures go to the kernel unchanged
+FIB forwarding decrements the routed IPv4 TTL or IPv6 Hop Limit once, only on
+a successful redirect. Downlink forwarding also decrements the inner lifetime
+before encapsulation; locally generated packets retain their original lifetime. Exhausted packets and MTU/neighbor failures go to the kernel unchanged
 at that forwarding stage, for the applicable ICMP or resolution processing
 (RFC 1812 section 5.3.1; RFC 8200 sections 3 and 5). Kernel ICMP delivery requires
 appropriate routes and tunnel configuration. IPv6 Traffic Class rewrites preserve
@@ -76,7 +77,8 @@ changes. Do not treat successful SDF tuple matching as full PDI compliance.
 Map capacities are configured before Load. Live resizing returns an error
 without changing handles, instructions or data. All map buffers use bpf2go
 value types and typed map calls so the library checks their size; REST DTOs are
-converted explicitly. Route-cache build flags retain
+converted explicitly. Notification delivery uses a bounded queue and drops events
+when the receiver is slow; it does not block packet-reader shutdown. Route-cache build flags retain
 map definitions but forwarding always consults the current FIB: cached results
 cannot safely replace live MTU, route and neighbor checks without invalidation.
 
