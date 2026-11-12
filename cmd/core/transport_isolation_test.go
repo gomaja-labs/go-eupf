@@ -13,7 +13,7 @@ import (
 	"github.com/gomaja-labs/go-pfcp/message"
 )
 
-func r1Socket(t *testing.T, ip string) *net.UDPConn {
+func isolationSocket(t *testing.T, ip string) *net.UDPConn {
 	t.Helper()
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(ip)})
 	if err != nil {
@@ -23,7 +23,7 @@ func r1Socket(t *testing.T, ip string) *net.UDPConn {
 	return c
 }
 
-func r1Read(t *testing.T, c *net.UDPConn, wait time.Duration) message.Message {
+func isolationRead(t *testing.T, c *net.UDPConn, wait time.Duration) message.Message {
 	t.Helper()
 	_ = c.SetReadDeadline(time.Now().Add(wait))
 	buf := make([]byte, 65535)
@@ -38,7 +38,7 @@ func r1Read(t *testing.T, c *net.UDPConn, wait time.Duration) message.Message {
 	return m
 }
 
-func r1Drain(c *net.UDPConn) {
+func isolationDrain(c *net.UDPConn) {
 	buf := make([]byte, 65535)
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
@@ -48,7 +48,7 @@ func r1Drain(c *net.UDPConn) {
 	}
 }
 
-func r1Cause(t *testing.T, m message.Message) uint8 {
+func isolationCause(t *testing.T, m message.Message) uint8 {
 	t.Helper()
 	var c *ie.IE
 	switch r := m.(type) {
@@ -68,17 +68,17 @@ func r1Cause(t *testing.T, m message.Message) uint8 {
 	return v
 }
 
-func r1Setup(t *testing.T, conn *PfcpConnection, cp *net.UDPConn, seq uint32) {
+func isolationSetup(t *testing.T, conn *PfcpConnection, cp *net.UDPConn, seq uint32) {
 	t.Helper()
 	ip := cp.LocalAddr().(*net.UDPAddr).IP.String()
 	conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(seq, ie.NewNodeIDAddress(netip.MustParseAddr(ip)), ie.NewRecoveryTimeStamp(time.Unix(1700000000, 0)))), cp.LocalAddr().(*net.UDPAddr))
-	reply := r1Read(t, cp, time.Second)
-	if reply == nil || r1Cause(t, reply) != ie.CauseRequestAccepted {
+	reply := isolationRead(t, cp, time.Second)
+	if reply == nil || isolationCause(t, reply) != ie.CauseRequestAccepted {
 		t.Fatalf("association setup failed: %v", reply)
 	}
 }
 
-func r1Establishment(seq uint32, cp string) message.Message {
+func isolationEstablishment(seq uint32, cp string) message.Message {
 	return message.NewSessionEstablishmentRequest(0, seq,
 		ie.NewNodeIDAddress(netip.MustParseAddr(cp)),
 		ie.NewFSEID(uint64(seq), net.ParseIP(cp).To4(), nil),
@@ -97,33 +97,33 @@ func TestResponseCacheUnassociatedFlood(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := newProtocolConnection(t) // production defaults: 4096 entries, 60 s retention
-			cp := r1Socket(t, "127.0.0.2")
-			r1Setup(t, conn, cp, 1)
-			conn.Handle(protocolWire(t, r1Establishment(2, "127.0.0.2")), cp.LocalAddr().(*net.UDPAddr))
-			if got := r1Cause(t, r1Read(t, cp, time.Second)); got != ie.CauseRequestAccepted {
+			cp := isolationSocket(t, "127.0.0.2")
+			isolationSetup(t, conn, cp, 1)
+			conn.Handle(protocolWire(t, isolationEstablishment(2, "127.0.0.2")), cp.LocalAddr().(*net.UDPAddr))
+			if got := isolationCause(t, isolationRead(t, cp, time.Second)); got != ie.CauseRequestAccepted {
 				t.Fatalf("baseline establishment cause %d", got)
 			}
 			flood := cp
 			node := ie.NewNodeIDAddress(netip.MustParseAddr("127.0.0.2"))
 			if !tc.fromPeer {
-				flood = r1Socket(t, tc.flooder)
+				flood = isolationSocket(t, tc.flooder)
 				node = ie.NewNodeIDFQDN("unassociated.example")
 			}
 			start := time.Now()
 			for i := 0; i < conn.transactionLimit(); i++ {
 				conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(uint32(1000+i), node)), flood.LocalAddr().(*net.UDPAddr))
 				if i%256 == 0 {
-					r1Drain(flood)
+					isolationDrain(flood)
 				}
 			}
-			r1Drain(flood)
+			isolationDrain(flood)
 			if conn.transport.responseBudgets["127.0.0.3"] != nil {
 				t.Error("unassociated source consumed a replay budget")
 			}
 			elapsed := time.Since(start)
-			conn.Handle(protocolWire(t, r1Establishment(3, "127.0.0.2")), cp.LocalAddr().(*net.UDPAddr))
-			reply := r1Read(t, cp, time.Second)
-			if got := r1Cause(t, reply); got != ie.CauseRequestAccepted {
+			conn.Handle(protocolWire(t, isolationEstablishment(3, "127.0.0.2")), cp.LocalAddr().(*net.UDPAddr))
+			reply := isolationRead(t, cp, time.Second)
+			if got := isolationCause(t, reply); got != ie.CauseRequestAccepted {
 				conn.transport.mu.Lock()
 				cached := len(conn.transport.responses)
 				conn.transport.mu.Unlock()
@@ -136,8 +136,8 @@ func TestResponseCacheUnassociatedFlood(t *testing.T) {
 
 func TestUnnegotiatedBundleProducesNoResponse(t *testing.T) {
 	conn := newProtocolConnection(t)
-	src := r1Socket(t, "127.0.0.4") // no association, no negotiation
-	const n = 92                    // 92 x 16 octets fits one 1500-octet IPv4 packet
+	src := isolationSocket(t, "127.0.0.4") // no association, no negotiation
+	const n = 92                           // 92 x 16 octets fits one 1500-octet IPv4 packet
 	var bundle []byte
 	for i := 0; i < n; i++ {
 		wire := protocolWire(t, message.NewSessionDeletionRequest(uint64(i+1), uint32(i+1)))
@@ -149,7 +149,7 @@ func TestUnnegotiatedBundleProducesNoResponse(t *testing.T) {
 	conn.Handle(bundle, src.LocalAddr().(*net.UDPAddr))
 	responses, bytesOut := 0, 0
 	for {
-		m := r1Read(t, src, 100*time.Millisecond)
+		m := isolationRead(t, src, 100*time.Millisecond)
 		if m == nil {
 			break
 		}
