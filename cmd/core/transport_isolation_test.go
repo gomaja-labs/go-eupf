@@ -82,8 +82,8 @@ func r1Establishment(seq uint32, cp string) message.Message {
 	return message.NewSessionEstablishmentRequest(0, seq,
 		ie.NewNodeIDAddress(netip.MustParseAddr(cp)),
 		ie.NewFSEID(uint64(seq), net.ParseIP(cp).To4(), nil),
-		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(2, net.IPv4(192, 0, 2, byte(seq)).String(), "", 0, 0)), ie.NewFARID(1)),
-		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceCore))),
+		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, net.IPv4(192, 0, 2, byte(seq)).String(), "", 0, 0)), ie.NewFARID(1)),
+		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceAccess), ie.NewOuterHeaderCreation(0x0100, seq, "198.51.100.1", "", 0, 0, 0))),
 	)
 }
 

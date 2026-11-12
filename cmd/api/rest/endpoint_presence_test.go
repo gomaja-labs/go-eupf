@@ -27,7 +27,7 @@ func TestUnchangedWildcardEndpointEdit(t *testing.T) {
 	port := probe.LocalAddr().(*net.UDPAddr).Port
 	_ = probe.Close()
 	address := fmt.Sprintf(":%d", port)
-	conn, err := core.NewPfcpConnection(address, "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, nil, nil, nil, core.DefaultProfile{})
+	conn, err := core.NewPfcpConnection(address, "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, testResources(t), nil, nil, core.DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

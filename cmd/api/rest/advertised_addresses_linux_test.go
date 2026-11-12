@@ -41,7 +41,7 @@ func TestInterfaceEditRefreshesDerivedAdvertisedAddresses(t *testing.T) {
 	}
 	// main.go:283-284: N4 advertises n3_adv_address / n9_adv_address, which
 	// default to n3_address / n9_address (config.go:330-334).
-	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "192.0.2.10", "192.0.2.10", nil, nil, nil, nil, core.DefaultProfile{})
+	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "192.0.2.10", "192.0.2.10", nil, testResources(t), nil, nil, core.DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

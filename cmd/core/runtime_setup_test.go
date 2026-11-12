@@ -13,7 +13,7 @@ func TestAssociationSetupUsesStartupTimeout(t *testing.T) {
 	old := config.Conf
 	config.Conf.AssociationSetupTimeout = 1
 	defer func() { config.Conf = old }()
-	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, nil, nil, nil, DefaultProfile{})
+	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, emptyResources(t), nil, nil, DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	kernel "github.com/cilium/ebpf"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -57,7 +58,11 @@ func TestSDFListenerInitializationReturnsFailure(t *testing.T) {
 }
 
 func TestAssociationReleaseWaitUsesLockedSnapshots(t *testing.T) {
-	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, nil, nil, nil, core.DefaultProfile{})
+	resources, err := service.NewResourceManager("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, resources, nil, nil, core.DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

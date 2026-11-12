@@ -21,7 +21,7 @@ func TestRESTHeartbeatTimeoutChangesRetransmission(t *testing.T) {
 	old := config.Conf
 	config.Conf = config.UpfConfig{HeartbeatTimeout: 5, HeartbeatRetries: 1, HeartbeatInterval: 5}
 	defer func() { config.Conf = old }()
-	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, nil, nil, nil, core.DefaultProfile{})
+	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", nil, testResources(t), nil, nil, core.DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
