@@ -14,7 +14,7 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 // prepareSessionMutation creates the private reservation view under stateMu.
 // Parsing and validation finish before the data plane is quiesced. Commit then
 // reserves every rule slot before applying the first map write.
-func (conn *PfcpConnection) prepareSessionMutation(sessionID uint64) (func() error, func(bool) error) {
+func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() error, func(bool) error) {
 	maps, resources := conn.mapOperations, conn.ResourceManager
 	unlockReservations := resources.LockReservations()
 	reserved := resources.Clone()
@@ -23,11 +23,22 @@ func (conn *PfcpConnection) prepareSessionMutation(sessionID uint64) (func() err
 	var tx ebpf.RuleTransaction
 	start := func() error {
 		var err error
-		tx, err = maps.BeginRuleTransaction(sessionID)
+		tx, err = maps.BeginRuleTransaction(session.LocalSEID)
 		if err == nil {
 			proxy.ForwardingPlaneController = tx
 		}
 		if err != nil {
+			return &requestIEError{ie.CauseSystemFailure, 0, err}
+		}
+		keys := make([]ebpf.PDRKey, 0, len(session.PDRs))
+		for id, pdr := range session.PDRs {
+			keys = append(keys, ebpf.PDRKey{ID: id, TEID: pdr.Teid, IPv4: pdr.Ipv4, IPv6: pdr.Ipv6, IPv6Mask: pdr.PdrInfo.UEIPv6Mask})
+		}
+		if err := proxy.CheckPDRPlan(session.LocalSEID, keys); err != nil {
+			var plan *ebpf.PDRPlanError
+			if errors.As(err, &plan) {
+				return &ruleFailure{ie.RuleIDTypePDR, plan.ID, err}
+			}
 			return &requestIEError{ie.CauseSystemFailure, 0, err}
 		}
 		return nil

@@ -83,7 +83,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		Uint64("RemoteSEID", session.RemoteSEID).
 		Logger()
 
-	start, finish := conn.prepareSessionMutation(session.LocalSEID)
+	start, finish := conn.prepareSessionMutation(session)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -95,6 +95,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	createdPDRs := make([]SPDRInfo, 0)
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
 	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
+	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 	pdrContext.Restoration = req.PFCPSEReqFlags.HasRESTI()
 	operationPool := NewOperationPool()
 	operationPool.Before = start
@@ -137,14 +138,11 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	additionalIEs := []*ie.IE{
 		conn.profile.NodeID(conn.nodeId),
 		ie.NewCause(ie.CauseRequestAccepted),
-		ie.NewFSEID(localSEID, cloneIP(conn.nodeAddrV4.Addr().AsSlice()), nil),
+		conn.localFSEID(localSEID),
 	}
 
-	defaultN3Address := conn.n3Address
+	defaultN3Address := conn.sessionN3Address(session)
 	defaultN9Address := conn.n9Address
-	if session.Is5G {
-		defaultN3Address = config.Conf.GetN3AdvertisedAddress5G()
-	}
 
 	pdrIEs := processCreatedPDRs(createdPDRs, cloneIP(defaultN3Address), cloneIP(defaultN9Address))
 	additionalIEs = append(additionalIEs, pdrIEs...)
@@ -191,7 +189,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 
 	traced := session.IsSessionTraced()
 
-	start, finish := conn.prepareSessionMutation(session.LocalSEID)
+	start, finish := conn.prepareSessionMutation(session)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -205,6 +203,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	deletedURRs := make([]*ie.IE, 0, len(session.URRs))
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
 	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
+	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 
 	err := processDeletionRequestRules(conn, logger, operationPool, pdrContext, session, &deletedURRs)
 	if err != nil {
@@ -284,7 +283,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 
 	printSessionModificationRequest(req, conn.profile)
 
-	start, finish := conn.prepareSessionMutation(session.LocalSEID)
+	start, finish := conn.prepareSessionMutation(session)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -298,6 +297,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	removedURRs := make([]*ie.IE, 0, len(req.RemoveURR))
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
 	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
+	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 	operationPool := NewOperationPool()
 	operationPool.Before = start
 
@@ -331,11 +331,8 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		ie.NewCause(ie.CauseRequestAccepted),
 	}
 
-	defaultN3Address := conn.n3Address
+	defaultN3Address := conn.sessionN3Address(session)
 	defaultN9Address := conn.n9Address
-	if session.Is5G {
-		defaultN3Address = config.Conf.GetN3AdvertisedAddress5G()
-	}
 
 	pdrIEs := processCreatedPDRs(createdPDRs, cloneIP(defaultN3Address), cloneIP(defaultN9Address))
 	additionalIEs = append(additionalIEs, pdrIEs...)
@@ -523,12 +520,15 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 		if err != nil {
 			return farInfo, err
 		}
+		if fields.OuterHeaderCreation != 1 || fields.Description != 0x100 && fields.Description != 0 || fields.IPv6Address != nil || fields.CTag != 0 || fields.STag != 0 || fields.PortNumber != 0 {
+			return farInfo, unsupportedRuleIE(ie.OuterHeaderCreation)
+		}
 		farInfo.OuterHeaderCreation, farInfo.Teid = fields.OuterHeaderCreation, fields.Teid
 		if fields.IPv4Address != nil {
 			farInfo.RemoteIP = binary.LittleEndian.Uint32(fields.IPv4Address)
 		}
 		if fields.IPv6Address != nil {
-			return farInfo, fmt.Errorf("IPv6 not supported yet")
+			return farInfo, unsupportedRuleIE(ie.OuterHeaderCreation)
 		}
 	}
 	if far.Type == ie.UpdateFAR && isNullIE(marking) {
@@ -713,7 +713,7 @@ func processEstablishmentRequestRules(
 		return err
 	}
 
-	return validateSessionPDRShapes(session)
+	return validateSessionRuleShapes(conn, session)
 }
 
 func processDeletionRequestRules(
@@ -728,7 +728,7 @@ func processDeletionRequestRules(
 
 	for _, pdr := range session.PDRs {
 		operationPool.AddRule(ie.RuleIDTypePDR, pdr.PdrID, Operation{
-			Apply: func(pdr SPDRInfo) func() error {
+			Detach: func(pdr SPDRInfo) func() error {
 				return func() error {
 					return pdrContext.deletePDR(pdr, mapOperations)
 				}
@@ -805,6 +805,7 @@ func processModificationRequestRules(
 	removedURRs *[]*ie.IE,
 	session *Session,
 ) error {
+	previousUsageRefs := usageReferences(session)
 	if err := validateSessionCapability(req); err != nil {
 		return err
 	}
@@ -871,7 +872,8 @@ func processModificationRequestRules(
 		return err
 	}
 
-	return validateSessionPDRShapes(session)
+	conn.planStoppedUsage(operationPool, session, previousUsageRefs, removedURRs)
+	return validateSessionRuleShapes(conn, session)
 }
 
 func createFARs(
@@ -1138,6 +1140,7 @@ func updateQERs(
 			return &ruleFailure{ie.RuleIDTypeQER, qerID, unsupportedRuleIE(ie.RQI)}
 		}
 
+		session.QERs[qerID] = newQer
 		operationPool.AddRule(ie.RuleIDTypeQER, qerID, Operation{
 			Apply: func() func() error {
 				return func() error {
@@ -1174,6 +1177,7 @@ func updateURRs(
 		newUrr := oldUrr
 		updateUrr(&newUrr.UrrInfo, urr)
 
+		session.URRs[urrID] = newUrr
 		operationPool.AddRule(ie.RuleIDTypeURR, urrID, Operation{
 			Apply: func() func() error {
 				return func() error {
@@ -1221,7 +1225,8 @@ func updatePDRs(
 
 		session.PutPDR(newInfo.PdrID, newInfo)
 		operationPool.AddRule(ie.RuleIDTypePDR, uint32(pdrID), Operation{
-			Apply: func(pdrID uint32, oldInfo, newInfo *SPDRInfo) func() error {
+			Detach: func() error { return pdrContext.deletePDR(oldInfo, mapOperations) },
+			Apply: func(pdrID uint32, newInfo *SPDRInfo) func() error {
 				return func() error {
 					if err := resolvePDRSlots(newInfo, session); err != nil {
 						return err
@@ -1230,9 +1235,6 @@ func updatePDRs(
 						return unsupportedRuleIE(ie.ActivatePredefinedRules)
 					}
 
-					if err := pdrContext.deletePDR(*oldInfo, mapOperations); err != nil {
-						return err
-					}
 					session.PutPDR(pdrID, *newInfo)
 					*updatedPDRs = append(*updatedPDRs, *newInfo)
 					if err := applyPDR(*newInfo, mapOperations); err != nil {
@@ -1241,7 +1243,7 @@ func updatePDRs(
 
 					return nil
 				}
-			}(uint32(pdrID), &oldInfo, &newInfo),
+			}(uint32(pdrID), &newInfo),
 		})
 	}
 
@@ -1387,11 +1389,30 @@ func removePDRs(
 		}
 
 		operationPool.AddRule(ie.RuleIDTypePDR, pdrKey, Operation{
-			Apply: func() error {
+			Detach: func() error {
 				return pdrContext.deletePDR(oldPdr, mapOperations)
 			},
 		})
 	}
 
 	return nil
+}
+
+// TS 29.244 V20.1.0 clause 8.2.37: V4/V6 identify the actual local
+// PFCP endpoint family, independently of the user-plane tunnel family.
+func (conn *PfcpConnection) localFSEID(seid uint64) *ie.IE {
+	address := net.IP(conn.nodeAddrV4.Addr().AsSlice())
+	if ip4 := address.To4(); ip4 != nil {
+		return ie.NewFSEID(seid, cloneIP(ip4), nil)
+	}
+	return ie.NewFSEID(seid, nil, cloneIP(address.To16()))
+}
+
+func (conn *PfcpConnection) sessionN3Address(session *Session) net.IP {
+	if session.Is5G {
+		if address := config.Conf.GetN3AdvertisedAddress5G(); address.To4() != nil {
+			return cloneIP(address)
+		}
+	}
+	return cloneIP(conn.n3Address)
 }

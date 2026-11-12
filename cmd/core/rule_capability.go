@@ -208,7 +208,7 @@ func validatePDICapability(pdi *ie.IE) error {
 		}
 		// Only Flow Description is implemented; ToS/TC, SPI, Flow Label,
 		// bidirectional filters and their identifiers are not tuple matches.
-		if filter.Flags&^uint8(1) != 0 {
+		if filter.Flags&uint8(0x3e) != 0 {
 			return unsupportedRuleIE(ie.SDFFilter)
 		}
 	}
@@ -225,10 +225,8 @@ func validateSupportedAction(action *ie.IE) error {
 	if flags[0]&^uint8(3) != 0 {
 		return unsupportedRuleIE(ie.ApplyAction)
 	}
-	for _, value := range flags[1:] {
-		if value != 0 {
-			return unsupportedRuleIE(ie.ApplyAction)
-		}
+	if len(flags) > 1 && flags[1]&0x1f != 0 {
+		return unsupportedRuleIE(ie.ApplyAction)
 	}
 	return nil
 }
@@ -277,7 +275,10 @@ func validateURRSubset(method, triggers, volume *ie.IE, create bool) error {
 		if err != nil {
 			return err
 		}
-		if value != 2 {
+		if value&7 == 0 {
+			return invalidRequestIE(ie.MeasurementMethod, fmt.Errorf("empty measurement method"))
+		}
+		if value&7 != 2 {
 			return unsupportedRuleIE(ie.MeasurementMethod)
 		}
 	}
@@ -289,10 +290,12 @@ func validateURRSubset(method, triggers, volume *ie.IE, create bool) error {
 		if flags[0]&^uint8(2) != 0 {
 			return unsupportedRuleIE(ie.ReportingTriggers)
 		}
-		for _, value := range flags[1:] {
-			if value != 0 {
-				return unsupportedRuleIE(ie.ReportingTriggers)
-			}
+		if len(flags) > 1 && flags[1] != 0 || len(flags) > 2 && flags[2]&3 != 0 {
+			return unsupportedRuleIE(ie.ReportingTriggers)
+		}
+		// Clause 8.2.19 requires a named trigger; spare bits are discarded.
+		if flags[0]&2 == 0 {
+			return invalidRequestIE(ie.ReportingTriggers, fmt.Errorf("empty reporting triggers"))
 		}
 		if triggers.HasVOLTH() && volume == nil && create {
 			return &requestIEError{ie.CauseConditionalIEMissing, ie.VolumeThreshold, ie.ErrIENotFound}
@@ -324,7 +327,7 @@ func validateSessionCapability(request interface{}) error {
 			if err != nil {
 				return err
 			}
-			if flags&^uint8(1) != 0 {
+			if flags&uint8(0x0e) != 0 {
 				return unsupportedRuleIE(ie.PFCPSEReqFlags)
 			}
 		}
@@ -348,12 +351,21 @@ func validateOuterRemoval(field *ie.IE) error {
 	return nil
 }
 
-// validateSessionPDRShapes checks the final draft, so changing a FAR also
+// validateSessionRuleShapes checks the final draft, so changing a FAR also
 // validates every unchanged PDR that still references it. These are supported
 // forwarding forms, not approximations of a more general PDI.
-func validateSessionPDRShapes(session *Session) error {
+func validateSessionRuleShapes(conn *PfcpConnection, session *Session) error {
+	for id, urr := range session.URRs {
+		if urr.UrrInfo.VolumeTrigger && urr.UrrInfo.VolumeThreshold == 0 {
+			return &ruleFailure{ie.RuleIDTypeURR, id, &requestIEError{ie.CauseConditionalIEMissing, ie.VolumeThreshold, ie.ErrIENotFound}}
+		}
+	}
+
 	for id, pdr := range session.PDRs {
 		var err error
+		if pdr.Teid != 0 && pdr.PdrInfo.SourceInterfacePresent && pdr.SourceInterface == ie.SrcInterfaceCore && conn.n3Address.Equal(conn.n9Address) {
+			err = unsupportedRuleIE(ie.SourceInterface)
+		}
 		if pdr.Teid == 0 && pdr.PdrInfo.SourceInterfacePresent {
 			if pdr.SourceInterface != ie.SrcInterfaceCore {
 				err = unsupportedRuleIE(ie.SourceInterface)

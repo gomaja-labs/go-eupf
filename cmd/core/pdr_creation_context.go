@@ -17,11 +17,13 @@ import (
 )
 
 type PDRCreationContext struct {
-	Session         *Session
-	ResourceManager *service.ResourceManager
-	TEIDCache       map[uint8]uint32
-	FTUP            bool
-	Restoration     bool
+	Session              *Session
+	ResourceManager      *service.ResourceManager
+	TEIDCache            map[uint8]uint32
+	TEIDSources          map[uint8]uint8
+	FTUP                 bool
+	Restoration          bool
+	N3Address, N9Address net.IP
 }
 
 func NewPDRCreationContext(session *Session, resourceManager *service.ResourceManager) *PDRCreationContext {
@@ -29,6 +31,7 @@ func NewPDRCreationContext(session *Session, resourceManager *service.ResourceMa
 		Session:         session,
 		ResourceManager: resourceManager,
 		TEIDCache:       make(map[uint8]uint32),
+		TEIDSources:     make(map[uint8]uint8),
 	}
 }
 
@@ -192,7 +195,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 
 	// TS 29.244 V20.1.0 clause 6.3.3.2: an included PDI replaces
 	// the complete existing PDI, including fields absent from the new group.
-	oldTEID := spdrInfo.Teid
+	spdrInfo.LocalFTEIDIPv4 = nil
 	spdrInfo.Teid, spdrInfo.Ipv4, spdrInfo.Ipv6 = 0, nil, nil
 	spdrInfo.NetworkInstance, spdrInfo.SourceInterface = "", 0
 	spdrInfo.PdrInfo.UEIPv4, spdrInfo.PdrInfo.UEIPv6, spdrInfo.PdrInfo.UEIPv6Mask = nil, nil, nil
@@ -249,7 +252,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 			return fmt.Errorf("F-TEID IE is missing")
 		}
 		// TS 29.244 V20.1.0 clauses 5.5.1, 8.2.3 and Table 7.5.2.1-1 note 4.
-		if fteid.HasChID() && !fteid.HasCh() || fteid.Flags&3 == 0 || fteid.HasCh() && !pdrContext.FTUP || !fteid.HasCh() && pdrContext.FTUP && !pdrContext.Restoration && (pdr.Type == ie.CreatePDR || oldTEID != fteid.TEID) {
+		if fteid.HasChID() && !fteid.HasCh() || fteid.Flags&3 == 0 || fteid.HasCh() && !pdrContext.FTUP || !fteid.HasCh() && pdrContext.FTUP && !pdrContext.Restoration && !pdrContext.hasSessionFTEID(fteid.TEID, spdrInfo.SourceInterface, fteid.IPv4Address) {
 			return &requestIEError{ie.CauseInvalidFTEIDAllocationOption, ie.FTEID, fmt.Errorf("incompatible F-TEID allocation option")}
 		}
 		if fteid.Flags&2 != 0 {
@@ -258,11 +261,31 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		if !fteid.HasCh() && fteid.TEID == 0 {
 			return invalidRequestIE(ie.FTEID, fmt.Errorf("zero user-plane TEID"))
 		}
+		expected := pdrContext.N3Address
+		if spdrInfo.SourceInterface == ie.SrcInterfaceCore {
+			expected = pdrContext.N9Address
+		}
+		if !fteid.HasCh() && expected != nil && !expected.Equal(fteid.IPv4Address) {
+			cause := ie.CauseRuleCreationModificationFailure
+			if pdrContext.Restoration {
+				cause = ie.CauseSessionRestorationResourceUnavailable
+			}
+			return &requestIEError{cause, ie.FTEID, fmt.Errorf("F-TEID address is not available on the requested interface")}
+		}
+		spdrInfo.LocalFTEIDIPv4 = cloneIP(fteid.IPv4Address)
+		if fteid.HasCh() {
+			spdrInfo.LocalFTEIDIPv4 = cloneIP(expected)
+		}
 		var teid = fteid.TEID
 		if fteid.HasCh() {
 			var allocate = true
 			if fteid.HasChID() {
 				if teidFromCache, ok := pdrContext.hasTEIDCache(fteid.ChooseID); ok {
+					// Clause 8.2.3 requires the same complete F-TEID, not
+					// only the TEID number, for a shared CHOOSE ID.
+					if pdrContext.TEIDSources[fteid.ChooseID] != spdrInfo.SourceInterface {
+						return &requestIEError{ie.CauseInvalidFTEIDAllocationOption, ie.FTEID, fmt.Errorf("CHOOSE ID spans distinct interface addresses")}
+					}
 					allocate = false
 					teid = teidFromCache
 					spdrInfo.AllocatedTEID = true
@@ -277,7 +300,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 				teid = allocatedTeid
 				spdrInfo.AllocatedTEID = true
 				if fteid.HasChID() {
-					pdrContext.setTEIDCache(fteid.ChooseID, teid)
+					pdrContext.setTEIDCache(fteid.ChooseID, teid, spdrInfo.SourceInterface)
 				}
 			}
 		}
@@ -418,8 +441,9 @@ func (pdrContext *PDRCreationContext) hasTEIDCache(chooseID uint8) (uint32, bool
 	return teid, ok
 }
 
-func (pdrContext *PDRCreationContext) setTEIDCache(chooseID uint8, teid uint32) {
+func (pdrContext *PDRCreationContext) setTEIDCache(chooseID uint8, teid uint32, source uint8) {
 	pdrContext.TEIDCache[chooseID] = teid
+	pdrContext.TEIDSources[chooseID] = source
 }
 
 func hasCHV4(flags uint8) bool {
@@ -463,4 +487,18 @@ func resolvePDRSlots(info *SPDRInfo, session *Session) error {
 		}
 	}
 	return nil
+}
+
+// hasSessionFTEID permits referencing an existing UP-allocated tunnel without
+// treating the reference as a new CP allocation (TS 29.244 clause 5.5.1).
+func (pdrContext *PDRCreationContext) hasSessionFTEID(teid uint32, source uint8, address net.IP) bool {
+	if pdrContext.Session == nil || address == nil {
+		return false
+	}
+	for _, pdr := range pdrContext.Session.PDRs {
+		if pdr.Teid == teid && pdr.SourceInterface == source && pdr.LocalFTEIDIPv4.Equal(address) {
+			return true
+		}
+	}
+	return false
 }

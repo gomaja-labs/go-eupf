@@ -101,3 +101,49 @@ func TestUsageThresholdKeepsConfigurationAndRearmsExplicitly(t *testing.T) {
 		t.Fatal("new threshold did not rearm reporting")
 	}
 }
+
+func TestLastPDRRemovalReportsAndResetsRetainedURR(t *testing.T) {
+	maps := &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 99}}
+	conn, peer := PreparePfcpConnectionWithMock(t, maps, config.UpfConfig{})
+	s := NewSession(2, 42, "", "", false)
+	s.NewUrr(11, 1, ebpf.UrrInfo{UplinkVolume: 4, VolumeThreshold: 10, VolumeTrigger: true})
+	s.PutPDR(1, SPDRInfo{PdrID: 1, Teid: 10, URRIDs: []uint32{11}, PdrInfo: ebpf.PdrInfo{SessionID: 2, PdrID: 1, UrrIDs: []uint32{1}}})
+	conn.NodeAssociations[peer].Sessions[2] = s
+	reply, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(2, 1, ie.NewRemovePDR(ie.NewPDRID(1))), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := reply.(*message.SessionModificationResponse)
+	cause, _ := response.Cause.Cause()
+	if cause != 1 {
+		t.Fatal(cause)
+	}
+	if len(response.UsageReport) != 1 {
+		t.Fatal("last PDR removal omitted non-null final usage")
+	}
+	report, _ := response.UsageReport[0].UsageReportWithinSessionModificationResponse()
+	volume, _ := report.VolumeMeasurement.VolumeMeasurement()
+	if volume.TotalVolume != 95 {
+		t.Fatal(volume.TotalVolume)
+	}
+	retained := conn.NodeAssociations[peer].Sessions[2].URRs[11]
+	if retained.GlobalId != 1 || retained.ReportSeqNumber != 1 || retained.UrrInfo.UplinkVolume != 0 || maps.urr.UplinkVolume != 0 {
+		t.Fatalf("URR not retained and reset: %+v counters=%+v", retained, maps.urr)
+	}
+}
+
+func TestActivatingVolumeTriggerRequiresThreshold(t *testing.T) {
+	conn, peer := PreparePfcpConnection(t)
+	s := NewSession(2, 42, "", "", false)
+	s.NewUrr(11, 1, ebpf.UrrInfo{})
+	conn.NodeAssociations[peer].Sessions[2] = s
+	reply, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(2, 1, ie.NewUpdateURR(ie.NewURRID(11), ie.NewReportingTriggers(2, 0))), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := reply.(*message.SessionModificationResponse)
+	cause, _ := response.Cause.Cause()
+	if cause != ie.CauseConditionalIEMissing {
+		t.Fatalf("missing threshold cause=%d", cause)
+	}
+}

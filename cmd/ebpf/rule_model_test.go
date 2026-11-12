@@ -181,3 +181,48 @@ func TestDatapathRAUsesOriginatingSessionTunnel(t *testing.T) {
 		})
 	}
 }
+
+func TestDatapathEveryDownlinkQERApplies(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{PdrID: 1, FarId: 3, QerIDs: []uint32{1, 2}}); err != nil {
+		t.Fatal(err)
+	}
+	packet := ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false))
+	for _, slot := range []uint32{1, 2} {
+		t.Run(fmt.Sprintf("gate_%d", slot), func(t *testing.T) {
+			putDatapath(t, b.QerMap.Put, slot, &IpEntrypointQerInfo{DlGateStatus: 1})
+			if action, _ := runDatapath(t, b, packet); action != 1 {
+				t.Fatalf("DL QER %d gate ignored", slot)
+			}
+			putDatapath(t, b.QerMap.Put, slot, &IpEntrypointQerInfo{})
+		})
+	}
+	putDatapath(t, b.QerMap.Put, uint32(2), &IpEntrypointQerInfo{DlMaximumBitrate: 1})
+	if action, _ := runDatapath(t, b, packet); action == 1 {
+		t.Fatal("first DL rate-limited PDU dropped")
+	}
+	if action, _ := runDatapath(t, b, packet); action != 1 {
+		t.Fatal("second DL QER rate ignored")
+	}
+}
+
+func TestDatapathCoreGTPIngressUsesN9Address(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, Precedence: ^uint32(0), FarId: 1, OuterHeaderRemovalPresent: true, SourceInterfacePresent: true, SourceInterface: 1}); err != nil {
+		t.Fatal(err)
+	}
+	n3 := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
+	if action, _ := runDatapath(t, b, n3); action != 1 {
+		t.Fatal("Core PDI matched N3 ingress")
+	}
+	ip := &layers.IPv4{Version: 4, TTL: 64, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 18, 1, 2}, DstIP: net.IP{192, 0, 2, 2}}
+	udp := &layers.UDP{SrcPort: 2152, DstPort: 2152}
+	if err := udp.SetNetworkLayerForChecksum(ip); err != nil {
+		t.Fatal(err)
+	}
+	n9 := ethernetDatapath(t, layers.EthernetTypeIPv4, serializeDatapath(t, ip, udp, gopacket.Payload(n3[42:])))
+	action, out := runDatapath(t, b, n9)
+	if action == 1 || len(out) >= len(n9) {
+		t.Fatalf("Core PDI failed N9 ingress: action=%d", action)
+	}
+}

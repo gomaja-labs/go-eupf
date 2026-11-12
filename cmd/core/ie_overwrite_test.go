@@ -244,3 +244,7 @@ func (maps *MapOperationsMock) BeginRuleTransaction(_ uint64) (ebpf.RuleTransact
 func (m *MapOperationsMock) GetNextFAR() (uint32, error) { m.nextID++; return m.nextID, nil }
 func (m *MapOperationsMock) GetNextQER() (uint32, error) { m.nextID++; return m.nextID, nil }
 func (m *MapOperationsMock) GetNextURR() (uint32, error) { m.nextID++; return m.nextID, nil }
+
+func (m *MapOperationsMock) CheckPDRPlan(uint64, []ebpf.PDRKey) error { return nil }
+
+func (m *MapOperationsMock) ResetUrr(uint32) error { m.urr = ebpf.UrrInfo{}; return nil }

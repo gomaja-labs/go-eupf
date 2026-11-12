@@ -17,7 +17,7 @@ func TestUnsupportedRuleCombinationsAreRejected(t *testing.T) {
 		{"native forwarding without tunnel", ie.NewPDI(ie.NewSourceInterface(1), ie.NewUEIPAddress(6, "192.0.2.1", "", 0, 0)), false},
 		{"native Access interface", ie.NewPDI(ie.NewSourceInterface(0), ie.NewUEIPAddress(6, "192.0.2.1", "", 0, 0)), true},
 		{"native source-address lookup", ie.NewPDI(ie.NewSourceInterface(1), ie.NewUEIPAddress(2, "192.0.2.1", "", 0, 0)), true},
-		{"N9 creation without removal", ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, 10, net.ParseIP("192.0.2.1"), nil, 0)), true},
+		{"N9 creation without removal", ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, 10, net.ParseIP("1.2.3.4"), nil, 0)), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn, peer := PreparePfcpConnection(t)
@@ -35,5 +35,19 @@ func TestUnsupportedRuleCombinationsAreRejected(t *testing.T) {
 				t.Fatalf("unsupported combination accepted, cause=%d", cause)
 			}
 		})
+	}
+}
+
+func TestCoreFTEIDRequiresDistinctIngressAddress(t *testing.T) {
+	conn, peer := PreparePfcpConnection(t)
+	conn.n9Address = conn.n3Address
+	request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(1), ie.NewFTEID(1, 10, conn.n3Address, nil, 0)), ie.NewFARID(1)))
+	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause, _ := reply.(*message.SessionEstablishmentResponse).Cause.Cause()
+	if cause != ie.CauseServiceNotSupported {
+		t.Fatalf("ambiguous Core F-TEID ingress cause=%d", cause)
 	}
 }

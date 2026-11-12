@@ -50,3 +50,18 @@ func TestUnsupportedRuleContentRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestUnsupportedOuterHeaderFormsHaveServiceCause(t *testing.T) {
+	for _, outer := range []*ie.IE{ie.NewOuterHeaderCreation(0x400, 0, "192.0.2.1", "", 2152, 0, 0), ie.NewOuterHeaderCreation(0x200, 100, "", "2001:db8::1", 0, 0, 0)} {
+		conn, peer := PreparePfcpConnection(t)
+		request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(7), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(0), outer)))
+		reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cause, _ := reply.(*message.SessionEstablishmentResponse).Cause.Cause()
+		if cause != ie.CauseServiceNotSupported {
+			t.Fatalf("unsupported outer header cause=%d", cause)
+		}
+	}
+}

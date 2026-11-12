@@ -35,9 +35,8 @@ type FTEIDM struct {
 	maximum       uint32
 }
 type ipPrefixLease struct {
-	Owner   uint64
-	Address string
-	Prefix  net.IPNet
+	Owner  uint64
+	Prefix net.IPNet
 }
 
 type IPAM struct {
@@ -290,7 +289,7 @@ func (pool *IPAM) ReserveIPv6Prefix(owner uint64, ip net.IP, mask net.IPMask) er
 		pool.prefixLeases = make(map[string]ipPrefixLease)
 	}
 	key := fmt.Sprintf("%s/%d", ip.String(), ones)
-	pool.prefixLeases[key] = ipPrefixLease{owner, ip.String(), prefix}
+	pool.prefixLeases[key] = ipPrefixLease{owner, prefix}
 	pool.record(owner, ip)
 	return nil
 }
@@ -313,6 +312,7 @@ func (pool *IPAM) ReleaseUnusedPrefixes(owner uint64, active []net.IPNet) {
 
 // NextSessionID allocates a process-lifetime identity across every PFCP endpoint
 // sharing this forwarding plane. Zero signals exhaustion; live IDs never wrap.
+// TS 29.244 V20.1.0 clauses 5.2.1 and 5.6.2.
 func (manager *ResourceManager) NextSessionID() uint64 {
 	for {
 		previous := manager.nextSEID.Load()

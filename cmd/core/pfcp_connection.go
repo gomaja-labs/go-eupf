@@ -623,7 +623,7 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 // TS 29.244 V20.1.0 clauses 6.2.8.3 and 6.3.4.
 func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
 	draft := cloneSession(session)
-	start, finish := connection.prepareSessionMutation(session.LocalSEID)
+	start, finish := connection.prepareSessionMutation(draft)
 	defer func() { err = errors.Join(err, finish(false)) }()
 	pool := NewOperationPool()
 	pool.Before = start

@@ -434,6 +434,7 @@ func (bpfObjects *BpfObjects) DeleteUrr(internalId uint32) (UrrInfo, error) {
 
 type ForwardingPlaneController interface {
 	BeginRuleTransaction(sessionID uint64) (RuleTransaction, error)
+	CheckPDRPlan(sessionID uint64, keys []PDRKey) error
 	GetNextFAR() (uint32, error)
 	GetNextQER() (uint32, error)
 	GetNextURR() (uint32, error)
@@ -456,6 +457,7 @@ type ForwardingPlaneController interface {
 	NewUrr(urrInfo UrrInfo) (uint32, error)
 	UpdateUrr(internalId uint32, urrInfo UrrInfo) error
 	GetUrr(internalId uint32) (UrrInfo, error)
+	ResetUrr(internalId uint32) error
 	DeleteUrr(internalId uint32) (UrrInfo, error)
 }
 
@@ -677,4 +679,13 @@ func boolByte(value bool) uint8 {
 
 func qerMapValue(info QerInfo) IpEntrypointQerInfo {
 	return IpEntrypointQerInfo{UlGateStatus: info.GateStatusUL, DlGateStatus: info.GateStatusDL, Qfi: info.Qfi, QfiPresent: boolByte(info.QFIPresent), Rqi: info.RQI, Dscp: info.Dscp, UlMaximumBitrate: info.MaxBitrateUL, DlMaximumBitrate: info.MaxBitrateDL}
+}
+
+// ResetUrr resets a retained counter only after its final PDR is detached.
+// Callers must quiesce rule users through a RuleTransaction.
+func (b *BpfObjects) ResetUrr(id uint32) error {
+	if id == 0 {
+		return fmt.Errorf("reserved URR slot")
+	}
+	return b.UrrMap.Put(id, &IpEntrypointUrrInfo{})
 }

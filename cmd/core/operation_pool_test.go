@@ -11,12 +11,12 @@ func TestOperationPoolReservesBeforeAnyWrite(t *testing.T) {
 	p := NewOperationPool()
 	p.Before = func() error { order = append(order, "begin"); return nil }
 	for _, id := range []string{"1", "2"} {
-		p.Add(Operation{Reserve: func() error { order = append(order, "reserve"+id); return nil }, Apply: func() error { order = append(order, "write"+id); return nil }})
+		p.Add(Operation{Reserve: func() error { order = append(order, "reserve"+id); return nil }, Detach: func() error { order = append(order, "detach"+id); return nil }, Apply: func() error { order = append(order, "write"+id); return nil }})
 	}
 	if err := p.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(order, []string{"begin", "reserve1", "reserve2", "write1", "write2"}) {
+	if !reflect.DeepEqual(order, []string{"begin", "reserve1", "reserve2", "detach1", "detach2", "write1", "write2"}) {
 		t.Fatal(order)
 	}
 }

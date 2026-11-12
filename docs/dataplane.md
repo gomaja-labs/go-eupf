@@ -100,7 +100,9 @@ since a longest-prefix lookup cannot preserve precedence across both lists.
 Identical prefixes can hold the ordinary independent PDR list.
 
 Fixed bounds are four PDRs per key, two SDF filters, eight QFIs, four QERs and
-three URRs per PDR, and 64 rules of each type per session. Map capacities are
+three URRs per PDR, and 64 rules of each type per session.
+Ownership, key/prefix intersections and key capacity are checked against the
+final draft before slot reservation or map writes. Map capacities are
 configured separately and array slot zero is reserved. Capacity failures return
 No resources available; unsupported standard rule fields return Service not
 supported, with Failed Rule ID and Offending IE where applicable. No list is
@@ -108,12 +110,14 @@ silently truncated. Diagnostic PDR GETs return a session ID and ordered rules;
 direct REST map PUTs return 405. Session displays show logical per-session
 rule IDs, keeping internal array slots separate.
 
-The URR subset measures volume after QoS, supports a positive total-volume
-threshold, and sends final reports on URR removal/session deletion. Duration,
+The URR subset measures volume after QoS, requires a positive total-volume
+threshold for VOLTH, and sends final reports on URR removal/session deletion. Duration,
 event, packet, quota, periodic, linked, application and other unimplemented
 measurement controls are rejected. Below-threshold octets remain unreported
 until a report is triggered; the threshold is disarmed after a report until
-updated. Sequence numbers start at zero independently for each URR. Reports
+updated. Removing the last PDR association reports non-null usage and retains a reset
+URR. Reattaching a PDR resumes measurement from zero. Sequence numbers start
+at zero independently for each URR. Reports
 include total, uplink and downlink octets; packet timestamps are omitted because
 they are not measured. No end-marker emission, buffering, application detection,
 IPv6 outer tunnel or IPv6 UE address allocation capability is advertised.
@@ -122,7 +126,8 @@ chosen resources appear in Created PDR; allocations through Update PDR use
 Updated PDR.
 
 PFCP mutations validate into a private session and resource view, reserve every
-new slot, then journal exact previous map values while admission is closed.
+new slot, detach all changing PDRs, then journal exact previous map values
+while admission is closed.
 Rollback restores QER policer runtime and URR counters as well as bindings and
 allocator bitmaps. The existing PFCP state lock serializes session mutations,
 association cleanup and snapshots; diagnostic map readers also exclude the
@@ -145,6 +150,9 @@ explicit resources and occupied resources return restoration failure Cause 86
 charging flags are rejected. Native N6 PDIs support Core ingress and destination UE-IP lookup. Native
 source-address lookup, Access ingress without F-TEID, and forwarding without a
 return tunnel are rejected. GTP forwarding requires an Outer Header Removal IE.
+Core-side GTP ingress requires distinct N3 and N9 addresses; shared addresses
+cannot distinguish this match field. Only IPv4/UDP/GTP-U outer creation is
+supported. Spare bits are ignored; named unsupported controls are rejected.
 
 EPC/5GS deployments must enable FTUP; CP allocation
 mode remains available in configuration and does not satisfy clause 5.5.1.
@@ -158,8 +166,7 @@ consults the kernel FIB for every packet, so route, neighbour and MTU changes
 take effect immediately.
 
 Tests enter private network and mount namespaces and create their own permanent
-neighbors. Run them inside the privileged development image, or with
-`go test -exec sudo ./cmd/ebpf/` on a Linux host with iproute2, unshare and the
-required BPF privileges. The program-load tests exercise the running kernel;
+neighbors. Run them inside the privileged development image with iproute2,
+unshare and the required BPF privileges. The program-load tests exercise the running kernel;
 they do not establish support on an unavailable minimum kernel. The README
 names Linux 5.15.0-25-generic as its minimum tested version.

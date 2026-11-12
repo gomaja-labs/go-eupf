@@ -285,6 +285,7 @@ func cloneSession(session *Session) *Session {
 	copy.QERs = maps.Clone(session.QERs)
 	copy.URRs = maps.Clone(session.URRs)
 	for id, pdr := range copy.PDRs {
+		pdr.LocalFTEIDIPv4 = cloneIP(pdr.LocalFTEIDIPv4)
 		pdr.Ipv4 = append(net.IP(nil), pdr.Ipv4...)
 		pdr.Ipv6 = append(net.IP(nil), pdr.Ipv6...)
 		if pdr.FARID != nil {

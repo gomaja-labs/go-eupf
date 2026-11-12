@@ -176,7 +176,6 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 
 func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string) {
 	ip1, _ := net.ResolveIPAddr("ip", "1.1.1.1")
-	ip2, _ := net.ResolveIPAddr("ip", "2.2.2.2")
 
 	// Requests for default mapping (without SDF filter)
 
@@ -201,7 +200,7 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceAccess),
-				ie.NewFTEID(1, 10, ip2.IP, nil, 0),
+				ie.NewFTEID(1, 10, pfcpConn.n3Address, nil, 0),
 			),
 		),
 	)
@@ -246,7 +245,6 @@ func TestSdfFilterStoreValid(t *testing.T) {
 	}
 
 	ip1, _ := net.ResolveIPAddr("ip", "1.1.1.1")
-	ip2, _ := net.ResolveIPAddr("ip", "2.2.2.2")
 
 	fd := SdfFilterTestStruct{FlowDescription: "permit out ip from 10.62.0.1 to 8.8.8.8/32", Protocol: 1,
 		SrcType: 1, SrcAddress: "10.62.0.1", SrcMask: "ffffffff", SrcPortLower: 0, SrcPortUpper: 65535,
@@ -277,7 +275,7 @@ func TestSdfFilterStoreValid(t *testing.T) {
 			ie.NewPDRID(2),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewFTEID(1, 10, ip2.IP, nil, 0),
+				ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 0),
 				// ie.NewUEIPAddress(6, ip2.IP.String(), "", 0, 0),
 				ie.NewSDFFilter(fd.FlowDescription, nil, nil, nil, 0),
 			),
@@ -362,8 +360,6 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnection(t)
 	SendDefaulMappingPdrs(t, pfcpConn, smfIP)
 
-	ip1, _ := net.ResolveIPAddr("ip", "1.1.1.1")
-
 	fd1 := SdfFilterTestStruct{
 		FlowDescription: "permit out 17 from 10.169.247.161/32 13033 to 10.169.145.130/32 1235",
 		Protocol:        3,
@@ -392,15 +388,15 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 		DstPortLower:    1236,
 		DstPortUpper:    1236}
 
-	// Request with bad/unsuported SDF
-	seReq1 := message.NewSessionModificationRequest(2, 1,
+	// Two alternative filters belong to the same PDR.
+	seReq1 := message.NewSessionModificationRequest(3, 1,
 		ie.NewNodeIDFQDN("test"),
-		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
+		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(2),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewFTEID(1, 10, ip1.IP, nil, 0),
+				ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 0),
 				ie.NewSDFFilter(fd1.FlowDescription, nil, nil, nil, 0),
 				ie.NewSDFFilter(fd2.FlowDescription, nil, nil, nil, 0),
 			),
@@ -413,10 +409,10 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 		t.Errorf("No error should appear while handling session establishment request. PDR with bad SDF should be skipped?")
 	}
 
-	sdfFilterList := pfcpConn.NodeAssociations[smfIP].Sessions[2].PDRs[2].PdrInfo.SdfFilter
+	sdfFilterList := pfcpConn.NodeAssociations[smfIP].Sessions[3].PDRs[2].PdrInfo.SdfFilter
 	// Check that session PDR wasn't stored? Now it is, just without SDF.
 	if sdfFilterList == nil || len(sdfFilterList) != 2 {
-		t.Errorf("SDF Filter have to be stored")
+		t.Fatal("both SDF filters must be stored")
 	}
 
 	err = CheckSdfFilterEquality(&sdfFilterList[0], fd1)
@@ -499,7 +495,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 		),
 	)
 
-	fteid3 := ie.NewFTEID(1, 10, net.ParseIP("127.0.0.2"), nil, 1)
+	fteid3 := ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 1)
 	createPDR3 := ie.NewCreatePDR(
 		ie.NewPDRID(3),
 		ie.NewPDI(

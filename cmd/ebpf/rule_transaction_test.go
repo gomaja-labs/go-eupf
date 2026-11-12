@@ -5,6 +5,7 @@ package ebpf
 import (
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -133,5 +134,113 @@ func TestFrozenMapDeletionKeepsLiveSlot(t *testing.T) {
 	info, err := b.GetFar(id)
 	if err != nil || info.Action != 2 {
 		t.Fatalf("live FAR changed: %+v %v", info, err)
+	}
+}
+
+func TestRetainedURRResetIsJournalled(t *testing.T) {
+	b := loadDatapath(t)
+	putDatapath(t, b.UrrMap.Put, uint32(1), &IpEntrypointUrrInfo{Ul: 99, Dl: 77})
+	controller, err := b.BeginRuleTransaction(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = controller.Rollback() }()
+	if err := controller.DeletePdrUplink(10, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.ResetUrr(1); err != nil {
+		t.Fatal(err)
+	}
+	zero, err := b.GetUrr(1)
+	if err != nil || zero.UplinkVolume != 0 || zero.DownlinkVolume != 0 {
+		t.Fatalf("reset=%+v %v", zero, err)
+	}
+	if err := controller.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := b.GetUrr(1)
+	if err != nil || restored.UplinkVolume != 99 || restored.DownlinkVolume != 77 {
+		t.Fatalf("rollback=%+v %v", restored, err)
+	}
+	var pdr IpEntrypointPdrInfo
+	if err := b.PdrMapTeidIp4.Lookup(uint32(10), &pdr); err != nil || pdr.Count != 1 {
+		t.Fatal("reset rollback lost PDR")
+	}
+}
+
+func TestConcurrentOldPacketsCannotChargeReusedURR(t *testing.T) {
+	b := loadDatapath(t)
+	if id, err := b.GetNextURR(); err != nil || id != 1 {
+		t.Fatalf("reserve old URR: %d %v", id, err)
+	}
+	packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
+	epoch := make(chan struct{})
+	var stop sync.Once
+	var ready, workers sync.WaitGroup
+	failures := make(chan error, 4)
+	ready.Add(4)
+	for range 4 {
+		workers.Go(func() {
+			if _, _, err := b.UpfIpEntrypointFunc.Test(packet); err != nil {
+				failures <- err
+				ready.Done()
+				return
+			}
+			ready.Done()
+			for {
+				select {
+				case <-epoch:
+					for range 100 {
+						if _, _, err := b.UpfIpEntrypointFunc.Test(packet); err != nil {
+							failures <- err
+							return
+						}
+					}
+					return
+				default:
+					if _, _, err := b.UpfIpEntrypointFunc.Test(packet); err != nil {
+						failures <- err
+						return
+					}
+				}
+			}
+		})
+	}
+	t.Cleanup(func() { stop.Do(func() { close(epoch) }); workers.Wait() })
+	ready.Wait()
+	controller, err := b.BeginRuleTransaction(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = controller.Rollback() }()
+	final, err := controller.DeleteUrr(1)
+	if err != nil || final.UplinkVolume == 0 {
+		t.Fatalf("final=%+v %v", final, err)
+	}
+	if err := controller.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := b.BeginRuleTransaction(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reused.Rollback() }()
+	id, err := reused.NewUrr(UrrInfo{})
+	if err != nil || id != 1 {
+		t.Fatalf("reuse=%d %v", id, err)
+	}
+	if err := reused.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	stop.Do(func() { close(epoch) })
+	workers.Wait()
+	select {
+	case err := <-failures:
+		t.Fatal(err)
+	default:
+	}
+	current, err := b.GetUrr(1)
+	if err != nil || current.UplinkVolume != 0 || current.DownlinkVolume != 0 {
+		t.Fatalf("old packets charged new session: %+v %v", current, err)
 	}
 }

@@ -34,7 +34,10 @@ func TestResourcePoolBounds(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestResourcePoolBounds$")
-			cmd.Env = append(os.Environ(), "EUPF_RESOURCE_POOL_PROBE="+probe)
+			// The race runtime normally waits one second at exit. This child
+			// creates no background work; exclude that grace period from
+			// the constructor deadline while retaining race detection.
+			cmd.Env = append(os.Environ(), "EUPF_RESOURCE_POOL_PROBE="+probe, "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("pool did not reject promptly: %v: %s", err, output)

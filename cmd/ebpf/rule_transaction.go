@@ -380,3 +380,7 @@ func (tx *ruleTransaction) GetNextURR() (uint32, error) {
 // LockRuleSnapshot excludes an in-progress control-plane map journal while a
 // diagnostic reader copies its values. It must not acquire the PFCP state lock.
 func (b *BpfObjects) LockRuleSnapshot() func() { b.ruleMutex.Lock(); return b.ruleMutex.Unlock }
+
+func (tx *ruleTransaction) ResetUrr(id uint32) error {
+	return journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.ResetUrr(id) })
+}

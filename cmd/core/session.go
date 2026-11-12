@@ -51,6 +51,7 @@ type SPDRInfo struct {
 	PdrID           uint32
 	PdrInfo         ebpf.PdrInfo
 	Teid            uint32
+	LocalFTEIDIPv4  net.IP
 	Ipv4            net.IP
 	Ipv6            net.IP
 	NetworkInstance string

@@ -1,12 +1,13 @@
 package core
 
-// Operation is one planned map change. Exact rollback belongs to the map
-// transaction, including the original slot, counters and QoS runtime state.
+// Operation is one planned change in a quiesced map transaction. All slots
+// are reserved before any PDR detaches; every detach precedes new map values.
+// Exact rollback belongs to the journal, including counters and policer state.
 type Operation struct {
 	Reserve func() error
+	Detach  func() error
 	Apply   func() error
 }
-
 type OperationPool struct {
 	Before     func() error
 	operations []Operation
@@ -29,30 +30,34 @@ func (pool *OperationPool) Commit() error {
 			}
 		}
 	}
-	for _, operation := range pool.operations {
-		if err := operation.Apply(); err != nil {
-			return err
+	for _, op := range pool.operations {
+		if op.Detach != nil {
+			if err := op.Detach(); err != nil {
+				return err
+			}
+		}
+	}
+	for _, op := range pool.operations {
+		if op.Apply != nil {
+			if err := op.Apply(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
-
 func (pool *OperationPool) AddRule(kind uint8, id uint32, operation Operation) {
-	reserve := operation.Reserve
-	if reserve != nil {
-		operation.Reserve = func() error {
-			if err := reserve(); err != nil {
+	wrap := func(step func() error) func() error {
+		if step == nil {
+			return nil
+		}
+		return func() error {
+			if err := step(); err != nil {
 				return &ruleFailure{kind, id, err}
 			}
 			return nil
 		}
 	}
-	apply := operation.Apply
-	operation.Apply = func() error {
-		if err := apply(); err != nil {
-			return &ruleFailure{kind, id, err}
-		}
-		return nil
-	}
+	operation.Reserve, operation.Detach, operation.Apply = wrap(operation.Reserve), wrap(operation.Detach), wrap(operation.Apply)
 	pool.Add(operation)
 }
