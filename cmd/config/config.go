@@ -186,7 +186,7 @@ func defineFlags() {
 	pflag.Uint32("pfcp-request-timeout", 5, "PFCP T1 timeout in seconds")
 	pflag.Uint32("pfcp-request-retries", 3, "PFCP N1 retransmissions after the initial request")
 	pflag.Uint32("pfcp-response-retention", 60, "Duplicate PFCP request response retention in seconds")
-	pflag.Uint32("pfcp-max-transactions", 4096, "Maximum outstanding requests and cached responses per PFCP connection")
+	pflag.Uint32("pfcp-max-transactions", 4096, "Maximum outstanding requests per PFCP connection and cached responses per association")
 	pflag.Uint32("pfcp-max-associations", 1024, "Maximum associations per PFCP connection")
 	pflag.Uint32("heartbeat-failure-grace", 0, "Additional unreachable seconds after exhausting heartbeat retries before session deletion")
 	pflag.Uint32("hbretries", 3, "Number of heartbeat retries")
