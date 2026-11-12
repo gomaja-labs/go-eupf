@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -74,6 +75,9 @@ func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAdd
 		}
 	}
 	msg.SetSequenceNumber(state.next)
+	if msg.MarshalLen() > 65535 {
+		return nil, fmt.Errorf("PFCP request exceeds maximum UDP payload")
+	}
 	wire := make([]byte, msg.MarshalLen())
 	if err := msg.MarshalTo(wire); err != nil {
 		return nil, err
@@ -178,4 +182,27 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	}
 	state.responses[key] = cachedResponse{digest: digest, wire: wire, expires: time.Now().Add(ttl)}
 	state.bytes += len(wire)
+}
+
+func defaultDuration(seconds, fallback uint32) time.Duration {
+	if seconds == 0 {
+		seconds = fallback
+	}
+	return time.Duration(seconds) * time.Second
+}
+func (conn *PfcpConnection) admitPeer(ip net.IP) bool {
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if len(conn.allowedPeers) == 0 {
+		return true
+	}
+	for _, prefix := range conn.allowedPeers {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }

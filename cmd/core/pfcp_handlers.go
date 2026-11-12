@@ -7,6 +7,7 @@ package core
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"time"
@@ -28,6 +29,9 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		log.Warn().Err(parseErr).Str("peer", addr.String()).Msg("Invalid PFCP datagram")
 		results = append(results, parseErr)
 		for _, failure := range datagramFailures(parseErr) {
+			if h := failure.Header; h != nil {
+				conn.matchResponse(h.Type, h.Sequence(), addr)
+			}
 			var version *message.UnsupportedVersionError
 			var decode *ie.DecodeError
 			switch {
@@ -42,7 +46,9 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 				if !decode.TypeUnknown {
 					offending = ie.NewOffendingIE(decode.Type)
 				}
+				conn.stateMu.RLock()
 				response := conn.errorResponse(failure.Header.Type+1, conn.peerSessionSEID(failure.Header.SEID, addr.IP.String()), failure.Header.Sequence(), ie.CauseInvalidLength, offending)
+				conn.stateMu.RUnlock()
 				if response != nil {
 					if err := conn.SendMessage(response, addr); err != nil {
 						results = append(results, err)
@@ -123,6 +129,16 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	var outgoing message.Message
 	var trace bool
 	var handlerErr error
+	if !incomingMsg.IsRequest() {
+		handlerErr = validateIncomingResponse(incomingMsg)
+		if incomingMsg.MessageType() == message.MsgTypeHeartbeatResponse {
+			if assoc := conn.GetAssociation(addr.IP.String()); assoc != nil {
+				assoc.heartbeatInFlight = false
+				assoc.nextHeartbeat = time.Now().Add(conn.heartbeatInterval())
+			}
+		}
+	}
+
 	if incomingMsg.IsRequest() {
 		if failure := validateIncomingRequest(incomingMsg); failure != nil {
 			handlerErr = failure
@@ -242,4 +258,49 @@ func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Messag
 	// restart detection: TS 23.527 V20.0.0 clause 4.2.
 	_, err = conn.replaceAssociation(nodeIDText(node), addr, nil, response.CPFunctionFeatures)
 	return nil, true, err
+}
+
+// TS 29.244 V20.1.0 clauses 7.6.1 and 7.6.6: malformed matched
+// responses end retransmission and report an error to the application.
+func validateIncomingResponse(msg message.Message) error {
+	var node, cause, stamp *ie.IE
+	switch response := msg.(type) {
+	case *message.HeartbeatResponse:
+		return requireIEsError(requiredIE{ie.RecoveryTimeStamp, response.RecoveryTimeStamp})
+	case *message.AssociationSetupResponse:
+		node, cause, stamp = response.NodeID, response.Cause, response.RecoveryTimeStamp
+	case *message.AssociationUpdateResponse:
+		node, cause = response.NodeID, response.Cause
+	case *message.AssociationReleaseResponse:
+		node, cause = response.NodeID, response.Cause
+	case *message.SessionReportResponse:
+		cause = response.Cause
+	default:
+		return nil
+	}
+	if err := requireIEsError(requiredIE{ie.Cause, cause}); err != nil {
+		return err
+	}
+	value, err := cause.Cause()
+	if err != nil {
+		return err
+	}
+	if value != ie.CauseRequestAccepted {
+		return fmt.Errorf("PFCP %s rejected: cause %d", msg.MessageTypeName(), value)
+	}
+	if msg.MessageType() != message.MsgTypeSessionReportResponse {
+		if err := requireIEsError(requiredIE{ie.NodeID, node}); err != nil {
+			return err
+		}
+	}
+	if msg.MessageType() == message.MsgTypeAssociationSetupResponse {
+		return requireIEsError(requiredIE{ie.RecoveryTimeStamp, stamp})
+	}
+	return nil
+}
+func requireIEsError(fields ...requiredIE) error {
+	if failure := requireIEs(fields...); failure != nil {
+		return failure
+	}
+	return nil
 }

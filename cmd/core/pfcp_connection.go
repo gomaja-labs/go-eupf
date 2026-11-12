@@ -41,6 +41,7 @@ var pfcpHandlers = PfcpHandlerMap{
 	message.MsgTypeAssociationUpdateResponse:   HandlePfcpAssociationUpdateResponse,
 	message.MsgTypeAssociationReleaseRequest:   HandlePfcpAssociationReleaseRequest,
 	message.MsgTypeSessionReportResponse:       HandlePfcpSessionReportResponse,
+	message.MsgTypeAssociationReleaseResponse:  HandlePfcpAssociationUpdateResponse,
 }
 
 type PfcpConnection struct {
@@ -57,6 +58,7 @@ type PfcpConnection struct {
 	responseRetention time.Duration
 	maxTransactions   uint32
 	maxAssociations   uint32
+	allowedPeers      []netip.Prefix
 	heartbeatEvery    time.Duration
 	heartbeatGrace    time.Duration
 
@@ -93,17 +95,19 @@ func NewPfcpConnection(
 	sdfNotifyC <-chan ebpf.SdfFlowNotification,
 	profile PfcpProfile,
 ) (*PfcpConnection, error) {
+	if err := config.Conf.ValidatePFCP(); err != nil {
+		return nil, err
+	}
+	allowedPeers, err := config.Conf.PFCPPeerPrefixes()
+	if err != nil {
+		return nil, err
+	}
 	if err := validateLocalNodeID(profile, nodeId); err != nil {
 		return nil, err
 	}
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log.Warn().Msgf("Can't resolve UDP address: %s", err.Error())
-		return nil, err
-	}
-	udpConn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		log.Warn().Msgf("Can't listen UDP address: %s", err.Error())
 		return nil, err
 	}
 
@@ -133,6 +137,12 @@ func NewPfcpConnection(
 		return nil, fmt.Errorf("failed to init network instance validator: %s", err.Error())
 	}
 
+	udpConn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		log.Warn().Msgf("Can't listen UDP address: %s", err.Error())
+		return nil, err
+	}
+
 	pccRule, pccRulesNameLinkURRID := buildPCCRuleMap()
 
 	return &PfcpConnection{
@@ -141,7 +151,7 @@ func NewPfcpConnection(
 		pfcpHandlerMap:        pfcpHandlers,
 		NodeAssociations:      map[string]*NodeAssociation{},
 		nodeId:                nodeId,
-		nodeAddrV4:            udpAddr.AddrPort(),
+		nodeAddrV4:            udpConn.LocalAddr().(*net.UDPAddr).AddrPort(),
 		n3Address:             n3Addr,
 		n9Address:             n9Addr,
 		mapOperations:         mapOperations,
@@ -156,7 +166,8 @@ func NewPfcpConnection(
 		PCCRules:              pccRule,
 		PCCRulesNameLinkURRID: pccRulesNameLinkURRID,
 		profile:               profile,
-		requestTimeout:        5 * time.Second, requestRetries: 3,
+		requestTimeout:        defaultDuration(config.Conf.PfcpRequestTimeout, 5), requestRetries: config.Conf.PfcpRequestRetries,
+		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxTransactions: config.Conf.PfcpMaxTransactions, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
 		heartbeatEvery: time.Duration(config.Conf.HeartbeatInterval) * time.Second,
 	}, nil
@@ -387,6 +398,10 @@ func (connection *PfcpConnection) Receive(b []byte) (int, *net.UDPAddr, error) {
 }
 
 func (connection *PfcpConnection) Handle(b []byte, addr *net.UDPAddr) {
+	if addr == nil || len(b) > 65535 || !connection.admitPeer(addr.IP) {
+		return
+	}
+
 	if err := connection.pfcpHandlerMap.Handle(connection, b, addr); err != nil {
 		log.Warn().Msgf("Error handling PFCP message: %s", err.Error())
 	}

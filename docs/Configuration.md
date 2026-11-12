@@ -201,3 +201,6 @@ eupf \
 `max_sessions` is 1..1048576. Each explicit map size is 0 (derive from max_sessions) or 1..2097152. Association setup and GTP echo timers are 1..1048576 seconds. Heartbeat interval and timeout are 1..86400 seconds; heartbeat retries are 0..86400. Trace file count is 0..1073741824; trace size and packet count are 1..1073741824. Enabled UE-IP pools must be IPv4 /12 or narrower (at most 1048576 addresses); enabled TEID pools contain 1..1048576 entries. These are validation ceilings; provision memory for the actual configured maps and pools.
 
 REST edits write the file selected by `--config`. A read-only ConfigMap cannot persist edits: the API reports HTTP 500 if the runtime edit succeeded but persistence failed. Update the Helm values and restart to make durable changes to a ConfigMap deployment.
+
+PFCP retry, admission, capacity, response-cache and failure-grace settings are
+documented in [PFCP transport and peer liveness](pfcp-transport.md).
