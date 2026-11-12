@@ -4,6 +4,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -240,6 +241,7 @@ func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, en
 	defer state.mu.Unlock()
 	for seq, request := range state.pending {
 		if request.associationID() == id && (entity == "" || request.entity == entity) {
+			conn.completeRequestLocked(request, requestResult{outcome: requestCanceled, err: errors.New("PFCP association context invalidated")})
 			state.deletePending(seq)
 		}
 	}
@@ -276,6 +278,8 @@ func (conn *PfcpConnection) AssociationSnapshots() map[string]*NodeAssociation {
 		copy.CPFeatures = append([]byte(nil), assoc.CPFeatures...)
 		copy.UPFeatures = append([]byte(nil), assoc.UPFeatures...)
 		copy.sessionEntities = nil
+		copy.lastOutcomes = nil
+		copy.reportFailures = nil
 		copy.recoveries = nil
 		copy.Sessions = make(map[uint64]*Session, len(assoc.Sessions))
 		for seid, session := range assoc.Sessions {
@@ -524,6 +528,11 @@ func (conn *PfcpConnection) sessionAddress(association string, remoteSEID uint64
 }
 
 func (conn *PfcpConnection) pruneEntityMetadata(assoc *NodeAssociation) {
+	for seid := range assoc.reportFailures {
+		if assoc.Sessions[seid] == nil {
+			delete(assoc.reportFailures, seid)
+		}
+	}
 
 	for seid := range assoc.sessionEntities {
 		if assoc.Sessions[seid] == nil {

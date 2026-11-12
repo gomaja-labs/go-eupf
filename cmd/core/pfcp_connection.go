@@ -64,6 +64,8 @@ type PfcpConnection struct {
 	heartbeatEvery    time.Duration
 	setupEvery        time.Duration
 	heartbeatGrace    time.Duration
+	setupRetryAt      map[string]time.Time
+	lastSetupOutcome  requestOutcome
 
 	udpConn                *net.UDPConn
 	pfcpHandlerMap         PfcpHandlerMap
@@ -229,6 +231,7 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 	}
 	if nodes != nil {
 		connection.nodes = *nodes
+		clear(connection.setupRetryAt)
 	}
 
 	var old *net.UDPConn
@@ -240,6 +243,9 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 		old = connection.udpConn
 		connection.udpConn = replacement
 		connection.socketMu.Unlock()
+		for _, req := range connection.transport.pending {
+			connection.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: net.ErrClosed})
+		}
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
 		clear(connection.transport.responseBudgets)
@@ -380,6 +386,7 @@ func (connection *PfcpConnection) SetRemoteNodes(nodes []AssociationConnector) {
 	connection.stateMu.Lock()
 	defer connection.stateMu.Unlock()
 	connection.nodes = append([]AssociationConnector(nil), nodes...)
+	clear(connection.setupRetryAt)
 }
 
 func (connection *PfcpConnection) SendAssociationReleaseRequest() {
@@ -467,10 +474,10 @@ func (connection *PfcpConnection) Close() {
 			connection.AssociationSetupTicker.Stop()
 		}
 		socket := connection.socket()
-		connection.stateMu.Unlock()
-		_ = socket.Close()
-		connection.DeleteAllAssociations()
 		connection.transport.mu.Lock()
+		for _, req := range connection.transport.pending {
+			connection.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: net.ErrClosed})
+		}
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
 		clear(connection.transport.responseBudgets)
@@ -478,6 +485,9 @@ func (connection *PfcpConnection) Close() {
 		connection.transport.bytes = 0
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
+		connection.stateMu.Unlock()
+		_ = socket.Close()
+		connection.DeleteAllAssociations()
 	})
 }
 
@@ -590,7 +600,7 @@ func (connection *PfcpConnection) RefreshAssociations() {
 	connection.stateMu.RUnlock()
 	for _, node := range nodes {
 		connection.stateMu.RLock()
-		exists := connection.GetAssociation(node.getAddress()) != nil
+		exists := connection.GetAssociation(node.getAddress()) != nil || time.Now().Before(connection.setupRetryAt[node.getAddress()])
 		connection.stateMu.RUnlock()
 		if !exists && !connection.hasOutstanding(message.MsgTypeAssociationSetupRequest, node.getAddress()) {
 			node.sendAssociationSetupRequest(connection)

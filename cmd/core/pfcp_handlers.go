@@ -34,25 +34,44 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 			if bundled && !conn.bundleHeaderNegotiated(failure.Header, addr.IP.String()) {
 				continue
 			}
-			if h := failure.Header; h != nil {
+			if h := failure.Header; h != nil && !h.IsRequest() {
 				conn.failResponse(h.Type, h.Sequence(), addr, failure.Err)
 			}
 			var version *message.UnsupportedVersionError
 			var decode *ie.DecodeError
+			var length *message.InvalidLengthError
 			switch {
 			case errors.As(failure.Err, &version):
 				// TS 29.244 V20.1.0 clauses 7.6.2 and 7.4.4.7.
 				if err := conn.SendMessage(message.NewVersionNotSupportedResponse(version.Header.Sequence()), addr); err != nil {
 					results = append(results, err)
 				}
-			case failure.Header != nil && errors.As(failure.Err, &decode) && failure.Header.Type != message.MsgTypeHeartbeatRequest:
+			case failure.Header != nil && errors.As(failure.Err, &length) && failure.Header.IsRequest():
+				// TS 29.244 V20.1.0 clause 7.6.3. Heartbeat has no Cause
+				// IE and is discarded, consistent with 7.6.6/7.6.7 exemptions.
+				if failure.Header.Type == message.MsgTypeHeartbeatRequest {
+					continue
+				}
+				conn.stateMu.RLock()
+				seid := uint64(0)
+				if assoc := conn.sessionAssociation(failure.Header.SEID); assoc != nil {
+					seid = assoc.Sessions[failure.Header.SEID].RemoteSEID
+				}
+				response := conn.errorResponse(failure.Header.Type+1, seid, failure.Header.Sequence(), ie.CauseInvalidLength, nil)
+				conn.stateMu.RUnlock()
+				if response != nil {
+					if err := conn.SendMessage(response, addr); err != nil {
+						results = append(results, err)
+					}
+				}
+			case failure.Header != nil && failure.Header.IsRequest() && errors.As(failure.Err, &decode) && failure.Header.Type != message.MsgTypeHeartbeatRequest:
 				// TS 29.244 V20.1.0 clause 7.6.7: malformed IE framing requires Cause 68.
 				var offending *ie.IE
 				if !decode.TypeUnknown {
 					offending = ie.NewOffendingIE(decode.Type)
 				}
 				conn.stateMu.RLock()
-				response := conn.errorResponse(failure.Header.Type+1, conn.peerSessionSEID(failure.Header.SEID, addr.IP.String()), failure.Header.Sequence(), ie.CauseInvalidLength, offending)
+				response := conn.errorResponse(failure.Header.Type+1, conn.peerSessionSEID(failure.Header.SEID, conn.sessionOwnerID(failure.Header.SEID)), failure.Header.Sequence(), ie.CauseInvalidLength, offending)
 				conn.stateMu.RUnlock()
 				if response != nil {
 					if err := conn.SendMessage(response, addr); err != nil {
@@ -64,16 +83,6 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 	}
 	for _, incomingMsg := range incoming {
 		if bundled && !conn.bundleNegotiated(incomingMsg, addr.IP.String()) {
-			continue
-		}
-		invalidFrame := false
-		for _, failure := range datagramFailures(parseErr) {
-			if failure.Header != nil && failure.Header.Type == incomingMsg.MessageType() && failure.Header.Sequence() == incomingMsg.Sequence() && failure.Header.SEID == incomingMsg.SEID() {
-				invalidFrame = true
-				break
-			}
-		}
-		if invalidFrame {
 			continue
 		}
 		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr); err != nil {
@@ -113,6 +122,9 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 
 	handler, ok := handlerMap[incomingMsg.MessageType()]
 	if !ok {
+		conn.stateMu.Lock()
+		conn.completeRequestLocked(completed, requestResult{outcome: requestInvalid, err: errors.New("PFCP response has no procedure handler")})
+		conn.stateMu.Unlock()
 		return nil
 	} // Clause 7.6.4: discard unknown types before creating labels.
 	PfcpMessageRx.WithLabelValues(incomingMsg.MessageTypeName()).Inc()
@@ -120,6 +132,9 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	// its siblings; retained IE ordering/content still distinguishes requests.
 	requestWire := make([]byte, incomingMsg.MarshalLen())
 	if err := incomingMsg.MarshalTo(requestWire); err != nil {
+		conn.stateMu.Lock()
+		conn.completeRequestLocked(completed, requestResult{outcome: requestInvalid, err: err})
+		conn.stateMu.Unlock()
 		return err
 	}
 	key := requestKey{peer: addr.String(), sequence: incomingMsg.Sequence(), typ: incomingMsg.MessageType()}
@@ -127,16 +142,18 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	startTime := time.Now()
 	conn.stateMu.Lock()
 	if conn.isClosed() {
+		conn.completeRequestLocked(completed, requestResult{outcome: requestCanceled, err: net.ErrClosed})
 		conn.stateMu.Unlock()
 		return net.ErrClosed
 	}
 	if completed != nil {
 		current := conn.GetAssociation(completed.associationID())
 		if (completed.association != nil || completed.typ == message.MsgTypeHeartbeatRequest) && current != completed.association {
+			conn.completeRequestLocked(completed, requestResult{outcome: requestCanceled, err: errors.New("PFCP association replaced")})
 			conn.stateMu.Unlock()
 			return nil
 		}
-		conn.finishProbeLocked(completed)
+		// The requesting procedure receives its terminal result below.
 	}
 	var outgoing message.Message
 	var trace bool
@@ -226,6 +243,9 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		}
 	}
 
+	if completed != nil {
+		conn.completeRequestLocked(completed, responseResult(incomingMsg, handlerErr))
+	}
 	conn.stateMu.Unlock()
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
 		conn.TraceMessage(buf, addr, true)
@@ -394,4 +414,11 @@ func (conn *PfcpConnection) bundleHeaderNegotiated(h *message.Header, peer strin
 		return false
 	}
 	return conn.bundleNegotiated(message.NewGeneric(h.Type, h.SEID, h.Sequence()), peer)
+}
+
+func (conn *PfcpConnection) sessionOwnerID(seid uint64) string {
+	if assoc := conn.sessionAssociation(seid); assoc != nil {
+		return assoc.ID
+	}
+	return ""
 }

@@ -141,3 +141,21 @@ three-second deadline and force-closes remaining connections; the process gives
 all shutdown work at most 15 seconds and reports deadline expiry as failure.
 Association release is still handled by the existing release hook pending the
 separate release-lifecycle change.
+
+Every originated procedure has one terminal completion: accepted response, peer
+rejection, invalid response, no response after N1, or local cancellation. An
+invalid matching response stops retransmission and notifies the procedure even
+when it is discarded (clauses 7.6.1 and 7.6.3). Heartbeat clears its probe state;
+retry exhaustion applies the configured unreachable policy. A failed Setup
+waits a full setup interval before another configured connector attempt. Session
+Report failures are recorded for their live session and logged with procedure,
+peer and remote SEID; failure does not imply acknowledgement, and no new report
+transaction is invented beyond N1. An accepted later report clears that failure.
+Association Update completion never substitutes for the CP's Release Request.
+
+A complete Request header with inconsistent Length receives Cause 68; session
+responses use the known CP SEID or zero (clauses 7.6.3 and 7.2.2.4.2). Too-short
+headers are discarded. An inconsistent-length Heartbeat Request is logged and
+discarded because its Response has no Cause IE, consistent with the Heartbeat
+exemptions in clauses 7.6.6 and 7.6.7. Valid frames before an untrustworthy bundle
+length are processed; decoding never guesses a subsequent boundary.

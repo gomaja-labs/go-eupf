@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
 )
@@ -55,6 +56,9 @@ type pendingRequest struct {
 	association *NodeAssociation
 	socket      *net.UDPConn
 	upFeatures  []byte
+	remoteSEID  uint64
+	onComplete  func(requestResult)
+	completed   bool
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -115,6 +119,9 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 			state.pending[state.next].upFeatures = append([]byte(nil), features...)
 		}
 	}
+	request := state.pending[state.next]
+	request.remoteSEID = msg.SEID()
+	request.onComplete = conn.originatorCompletion(request)
 	state.pendingBytes += len(wire)
 	return wire, nil
 }
@@ -173,10 +180,122 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 }
 func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
 	PfcpRequestTimeouts.WithLabelValues(message.MessageTypeName(req.typ)).Inc()
-	log.Warn().Str("peer", req.peer.String()).Str("message", message.MessageTypeName(req.typ)).Msg("PFCP request retry budget exhausted")
+	conn.stateMu.Lock()
+	conn.completeRequestLocked(req, requestResult{outcome: requestTimeout, err: errRequestTimeout})
+	conn.stateMu.Unlock()
 	if req.typ == message.MsgTypeHeartbeatRequest {
 		conn.heartbeatFailed(req.associationID(), req.association)
 	}
+}
+
+// requestResult is the one terminal notification contract for every originator.
+// Callbacks execute exactly once under stateMu and may neither wait nor perform
+// network I/O or acquire transport.mu. TS 29.244 V20.1.0 clauses 6.4, 7.6.1,
+// 7.6.3 and 7.6.6.
+type requestOutcome string
+
+const (
+	requestAccepted requestOutcome = "accepted"
+	requestRejected requestOutcome = "rejected"
+	requestInvalid  requestOutcome = "invalid response"
+	requestTimeout  requestOutcome = "no response"
+	requestCanceled requestOutcome = "canceled"
+)
+
+var errRequestTimeout = errors.New("PFCP request retry budget exhausted")
+
+type requestResult struct {
+	outcome  requestOutcome
+	response message.Message
+	err      error
+}
+
+func (conn *PfcpConnection) completeRequestLocked(req *pendingRequest, result requestResult) {
+	if req == nil || req.completed {
+		return
+	}
+	req.completed = true
+	if req.onComplete != nil {
+		req.onComplete(result)
+	}
+}
+func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(requestResult) {
+	return func(result requestResult) {
+		if result.err != nil {
+			log.Warn().Err(result.err).Str("peer", req.peer.String()).Str("procedure", message.MessageTypeName(req.typ)).Str("outcome", string(result.outcome)).Uint64("remote_seid", req.remoteSEID).Msg("PFCP requesting procedure completed")
+		}
+		if req.typ == message.MsgTypeAssociationSetupRequest {
+			conn.lastSetupOutcome = result.outcome
+			for _, node := range conn.nodes {
+				if node.getAddress() != req.peer.IP.String() {
+					continue
+				}
+				if conn.setupRetryAt == nil {
+					conn.setupRetryAt = make(map[string]time.Time)
+				}
+				if result.outcome == requestAccepted {
+					delete(conn.setupRetryAt, node.getAddress())
+				} else {
+					conn.setupRetryAt[node.getAddress()] = time.Now().Add(conn.setupInterval())
+				}
+			}
+			return
+		}
+		assoc := conn.associationByID(req.associationID())
+		if assoc == nil || assoc != req.association {
+			return
+		}
+		if assoc.lastOutcomes == nil {
+			assoc.lastOutcomes = make(map[uint8]requestOutcome)
+		}
+		assoc.lastOutcomes[req.typ] = result.outcome
+		switch req.typ {
+		case message.MsgTypeHeartbeatRequest:
+			conn.finishProbeLocked(req)
+		case message.MsgTypeSessionReportRequest:
+			for seid, session := range assoc.Sessions {
+				if session.RemoteSEID != req.remoteSEID {
+					continue
+				}
+				if assoc.reportFailures == nil {
+					assoc.reportFailures = make(map[uint64]requestOutcome)
+				}
+				if result.outcome == requestAccepted {
+					delete(assoc.reportFailures, seid)
+				} else {
+					assoc.reportFailures[seid] = result.outcome
+				}
+			}
+		case message.MsgTypeAssociationUpdateRequest:
+			// Update completion never substitutes for the CP Release procedure (6.2.7.3.1).
+		}
+	}
+}
+func responseResult(msg message.Message, err error) requestResult {
+	result := requestResult{outcome: requestAccepted, response: msg, err: err}
+	if err == nil {
+		return result
+	}
+	result.outcome = requestInvalid
+	if msg.MessageType() == message.MsgTypeVersionNotSupportedResponse {
+		result.outcome = requestRejected
+		return result
+	}
+	var cause *ie.IE
+	switch value := msg.(type) {
+	case *message.AssociationSetupResponse:
+		cause = value.Cause
+	case *message.AssociationUpdateResponse:
+		cause = value.Cause
+	case *message.AssociationReleaseResponse:
+		cause = value.Cause
+	case *message.SessionReportResponse:
+		cause = value.Cause
+	}
+	if value, e := cause.Cause(); e == nil && value != ie.CauseRequestAccepted {
+		result.outcome = requestRejected
+	}
+	return result
 }
 
 // minimumReplayWindow is local policy, not a peer-advertised N1/T1. TS 29.244
@@ -385,7 +504,7 @@ func (conn *PfcpConnection) failResponse(typ uint8, seq uint32, peer *net.UDPAdd
 		return
 	}
 	conn.stateMu.Lock()
-	conn.finishProbeLocked(req)
+	conn.completeRequestLocked(req, requestResult{outcome: requestInvalid, err: err})
 	conn.stateMu.Unlock()
 	log.Warn().Err(err).Str("peer", peer.String()).Str("message", message.MessageTypeName(typ)).Msg("Invalid matched PFCP response")
 }
