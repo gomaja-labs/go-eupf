@@ -48,7 +48,7 @@ func (h *ApiHandler) getQerValue(c *gin.Context) {
 		return
 	}
 
-	var value ebpf.QerInfo
+	var value ebpf.IpEntrypointQerInfo
 
 	if err = h.BpfObjects.QerMap.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
 		log.Printf("Error reading map: %s", err.Error())
@@ -58,11 +58,11 @@ func (h *ApiHandler) getQerValue(c *gin.Context) {
 
 	c.IndentedJSON(http.StatusOK, ebpf.QerMapElement{
 		Id:           uint32(id),
-		GateStatusUL: value.GateStatusUL,
-		GateStatusDL: value.GateStatusDL,
+		GateStatusUL: value.UlGateStatus,
+		GateStatusDL: value.DlGateStatus,
 		Qfi:          value.Qfi,
-		MaxBitrateUL: value.MaxBitrateUL,
-		MaxBitrateDL: value.MaxBitrateDL,
+		MaxBitrateUL: value.UlMaximumBitrate,
+		MaxBitrateDL: value.DlMaximumBitrate,
 	})
 }
 
@@ -94,12 +94,12 @@ func (h *ApiHandler) setQerValue(c *gin.Context) {
 		return
 	}
 
-	var value = ebpf.QerInfo{
-		GateStatusUL: qerElement.GateStatusUL,
-		GateStatusDL: qerElement.GateStatusDL,
-		Qfi:          qerElement.Qfi,
-		MaxBitrateUL: qerElement.MaxBitrateUL,
-		MaxBitrateDL: qerElement.MaxBitrateDL,
+	var value = ebpf.IpEntrypointQerInfo{
+		UlGateStatus:     qerElement.GateStatusUL,
+		DlGateStatus:     qerElement.GateStatusDL,
+		Qfi:              qerElement.Qfi,
+		UlMaximumBitrate: qerElement.MaxBitrateUL,
+		DlMaximumBitrate: qerElement.MaxBitrateDL,
 	}
 
 	if err := h.BpfObjects.QerMap.Put(uint32(id), unsafe.Pointer(&value)); err != nil {

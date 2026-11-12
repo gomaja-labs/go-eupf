@@ -23,5 +23,10 @@ struct packet_context {
     struct udphdr *udp;
     struct tcphdr *tcp;
     struct gtpuhdr *gtp;
+    const char *ip_end;
+    __u32 gtp_header_length;
+    __u32 tpdu_length;
+    __u8 qfi;
+    __u8 unknown_extensions;
     __u8 trace;
 };

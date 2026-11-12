@@ -5,7 +5,6 @@ package ebpf
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -30,7 +29,7 @@ var (
 func testArp(bpfObjects *BpfObjects) error {
 
 	packetArp := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packetArp, gopacket.SerializeOptions{},
+	if err := serializeFixture(packetArp, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -58,7 +57,7 @@ func testArp(bpfObjects *BpfObjects) error {
 func testArpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 
 	packetArp := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packetArp, gopacket.SerializeOptions{},
+	if err := serializeFixture(packetArp, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -80,7 +79,7 @@ func testArpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 func testGtpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -88,6 +87,7 @@ func testGtpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -105,6 +105,7 @@ func testGtpBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.IP{1, 1, 1, 1},
 			SrcIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolICMPv4,
@@ -132,7 +133,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -140,6 +141,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -157,6 +159,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.IP{1, 1, 1, 1},
 			SrcIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolICMPv4,
@@ -175,7 +178,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 	pdr.DefaultPdr.OuterHeaderRemoval = 0
 	pdr.DefaultPdr.FarId = 1
 	pdr.DefaultPdr.QerId = 1
-	far := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	far := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&far)); err != nil {
@@ -200,7 +203,7 @@ func testGtpEcho(t *testing.T, bpfObjects *BpfObjects) error {
 	t.Helper()
 
 	packetArp := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packetArp, gopacket.SerializeOptions{FixLengths: true},
+	if err := serializeFixture(packetArp, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -208,6 +211,7 @@ func testGtpEcho(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -218,10 +222,11 @@ func testGtpEcho(t *testing.T, bpfObjects *BpfObjects) error {
 			SrcPort: 2152,
 		},
 		&layers.GTPv1U{
-			Version:        1,
-			MessageType:    1, // GTPU_ECHO_REQUEST
-			TEID:           0,
-			SequenceNumber: 0,
+			Version:            1,
+			MessageType:        1, // GTPU_ECHO_REQUEST
+			SequenceNumberFlag: true,
+			TEID:               0,
+			SequenceNumber:     0,
 		},
 	); err != nil {
 		return fmt.Errorf("serializing input packet failed: %w", err)
@@ -264,7 +269,7 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -272,6 +277,7 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -289,6 +295,7 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.IP{1, 1, 1, 1},
 			SrcIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolICMPv4,
@@ -304,8 +311,8 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
-	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
+	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
@@ -353,7 +360,7 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -361,6 +368,7 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -380,6 +388,7 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.IP{1, 1, 1, 1},
 			SrcIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolICMPv4,
@@ -395,10 +404,9 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 	}
 
 	t.Logf("packet: %v", packet.Layers())
-	t.Logf("packet:\n%v", hex.Dump(packet.Bytes()))
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 0, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 0, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
@@ -429,7 +437,7 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -437,6 +445,7 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -454,6 +463,7 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.ParseIP("1.1.1.1"),
 			SrcIP:    net.ParseIP("10.60.0.1"),
 			Protocol: layers.IPProtocolICMPv4,
@@ -469,8 +479,8 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
-	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
+	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
@@ -522,7 +532,7 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -530,6 +540,7 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -560,8 +571,8 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
-	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
+	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
@@ -615,13 +626,17 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 
 func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 
-	sdfListener, _ := NewSdfNotifyListener(bpfObjects.SdfNotifyMap)
+	sdfListener, err := NewSdfNotifyListener(bpfObjects.SdfNotifyMap)
+	if err != nil {
+		return err
+	}
+	defer sdfListener.Close()
 	sdfListener.SetNonblocked()
 
 	teid := uint32(1)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -629,6 +644,7 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    n3IP,
 			SrcIP:    n9IP,
 			Protocol: layers.IPProtocolUDP,
@@ -646,6 +662,7 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version: 4,
+			TTL:     64,
 			DstIP:   net.ParseIP("1.1.1.1"),
 			SrcIP:   net.ParseIP("10.60.0.1"),
 			//Protocol: layers.IPProtocolICMPv4,
@@ -666,8 +683,8 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
-	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: 1, Teid: 2, TransportLevelMarking: 0}
+	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
+	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farDrop)); err != nil {
@@ -727,7 +744,7 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 	teid := uint32(2)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{FixLengths: true},
+	if err := serializeFixture(packet, gopacket.SerializeOptions{FixLengths: true},
 		&layers.Ethernet{
 			SrcMAC:       n3MAC,
 			DstMAC:       n9MAC,
@@ -735,6 +752,7 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			SrcIP:    net.IP{1, 1, 1, 1},
 			DstIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolICMPv4,
@@ -753,7 +771,7 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
-		Remoteip:              binary.LittleEndian.Uint32(n3IP),
+		Remoteip:              binary.LittleEndian.Uint32(net.IP{10, 3, 0, 30}),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
@@ -822,7 +840,7 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 	teid := uint32(2)
 
 	packet := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(packet, gopacket.SerializeOptions{
+	if err := serializeFixture(packet, gopacket.SerializeOptions{
 		FixLengths: true,
 	},
 		&layers.Ethernet{
@@ -832,6 +850,7 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			SrcIP:    net.IP{1, 1, 1, 1},
 			DstIP:    net.IP{10, 60, 0, 1},
 			Protocol: layers.IPProtocolUDP,
@@ -846,13 +865,13 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 	}
 
 	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
-	farForward := FarInfo{
+	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
-		RemoteIP:              binary.LittleEndian.Uint32(n3IP),
+		Remoteip:              binary.LittleEndian.Uint32(net.IP{10, 3, 0, 30}),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
-	qer := QerInfo{GateStatusUL: 0, GateStatusDL: 0, Qfi: 5, MaxBitrateUL: 1000000, MaxBitrateDL: 100000}
+	qer := IpEntrypointQerInfo{Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), unsafe.Pointer(&farForward)); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -917,7 +936,7 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 
 	packet := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: false}
-	if err := gopacket.SerializeLayers(packet, opts,
+	if err := serializeFixture(packet, opts,
 		&layers.Ethernet{
 			SrcMAC:       net.HardwareAddr{1, 0, 0, 3, 0, 10},
 			DstMAC:       net.HardwareAddr{1, 0, 0, 3, 0, 20},
@@ -925,6 +944,7 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 		},
 		&layers.IPv4{
 			Version:  4,
+			TTL:      64,
 			DstIP:    net.IP{10, 3, 0, 10},
 			SrcIP:    net.IP{10, 3, 0, 20},
 			Protocol: layers.IPProtocolUDP,
@@ -959,8 +979,6 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	t.Logf("packet:\n%v", hex.Dump(packet.Bytes()))
-
 	pdrUplink := PdrInfo{OuterHeaderRemoval: 0, FarId: 2, QerId: 1}
 	farUplink := FarInfo{Action: 2, OuterHeaderCreation: 0}
 
@@ -968,7 +986,7 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
-		Remoteip:              binary.LittleEndian.Uint32(net.ParseIP("10.3.0.10").To4()),
+		Remoteip:              binary.LittleEndian.Uint32(net.ParseIP("10.3.0.30").To4()),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
 	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
@@ -979,7 +997,7 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 	if err := bpfObjects.QerMap.Put(uint32(1), unsafe.Pointer(&qer)); err != nil {
 		return fmt.Errorf("can't set QER: %w", err)
 	}
-	if err := bpfObjects.PutPdrDownlink(net.ParseIP("2a03:d000:29a0:509:1:0:8e11:2f19"), pdr); err != nil {
+	if err := bpfObjects.PutPdrDownlink(net.ParseIP("fe80::1:0:8e11:2f19"), pdr); err != nil {
 		return fmt.Errorf("can't set downlink PDR: %w", err)
 	}
 
@@ -998,14 +1016,20 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 	if bpfRet != 4 { // XDP_REDIRECT
 		return fmt.Errorf("unexpected return value: %d", bpfRet)
 	}
-	t.Logf("output packet:\n%v", hex.Dump(bufOut))
 	response := gopacket.NewPacket(bufOut, layers.LayerTypeEthernet, gopacket.Default)
 	t.Logf("decoded packet:\n%v", response)
 
 	if icmpLayer := response.Layer(layers.LayerTypeICMPv6); icmpLayer != nil {
 		icmp, _ := icmpLayer.(*layers.ICMPv6)
-		if icmp.Checksum != 0xeba7 {
-			return fmt.Errorf("unexpected icmpv6 checksum: 0x%04x, should be 0xeba7", icmp.Checksum)
+		ip, ok := response.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+		if !ok || !ip.DstIP.Equal(net.ParseIP("fe80::1:0:8e11:2f19")) || ip.HopLimit != 255 {
+			return fmt.Errorf("invalid RA IPv6 envelope")
+		}
+		body := append(append([]byte(nil), icmp.Contents...), icmp.Payload...)
+		pseudo := append(append([]byte(nil), ip.SrcIP.To16()...), ip.DstIP.To16()...)
+		pseudo = append(pseudo, 0, 0, 0, byte(len(body)), 0, 0, 0, 58)
+		if checksumDatapath(append(pseudo, body...)) != 0 {
+			return fmt.Errorf("invalid RA checksum")
 		}
 	} else {
 		return fmt.Errorf("unexpected response: %v", response)
@@ -1190,4 +1214,24 @@ func TestEntrypointBenchmark(t *testing.T) {
 
 		t.Logf("%s result: %d ns", t.Name(), duration)
 	})
+}
+
+// serializeFixture binds each transport checksum to its enclosing network
+// layer, including packets nested in GTP. All positive vectors are valid IP.
+func serializeFixture(buffer gopacket.SerializeBuffer, opts gopacket.SerializeOptions, ls ...gopacket.SerializableLayer) error {
+	opts.FixLengths, opts.ComputeChecksums = true, true
+	var network gopacket.NetworkLayer
+	for _, layer := range ls {
+		if n, ok := layer.(gopacket.NetworkLayer); ok {
+			network = n
+		}
+		if c, ok := layer.(interface {
+			SetNetworkLayerForChecksum(gopacket.NetworkLayer) error
+		}); ok {
+			if err := c.SetNetworkLayerForChecksum(network); err != nil {
+				return err
+			}
+		}
+	}
+	return gopacket.SerializeLayers(buffer, opts, ls...)
 }

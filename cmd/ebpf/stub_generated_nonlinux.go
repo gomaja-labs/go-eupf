@@ -49,7 +49,8 @@ type IpEntrypointPdrInfo struct {
 	NrFlag        uint8
 	SdfMode       uint8
 	DedicatedPdrs [8]struct {
-		Pdr struct {
+		Active uint8
+		Pdr    struct {
 			OuterHeaderRemoval uint8
 			FarId              uint32
 			QerId              uint32

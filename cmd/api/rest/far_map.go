@@ -42,7 +42,7 @@ func (h *ApiHandler) getFarValue(c *gin.Context) {
 		return
 	}
 
-	var value ebpf.FarInfo
+	var value ebpf.IpEntrypointFarInfo
 	if err = h.BpfObjects.FarMap.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
 		log.Printf("Error reading map: %s", err.Error())
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
@@ -54,7 +54,7 @@ func (h *ApiHandler) getFarValue(c *gin.Context) {
 		Action:                value.Action,
 		OuterHeaderCreation:   value.OuterHeaderCreation,
 		Teid:                  value.Teid,
-		RemoteIP:              value.RemoteIP,
+		RemoteIP:              value.Remoteip,
 		TransportLevelMarking: value.TransportLevelMarking,
 	})
 }
@@ -87,11 +87,11 @@ func (h *ApiHandler) setFarValue(c *gin.Context) {
 		return
 	}
 
-	var value = ebpf.FarInfo{
+	var value = ebpf.IpEntrypointFarInfo{
 		Action:                farElement.Action,
 		OuterHeaderCreation:   farElement.OuterHeaderCreation,
 		Teid:                  farElement.Teid,
-		RemoteIP:              farElement.RemoteIP,
+		Remoteip:              farElement.RemoteIP,
 		TransportLevelMarking: farElement.TransportLevelMarking,
 	}
 

@@ -45,6 +45,7 @@ func (current *UpfCounters) Add(new UpfCounters) {
 	current.RxGtpEcho += new.RxGtpEcho
 	current.RxGtpPdu += new.RxGtpPdu
 	current.RxGtpOther += new.RxGtpOther
+	current.RxGtpUnexp += new.RxGtpUnexp
 }
 
 func (current *UpfCounters) Delta(new UpfCounters) UpfCounters {
@@ -62,6 +63,7 @@ func (current *UpfCounters) Delta(new UpfCounters) UpfCounters {
 	delta.RxGtpEcho = new.RxGtpEcho - current.RxGtpEcho
 	delta.RxGtpPdu = new.RxGtpPdu - current.RxGtpPdu
 	delta.RxGtpOther = new.RxGtpOther - current.RxGtpOther
+	delta.RxGtpUnexp = new.RxGtpUnexp - current.RxGtpUnexp
 	return delta
 }
 

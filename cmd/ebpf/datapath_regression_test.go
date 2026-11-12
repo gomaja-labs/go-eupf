@@ -9,10 +9,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,6 +33,10 @@ func loadDatapath(t *testing.T) *BpfObjects {
 	}
 	b := NewBpfObjects()
 	if err := b.Load(); err != nil {
+		var ve *cilium.VerifierError
+		if errors.As(err, &ve) {
+			t.Logf("%+v", ve)
+		}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -153,10 +157,11 @@ func runDatapath(t *testing.T, b *BpfObjects, packet []byte, context ...*datapat
 			t.Fatal(err)
 		}
 		name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
-		f, err := os.Create(filepath.Join(dir, name+".pcap"))
+		f, err := os.CreateTemp(dir, name+"-*.pcap")
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("capture=%s", f.Name())
 		w := pcapgo.NewWriter(f)
 		if err := w.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
 			t.Fatal(err)
@@ -414,14 +419,39 @@ func TestDatapathPreprocessPreservesLookupError(t *testing.T) {
 }
 
 func TestDatapathResizeReplacesProgramMap(t *testing.T) {
-	b := loadDatapath(t)
-	if err := ResizeEbpfMap(&b.FarMap, b.UpfIpEntrypointFunc, 2048); err != nil {
+	b := NewBpfObjects()
+	if err := b.ResizeAllMaps(2048, 2048, 2048, 2048); err != nil {
 		t.Fatal(err)
 	}
-	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 1})
-	action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false))
+	if err := b.Load(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	info, err := b.FarMap.Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.MaxEntries != 2048 {
+		t.Fatalf("capacity=%d", info.MaxEntries)
+	}
+	putDatapath(t, b.FarMap.Put, uint32(1500), &IpEntrypointFarInfo{Action: 1})
+	if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{FarId: 1500}); err != nil {
+		t.Fatal(err)
+	}
+	action, _ := runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false)))
 	if action != 1 {
-		t.Errorf("DROP FAR written after resize was ignored: action=%d", action)
+		t.Errorf("program ignored resized FAR map: action=%d", action)
+	}
+	if err := b.ResizeAllMaps(4096, 4096, 4096, 4096); err == nil {
+		t.Error("live resize accepted")
+	}
+	action, _ = runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false)))
+	if action != 1 {
+		t.Error("rejected live resize changed map references")
 	}
 }
 
@@ -435,9 +465,13 @@ func TestDatapathShortSdfEvent(t *testing.T) {
 			}()
 			var e SdfEvent
 			if v6 {
-				e.UnmarshalIPv6(make([]byte, 32))
+				if err := e.UnmarshalIPv6(make([]byte, 32)); !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Errorf("short tuple error=%v", err)
+				}
 			} else {
-				e.UnmarshalIPv4(make([]byte, 8))
+				if err := e.UnmarshalIPv4(make([]byte, 8)); !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Errorf("short tuple error=%v", err)
+				}
 			}
 		})
 	}
@@ -467,7 +501,7 @@ func TestDatapathRouterAdvertisementRouteFallback(t *testing.T) {
 				remote = net.IP{192, 0, 2, 1}
 			}
 			putDatapath(t, b.FarMap.Put, uint32(3), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(remote), Teid: 10})
-			if err := b.PutDownlinkPdrIp6(net.ParseIP("2001:db8:1234:5678::1234"), PdrInfo{FarId: 3, QerId: 1}); err != nil {
+			if err := b.PutDownlinkPdrIp6(net.ParseIP("fe80::1234"), PdrInfo{FarId: 3, QerId: 1}); err != nil {
 				t.Fatal(err)
 			}
 			action, out := runDatapath(t, b, gtpDatapath(t, rsDatapath(t, "fe80::1234", 255, 0), nil, 0x30, false))
@@ -687,11 +721,6 @@ func TestDatapathEchoRecoveryWithIPv4Options(t *testing.T) {
 
 func routeDatapathFixture(t *testing.T) *datapathContext {
 	t.Helper()
-	// The dev runner provides a private network namespace. Never create
-	// these interfaces on the host running the test command.
-	if _, err := os.Stat("/.dockerenv"); err != nil {
-		t.Skip("routing fixture requires the privileged dev container")
-	}
 	in, out := "dpin", "dpout"
 	ip := func(args ...string) {
 		t.Helper()
@@ -845,5 +874,54 @@ func TestDatapathIPv4PdrAddressForms(t *testing.T) {
 				t.Errorf("IPv4 address length=%d did not install a DROP rule: action=%d", len(ip), action)
 			}
 		})
+	}
+}
+
+func TestDatapathRouterSolicitationOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		option       []byte
+		valid        bool
+	}{
+		{"zero_length", "fe80::1234", []byte{1, 0, 2, 3, 4, 5, 6, 7}, false},
+		{"truncated", "fe80::1234", []byte{1, 2, 2, 3, 4, 5, 6, 7}, false},
+		{"unspecified_source_ll", "::", []byte{1, 1, 2, 3, 4, 5, 6, 7}, false},
+		{"unknown_option", "fe80::1234", []byte{253, 1, 2, 3, 4, 5, 6, 7}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := loadDatapath(t)
+			inner := append(rsDatapath(t, tc.source, 255, 0), tc.option...)
+			length := len(inner) - 40
+			binary.BigEndian.PutUint16(inner[4:6], uint16(length))
+			inner[42], inner[43] = 0, 0
+			pseudo := append(append([]byte(nil), inner[8:40]...), 0, 0, 0, byte(length), 0, 0, 0, 58)
+			binary.BigEndian.PutUint16(inner[42:44], checksumDatapath(append(pseudo, inner[40:]...)))
+			action, out := runDatapath(t, b, gtpDatapath(t, inner, nil, 0x30, false))
+			packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)
+			ra := packet.Layer(layers.LayerTypeICMPv6RouterAdvertisement)
+			if tc.valid && ra == nil {
+				t.Error("valid unknown option prevented RA")
+			}
+			if !tc.valid && (ra != nil || action != 1) {
+				t.Errorf("invalid RS option was not silently discarded: action=%d", action)
+			}
+		})
+	}
+}
+
+func TestDatapathICMPv6SdfSelection(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerId: 1, SdfFilter: []SdfFilter{anyDatapathFilter(4)}}); err != nil {
+		t.Fatal(err)
+	}
+	ip := &layers.IPv6{Version: 6, HopLimit: 64, NextHeader: layers.IPProtocolICMPv6, SrcIP: net.ParseIP("2001:db8::1"), DstIP: net.ParseIP("2001:db8::2")}
+	icmp := &layers.ICMPv6{TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0)}
+	if err := icmp.SetNetworkLayerForChecksum(ip); err != nil {
+		t.Fatal(err)
+	}
+	inner := serializeDatapath(t, ip, icmp, gopacket.Payload([]byte{0, 1, 0, 1}))
+	action, _ := runDatapath(t, b, gtpDatapath(t, inner, nil, 0x30, false))
+	if action != 1 {
+		t.Errorf("ICMPv6 DROP filter was bypassed: action=%d", action)
 	}
 }

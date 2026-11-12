@@ -149,78 +149,96 @@ static __always_inline __u32 prepare_icmp_echo_reply(struct packet_context *ctx,
     return 0;
 }
 
-static __always_inline __u32 prepare_icmp6_ra(struct packet_context *ctx, const struct in6_addr *prefix, __u8 prefix_length) {
-    if (!ctx->ip6)
-        return -1;
-
-    char *data = (char *)(long)ctx->xdp_ctx->data;
-    const char *data_end = (const char *)(long)ctx->xdp_ctx->data_end;
-    const size_t current = data_end - data;
-    const size_t requred = sizeof(struct ethhdr) 
-                        + sizeof(struct ipv6hdr) 
-                        + sizeof(struct icmp6hdr_ra_) 
-                        + sizeof(struct icmpv6_option_prefix);
-    if(current < requred) {
-        long result = bpf_xdp_adjust_tail(ctx->xdp_ctx, requred-current);
-        if (result)
-            return -1;
+static __noinline int valid_rs_checksum(struct ipv6hdr *ip, const char *end, __u32 len) {
+    struct icmp6hdr *icmp=(void *)(ip+1);
+    __u64 sum=0;
+    for (int i=0; i<32; i++) {
+        if (i*8>=len) break;
+        void *block=(void *)icmp+i*8;
+        if ((const char *)block+8>end) return 0;
+        sum=bpf_csum_diff(0,0,block,8,sum);
     }
+    struct ipv6_pseudo_header pseudo={};
+    pseudo.fields.src_ip=ip->saddr;
+    pseudo.fields.dst_ip=ip->daddr;
+    pseudo.fields.length=bpf_htonl(len);
+    pseudo.fields.next_header=IPPROTO_ICMPV6;
+    #pragma unroll
+    for (int i=0;i<20;i++) sum+=pseudo.words[i];
+    return csum_fold_helper(sum) == 0;
 
-    data = (char *)(long)ctx->xdp_ctx->data;
-    data_end = (const char *)(long)ctx->xdp_ctx->data_end;
-    if( context_reinit(ctx, data, data_end))
-        return -1;
-    
-    struct ethhdr *eth = ctx->eth;
+}
+
+// RFC 4861 section 6.1.1: validate every solicitation before generating a
+// response. The bounded fast path leaves larger messages to the kernel.
+static __noinline int valid_router_solicitation(struct packet_context *ctx) {
+    struct ipv6hdr *ip = ctx->ip6;
+    __u32 len = bpf_ntohs(ip->payload_len);
+    if (len > 256) return -1;
+    struct icmp6hdr *icmp = (void *)(ip+1);
+    if (ip->hop_limit != 255 || len < 8 || len > 256 || (len & 7) ||
+        (const char *)(icmp+1) > ctx->data_end ||
+        (const char *)icmp+len > ctx->data_end || icmp->icmp6_code != 0)
+        return 0;
+    if (!valid_rs_checksum(ip, ctx->data_end, len)) return 0;
+    int unspecified = !(ip->saddr.s6_addr32[0] | ip->saddr.s6_addr32[1] |
+                        ip->saddr.s6_addr32[2] | ip->saddr.s6_addr32[3]);
+    __u64 offset = 8;
+    for (int i=0; i<31 && offset<len; i++) {
+        asm volatile("" : "+r"(offset));
+        if (offset > 254) return 0;
+        __u8 *opt = (void *)icmp+offset;
+        if ((const char *)opt+2 > ctx->data_end) return 0;
+        __u32 span = opt[1]*8;
+        if (!span || offset+span>len || (unspecified && opt[0]==1)) return 0;
+        offset+=span;
+    }
+    return offset == len;
+}
+
+static __always_inline __u32 prepare_icmp6_ra(struct packet_context *ctx, const struct in6_addr *prefix, __u8 prefix_length) {
+    if (!ctx->ip6 || prefix_length>128) return -1;
+    __s32 required = sizeof(struct ethhdr)+sizeof(struct ipv6hdr)+sizeof(struct icmp6hdr_ra_)+sizeof(struct icmpv6_option_prefix);
+    __s32 current = (void *)(long)ctx->xdp_ctx->data_end - (void *)(long)ctx->xdp_ctx->data;
+    asm volatile("" : "+r"(current));
+    if (bpf_xdp_adjust_tail(ctx->xdp_ctx, required-current)) return -1;
+    char *data = (void *)(long)ctx->xdp_ctx->data;
+    const char *end = (void *)(long)ctx->xdp_ctx->data_end;
+    // Re-establish bounds directly: the original RS length can exceed the RA.
+    struct ethhdr *eth = (void *)data;
+    struct ipv6hdr *ip = (void *)(eth+1);
+    struct icmp6hdr_ra_ *ra = (void *)(ip+1);
+    struct icmpv6_option_prefix *opt = (void *)(ra+1);
+    if ((const char *)(opt+1)>end) return -1;
     swap_mac(eth);
-
-    data_end = (const char *)(long)ctx->xdp_ctx->data_end;
-    if (!ctx->ip6)
-        return -1;
-
-    struct ipv6hdr *ip6 = ctx->ip6;
-    if ((const char *)(ip6 + 1) > data_end)
-        return -1;
-    
-    __builtin_memcpy(ip6->daddr.in6_u.u6_addr8, ip6->saddr.in6_u.u6_addr8, sizeof(ip6->saddr.in6_u.u6_addr8));
-    ip6->daddr.in6_u.u6_addr32[1] = prefix->in6_u.u6_addr32[1]; //0x0905a029;
-    ip6->daddr.in6_u.u6_addr32[0] = prefix->in6_u.u6_addr32[0]; //0x00d0032a;
-
-    ip6->saddr.in6_u.u6_addr32[3] = 0x01000000;
-    ip6->saddr.in6_u.u6_addr32[2] = 0;
-    ip6->saddr.in6_u.u6_addr32[1] = 0;
-    ip6->saddr.in6_u.u6_addr32[0] = 0x000080fe;
-    
-    ip6->payload_len = bpf_ntohs(sizeof(struct icmp6hdr_ra_) + sizeof(struct icmpv6_option_prefix));
-
-    struct icmp6hdr_ra_ *icmp6 = (struct icmp6hdr_ra_ *)(ip6 + 1);
-    if ((const char *)(icmp6 + 1) > data_end)
-        return -1;
-
-    icmp6->icmp6_type   = ICMPV6_ROUTER_ADVERTISEMENT;
-    icmp6->icmp6_code   = 0;
-    icmp6->icmp6_cksum  = 0;
-
-    icmp6->icmp6_dataun.u_nd_ra.hop_limit           = 64;
-    icmp6->icmp6_dataun.u_nd_ra.rt_lifetime         = bpf_ntohs(64800);
-    icmp6->icmp6_dataun.u_nd_ra.rt_reachabletime    = 0;
-    icmp6->icmp6_dataun.u_nd_ra.rt_retranstimer     = 0;
-
-    struct icmpv6_option_prefix *option_prefix = (struct icmpv6_option_prefix *)(icmp6 + 1);
-    if ((const char *)(option_prefix + 1) > data_end)
-        return -1;
-    
-    option_prefix->type             = 3;
-    option_prefix->length           = 4;
-    option_prefix->prefix_length    = prefix_length;
-    option_prefix->onlink_flag      = 1;
-    option_prefix->auto_flag        = 1;
-    option_prefix->router_addr_flag = 0;
-    option_prefix->valid_lifetime   = 0xffffffff;
-    option_prefix->pref_lifetime    = 0xffffffff;
-    option_prefix->prefix.in6_u.u6_addr32[0] = prefix->in6_u.u6_addr32[0];
-    option_prefix->prefix.in6_u.u6_addr32[1] = prefix->in6_u.u6_addr32[1];
-    
-    icmp6->icmp6_cksum = icmp6_csum(ip6, icmp6->icmp6_code, icmp6->icmp6_type, icmp6, sizeof(struct icmp6hdr_ra_) + sizeof(struct icmpv6_option_prefix));
+    // RFC 4861 sections 4.2 and 6.2.6: unicast solicitor, or all-nodes
+    // multicast for the unspecified source. The advertised prefix is not a
+    // destination address and must never replace the solicitor's prefix.
+    ip->daddr = ip->saddr;
+    if (!(ip->saddr.s6_addr32[0] | ip->saddr.s6_addr32[1] |
+          ip->saddr.s6_addr32[2] | ip->saddr.s6_addr32[3])) {
+        ip->daddr = (struct in6_addr){ .s6_addr={0xff,2,0,0,0,0,0,0,0,0,0,0,0,0,0,1} };
+    }
+    ip->saddr = (struct in6_addr){ .s6_addr={0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,1} };
+    ip->version=6;
+    ip->priority=0;
+    __builtin_memset(ip->flow_lbl,0,sizeof(ip->flow_lbl));
+    ip->nexthdr=IPPROTO_ICMPV6;
+    ip->hop_limit=255;
+    ip->payload_len=bpf_htons(sizeof(*ra)+sizeof(*opt));
+    __builtin_memset(ra,0,sizeof(*ra));
+    ra->icmp6_type=ICMPV6_ROUTER_ADVERTISEMENT;
+    ra->icmp6_dataun.u_nd_ra.hop_limit=64;
+    // RFC 8319 section 4 amends RFC 4861's Router Lifetime upper bound.
+    ra->icmp6_dataun.u_nd_ra.rt_lifetime=bpf_htons(64800);
+    __builtin_memset(opt,0,sizeof(*opt));
+    opt->type=3;opt->length=4;opt->prefix_length=prefix_length;
+    opt->onlink_flag=1;opt->auto_flag=1;
+    opt->valid_lifetime=bpf_htonl(0xffffffff);
+    opt->pref_lifetime=bpf_htonl(0xffffffff);
+    opt->prefix=*prefix;
+    ra->icmp6_cksum=icmp6_csum(ip,0,ICMPV6_ROUTER_ADVERTISEMENT,ra,sizeof(*ra)+sizeof(*opt));
+    ctx->data=data;ctx->data_end=end;ctx->eth=eth;ctx->ip6=ip;ctx->ip4=0;ctx->udp=0;ctx->tcp=0;ctx->gtp=0;
+    ctx->ip_end=(const char *)(opt+1);
     return 0;
 }

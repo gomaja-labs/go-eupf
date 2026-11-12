@@ -74,9 +74,12 @@ func ListQerMapContents(m *ebpf.Map) ([]QerMapElement, error) {
 	}
 
 	contextMap := make([]QerMapElement, 0)
-	mapInfo, _ := m.Info()
+	mapInfo, err := m.Info()
+	if err != nil {
+		return nil, fmt.Errorf("inspect QER map: %w", err)
+	}
 
-	var value QerInfo
+	var value IpEntrypointQerInfo
 	for i := uint32(0); i < mapInfo.MaxEntries; i++ {
 		err := m.Lookup(i, unsafe.Pointer(&value))
 		if err != nil {
@@ -85,11 +88,11 @@ func ListQerMapContents(m *ebpf.Map) ([]QerMapElement, error) {
 		contextMap = append(contextMap,
 			QerMapElement{
 				Id:           i,
-				GateStatusUL: value.GateStatusUL,
-				GateStatusDL: value.GateStatusDL,
+				GateStatusUL: value.UlGateStatus,
+				GateStatusDL: value.DlGateStatus,
 				Qfi:          value.Qfi,
-				MaxBitrateUL: value.MaxBitrateUL,
-				MaxBitrateDL: value.MaxBitrateDL,
+				MaxBitrateUL: value.UlMaximumBitrate,
+				MaxBitrateDL: value.DlMaximumBitrate,
 			},
 		)
 	}

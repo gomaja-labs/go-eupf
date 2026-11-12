@@ -38,11 +38,17 @@ static __always_inline int parse_ip4(struct packet_context *ctx) {
     if ((const char *)(ip4 + 1) > ctx->data_end)
         return -1;
 
-    /* do not support fragmented packets as L4 headers may be missing */
-    // if (ip4->frag_off & IP_FRAGMENTED)
-    //	return -1;
-
-    ctx->data += ip4->ihl * 4; /* header + options */
+    // RFC 791 section 3.1: IHL, total length and fragment offsets delimit L4.
+    // Fragments stay intact for kernel reassembly; never classify fragment data.
+    __u32 ihl = ip4->ihl * 4;
+    __u32 total = bpf_ntohs(ip4->tot_len);
+    if (ip4->version != 4 || ihl < sizeof(*ip4) || total < ihl ||
+        (const char *)ip4 + ihl > ctx->data_end ||
+        (const char *)ip4 + total > ctx->data_end ||
+        (ip4->frag_off & bpf_htons(0x3fff)))
+        return -1;
+    ctx->ip_end = (const char *)ip4 + total;
+    ctx->data += ihl;
     ctx->ip4 = ip4;
     return ip4->protocol;
 }
@@ -52,7 +58,11 @@ static __always_inline int parse_ip6(struct packet_context *ctx) {
     if ((const char *)(ip6 + 1) > ctx->data_end)
         return -1;
     
-    /* TODO: Add extention headers support */
+    // RFC 8200 sections 3-4 (updated by RFC 9673): only a direct L4 header
+    // is accelerated. Extension headers go to the kernel, without L4 guessing.
+    if (ip6->version != 6 || (const char *)(ip6 + 1) + bpf_ntohs(ip6->payload_len) > ctx->data_end)
+        return -1;
+    ctx->ip_end = (const char *)(ip6 + 1) + bpf_ntohs(ip6->payload_len);
 
     ctx->data += sizeof(*ip6);
     ctx->ip6 = ip6;
@@ -64,6 +74,11 @@ static __always_inline int parse_udp(struct packet_context *ctx) {
     if ((const char *)(udp + 1) > ctx->data_end)
         return -1;
 
+    // RFC 768: UDP Length includes its header and excludes Ethernet padding.
+    __u32 len = bpf_ntohs(udp->len);
+    if (len < sizeof(*udp) || (const char *)udp + len > ctx->data_end ||
+        (ctx->ip_end && (const char *)udp + len > ctx->ip_end))
+        return -1;
     ctx->data += sizeof(*udp);
     ctx->udp = udp;
     return bpf_ntohs(udp->dest);
@@ -74,9 +89,12 @@ static __always_inline int parse_tcp(struct packet_context *ctx) {
     if ((const char *)(tcp + 1) > ctx->data_end)
         return -1;
 
-    //TODO: parse header lenght correctly (tcp options)
+    __u32 len = tcp->doff * 4;
+    if (len < sizeof(*tcp) || (const char *)tcp + len > ctx->data_end ||
+        (ctx->ip_end && (const char *)tcp + len > ctx->ip_end))
+        return -1;
 
-    ctx->data += sizeof(*tcp);
+    ctx->data += len;
     ctx->tcp = tcp;
     return bpf_ntohs(tcp->dest);
 }
@@ -131,7 +149,8 @@ static __always_inline void update_tos_ipv4(struct iphdr *ip, __u8 tos) {
 static __always_inline void update_tos_ipv6(struct ipv6hdr *ip6, __u8 tos) {
     if(!tos)
         return;
-    ip6->flow_lbl[0] |= tos & 0xF;
+    // RFC 8200 section 3: low Traffic Class nibble is above the Flow Label.
+    ip6->flow_lbl[0] = (ip6->flow_lbl[0] & 0x0f) | ((tos & 0x0f) << 4);
     ip6->priority = tos >> 4;
 }
 
@@ -153,6 +172,8 @@ static __always_inline void context_reset(struct packet_context *ctx, char *data
     ctx->ip6 = 0;
     ctx->udp = 0;
     ctx->gtp = 0;
+    ctx->tcp = 0;
+    ctx->ip_end = 0;
 }
 
 

@@ -5,18 +5,6 @@ cd /src
 case "${1:-}" in
 test)
 	sudo mount -t bpf bpf /sys/fs/bpf
-	# Redirect assertions need a resolved FIB neighbor. Keep their synthetic
-	# destinations on a private link instead of depending on Docker gateway ARP.
-	sudo ip link add ci-egress type veth peer name ci-peer
-	sudo ip link set ci-egress up
-	sudo ip link set ci-peer up
-	sudo ip route add 10.3.0.0/24 dev ci-egress
-	sudo ip route add 1.1.1.1/32 dev ci-egress
-	sudo ip route add 1.0.0.0/32 dev ci-egress
-	sudo ip route add 0.0.0.0/32 dev ci-egress
-	for destination in 10.3.0.10 10.3.0.20 1.1.1.1 1.0.0.0 0.0.0.0; do
-		sudo ip neigh add "$destination" lladdr 02:00:00:00:00:02 nud permanent dev ci-egress
-	done
 	go generate ./cmd/...
 	go build ./...
 	go vet ./...

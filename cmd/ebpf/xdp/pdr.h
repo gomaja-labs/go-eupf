@@ -34,6 +34,7 @@ struct pdr {
 };
 
 struct sdf_rule {
+    __u8 active;
     struct sdf_filter sdf_filter;
     struct pdr pdr;
     __u8 notify;

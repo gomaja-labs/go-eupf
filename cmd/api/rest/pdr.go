@@ -46,7 +46,7 @@ func (h *ApiHandler) getUplinkPdrValue(c *gin.Context) {
 		return
 	}
 
-	var value ebpf.PdrInfo
+	var value ebpf.IpEntrypointPdrInfo
 	if err = h.BpfObjects.PdrMapTeidIp4.Lookup(uint32(id), unsafe.Pointer(&value)); err != nil {
 		log.Warn().Err(err).Msgf("can't get pdr from map")
 		c.JSON(http.StatusNotFound, gin.H{"error": "no pdr found"})
@@ -55,10 +55,10 @@ func (h *ApiHandler) getUplinkPdrValue(c *gin.Context) {
 
 	c.IndentedJSON(http.StatusOK, PdrUplinkElement{
 		Id:                 uint32(id),
-		OuterHeaderRemoval: value.OuterHeaderRemoval,
-		FarId:              value.FarId,
-		QerId:              value.QerId,
-		Trace:              value.TraceFlag,
+		OuterHeaderRemoval: value.DefaultPdr.OuterHeaderRemoval,
+		FarId:              value.DefaultPdr.FarId,
+		QerId:              value.DefaultPdr.QerId,
+		Trace:              value.TraceFlag != 0,
 	})
 }
 
@@ -126,7 +126,10 @@ func (h *ApiHandler) getDownlinkPdrValue(c *gin.Context) {
 		return
 	}
 
-	var value ebpf.PdrInfo
+	var value ebpf.IpEntrypointPdrInfo
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
 	switch len(ip) {
 	case 4:
 		if err := h.BpfObjects.PdrMapDownlinkIp4.Lookup(ip, unsafe.Pointer(&value)); err != nil {
@@ -148,10 +151,10 @@ func (h *ApiHandler) getDownlinkPdrValue(c *gin.Context) {
 
 	c.IndentedJSON(http.StatusOK, PdrDownlinkElement{
 		Id:                 ip.String(),
-		OuterHeaderRemoval: value.OuterHeaderRemoval,
-		FarId:              value.FarId,
-		QerId:              value.QerId,
-		Trace:              value.TraceFlag,
+		OuterHeaderRemoval: value.DefaultPdr.OuterHeaderRemoval,
+		FarId:              value.DefaultPdr.FarId,
+		QerId:              value.DefaultPdr.QerId,
+		Trace:              value.TraceFlag != 0,
 	})
 }
 

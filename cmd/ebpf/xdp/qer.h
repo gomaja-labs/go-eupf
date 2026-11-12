@@ -6,6 +6,7 @@
 #include <linux/bpf.h>
 
 #include "xdp/sizing.h"
+#include "xdp/rate_math.h"
 
 enum gate_status {
     GATE_STATUS_OPEN = 0,
@@ -51,27 +52,37 @@ static __always_inline enum xdp_action limit_rate_simple(struct xdp_md *ctx, __u
     return XDP_DROP;
 }
 
-static __always_inline enum xdp_action limit_rate_sliding_window(const __u64 packet_size, volatile __u64 *windows_start, const __u64 rate) {
-    static const __u64 NSEC_PER_SEC = 1000000000ULL;
+static __noinline enum xdp_action limit_rate_sliding_window(const __u64 packet_size, volatile __u64 *windows_start, const __u64 rate) {
     static const __u64 window_size = 5000000ULL;
 
     /* Currently 0 rate means that traffic rate is not limited */
     if (rate == 0)
         return XDP_PASS;
 
-    __u64 tx_time = packet_size * 8 * (NSEC_PER_SEC / rate);
+    // TS 29.244 V20.1.0 clauses 5.4.4 and 8.2.8: rates are bits/s.
+    // Validated IP packets are bounded by 65575 bytes, so this product fits.
+    // Round upward to charge at least one ns even above one gigabit/s.
+    if (packet_size > 65575) return XDP_DROP;
+    __u64 tx_time = packet_tx_time_ns(packet_size, rate);
     __u64 now = bpf_ktime_get_ns();
-
-    __u64 start = *(volatile __u64 *)windows_start;
-    if (start + tx_time > now)
-        return XDP_DROP;
-
-    if (start + window_size < now) {
-        *(volatile __u64 *)windows_start = now - window_size + tx_time;
-        return XDP_PASS;
+    __u64 floor = now > window_size ? now - window_size : 0;
+    // Atomically reserve a shared 5ms burst budget. Under sustained contention
+    // fail closed rather than allowing multiple CPUs to spend the same credit.
+    for (int i=0; i<4; i++) {
+        __u64 start = *windows_start;
+        __u64 base = start < floor ? floor : start;
+        __u64 finish;
+        if (tx_time > window_size) {
+            // Packet granularity: a packet larger than 5ms of credit is
+            // admitted once, then pays its complete transmission interval.
+            if (start > now || now > ~0ULL - tx_time) return XDP_DROP;
+            finish = now + tx_time;
+        } else {
+            if (base > now || tx_time > now - base) return XDP_DROP;
+            finish = base + tx_time;
+        }
+        if (__sync_val_compare_and_swap(windows_start, start, finish) == start)
+            return XDP_PASS;
     }
-
-    *(volatile __u64 *)windows_start = start + tx_time;
-    //__sync_fetch_and_add(&window->start, tx_time);
-    return XDP_PASS;
+    return XDP_DROP;
 }

@@ -24,10 +24,10 @@ import (
 //		- enable routing decision cache
 //
 
-//go:generate go tool bpf2go -cflags "$BPF_CFLAGS" -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
-//go:generate go tool bpf2go -target bpf ZeroEntrypoint 	xdp/zero_entrypoint.c -- -I. -O2 -Wall
-//go:generate go tool bpf2go -target bpf N3Entrypoint 	xdp/n3_entrypoint.c -- -I. -O2 -Wall
-//go:generate go tool bpf2go -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
+//go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
+//go:generate go tool bpf2go -tags linux -target bpf ZeroEntrypoint 	xdp/zero_entrypoint.c -- -I. -O2 -Wall
+//go:generate go tool bpf2go -tags linux -target bpf N3Entrypoint 	xdp/n3_entrypoint.c -- -I. -O2 -Wall
+//go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
 	IpEntrypointObjects
@@ -74,6 +74,9 @@ func (bpfObjects *BpfObjects) SetUrrMapSize(urrMapSize uint32) {
 }
 
 func (bpfObjects *BpfObjects) Load() error {
+	if bpfObjects.UpfIpEntrypointFunc != nil && bpfObjects.UpfIpEntrypointFunc.FD() >= 0 {
+		return errors.New("BPF objects already loaded")
+	}
 	pinPath := "/sys/fs/bpf/upf_pipeline"
 	if err := os.MkdirAll(pinPath, os.ModePerm); err != nil {
 		log.Info().Msgf("failed to create bpf fs subpath: %+v", err)
@@ -94,46 +97,21 @@ func (bpfObjects *BpfObjects) Load() error {
 		"urr_map":              bpfObjects.urrMapSize,
 	}
 
-	replacements := make(map[string]*ebpf.Map)
-	for mapName, size := range desiredMapSizes {
-		specMap, ok := spec.Maps[mapName]
-		if !ok {
-			log.Error().Msgf("Map %s not found in spec", mapName)
-			continue
+	for name, size := range desiredMapSizes {
+		if size == 0 {
+			return errors.New("map capacity must be positive")
 		}
-
-		specMap.MaxEntries = size
-
-		m, err := ebpf.NewMap(specMap)
-		if err != nil {
-			log.Error().Msgf("Failed to create map %s: %s", mapName, err)
-			return err
-		}
-
-		replacements[mapName] = m
-
-		log.Debug().Msgf("Loaded map %s", mapName)
+		spec.Maps[name].MaxEntries = size
 	}
-
-	collectionOptions := ebpf.CollectionOptions{
-		MapReplacements: replacements,
-		Maps: ebpf.MapOptions{
-			// Pin the map to the BPF filesystem and configure the
-			// library to automatically re-write it in the BPF
-			// program, so it can be re-used if it already exists or
-			// create it if not
-			PinPath: pinPath,
-		},
-	}
-
-	if err := spec.LoadAndAssign(&bpfObjects.IpEntrypointObjects, &collectionOptions); err != nil {
-		for _, m := range replacements {
-			_ = m.Close()
-		}
-
-		log.Warn().Msgf("Failed to load objects: %s", err)
+	if err := spec.LoadAndAssign(&bpfObjects.IpEntrypointObjects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
 		return err
 	}
+	loaded := false
+	defer func() {
+		if !loaded {
+			_ = bpfObjects.Close()
+		}
+	}()
 
 	if info, err := bpfObjects.FarMap.Info(); err == nil {
 		bpfObjects.farIdTracker = NewIdTracker(info.MaxEntries)
@@ -154,6 +132,7 @@ func (bpfObjects *BpfObjects) Load() error {
 		return err
 	}
 
+	loaded = true
 	return nil
 }
 
@@ -187,85 +166,16 @@ func CloseAllObjects(closers ...io.Closer) error {
 	return nil
 }
 
-func ResizeEbpfMap(eMap **ebpf.Map, eProg *ebpf.Program, newSize uint32) error {
-	mapInfo, err := (*eMap).Info()
-	if err != nil {
-		log.Info().Msgf("Failed get ebpf map info: %s", err)
-		return err
+// ResizeAllMaps changes capacities before Load. Live replacement would leave
+// attached programs reading old maps, so it is rejected without changing state.
+func (bpfObjects *BpfObjects) ResizeAllMaps(qerMapSize, farMapSize, pdrMapSize, urrMapSize uint32) error {
+	if bpfObjects.UpfIpEntrypointFunc != nil {
+		return errors.New("map capacities can only change before Load")
 	}
-	mapInfo.MaxEntries = newSize
-	// Create a new MapSpec using the information from MapInfo
-	mapSpec := &ebpf.MapSpec{
-		Name:       mapInfo.Name,
-		Type:       mapInfo.Type,
-		KeySize:    mapInfo.KeySize,
-		ValueSize:  mapInfo.ValueSize,
-		MaxEntries: mapInfo.MaxEntries,
-		Flags:      mapInfo.Flags,
+	if qerMapSize == 0 || farMapSize == 0 || pdrMapSize == 0 || urrMapSize == 0 {
+		return errors.New("map capacity must be positive")
 	}
-
-	// Unpin the old map
-	err = (*eMap).Unpin()
-	if err != nil {
-		log.Info().Msgf("Failed to unpin old ebpf map: %s, %+v", err, *eMap)
-		return err
-	}
-
-	// Close the old map
-	err = (*eMap).Close()
-	if err != nil {
-		log.Info().Msgf("Failed to close old ebpf map: %s, %+v", err, *eMap)
-		return err
-	}
-
-	// Old map will be garbage collected sometime after this point
-
-	*eMap, err = ebpf.NewMapWithOptions(mapSpec, ebpf.MapOptions{})
-	if err != nil {
-		log.Info().Msgf("Failed to create resized ebpf map: %s", err)
-		return err
-	}
-	err = eProg.BindMap(*eMap)
-	if err != nil {
-		log.Info().Msgf("Failed to bind resized ebpf map: %s", err)
-		return err
-	}
-	return nil
-}
-
-func (bpfObjects *BpfObjects) ResizeAllMaps(qerMapSize uint32, farMapSize uint32, pdrMapSize uint32, urrMapSize uint32) error {
-	//QER
-	if err := ResizeEbpfMap(&bpfObjects.QerMap, bpfObjects.UpfIpEntrypointFunc, qerMapSize); err != nil {
-		log.Info().Msgf("Failed to resize QER map: %s", err)
-		return err
-	}
-
-	//FAR
-	if err := ResizeEbpfMap(&bpfObjects.FarMap, bpfObjects.UpfIpEntrypointFunc, farMapSize); err != nil {
-		log.Info().Msgf("Failed to resize FAR map: %s", err)
-		return err
-	}
-
-	// PDR
-	if err := ResizeEbpfMap(&bpfObjects.PdrMapDownlinkIp4, bpfObjects.UpfIpEntrypointFunc, pdrMapSize); err != nil {
-		log.Info().Msgf("Failed to resize PDR map: %s", err)
-		return err
-	}
-	if err := ResizeEbpfMap(&bpfObjects.PdrMapDownlinkIp6, bpfObjects.UpfIpEntrypointFunc, pdrMapSize); err != nil {
-		log.Info().Msgf("Failed to resize PDR map: %s", err)
-		return err
-	}
-	if err := ResizeEbpfMap(&bpfObjects.PdrMapTeidIp4, bpfObjects.UpfIpEntrypointFunc, pdrMapSize); err != nil {
-		log.Info().Msgf("Failed to resize PDR map: %s", err)
-		return err
-	}
-
-	// URR
-	if err := ResizeEbpfMap(&bpfObjects.UrrMap, bpfObjects.UpfIpEntrypointFunc, urrMapSize); err != nil {
-		log.Info().Msgf("Failed to resize URR map: %s", err)
-		return err
-	}
-
+	bpfObjects.qerMapSize, bpfObjects.farMapSize, bpfObjects.pdrMapSize, bpfObjects.urrMapSize = qerMapSize, farMapSize, pdrMapSize, urrMapSize
 	return nil
 }
 
@@ -333,7 +243,7 @@ func (t *IdTracker) GetNext() (next uint32, err error) {
 }
 
 func (t *IdTracker) Release(id uint32) {
-	if id >= t.maxSize {
+	if id == 0 || id >= t.maxSize {
 		return
 	}
 

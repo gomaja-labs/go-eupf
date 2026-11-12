@@ -45,6 +45,7 @@ static __always_inline __u8 get_sdf_protocol(__u8 ip_protocol) {
     switch(ip_protocol)
     {
         case IPPROTO_ICMP: return 0;
+        case IPPROTO_ICMPV6: return 4;
         case IPPROTO_TCP: return 2;
         case IPPROTO_UDP: return 3;
         default: return 1;
@@ -68,7 +69,7 @@ static /*__always_inline*/ __u8 match_sdf_filter_ipv4(const struct packet_contex
     } else if (ctx->tcp) {
         packet_src_port = bpf_ntohs(ctx->tcp->source); //TODO: convert port in golang part
         packet_dst_port = bpf_ntohs(ctx->tcp->dest); //TODO: convert port in golang part
-    } 
+    }
 
     __u32 sdf_src_ip = bpf_htonl(sdf->src_addr.ip);
     __u32 sdf_dst_ip = bpf_htonl(sdf->dst_addr.ip);
@@ -83,16 +84,16 @@ static /*__always_inline*/ __u8 match_sdf_filter_ipv4(const struct packet_contex
     upf_printk("SDF: packet protocol: %u", packet_protocol);
     upf_printk("SDF: packet source ip: %pI4, destination ip: %pI4",  &ip4->saddr,  &ip4->daddr);
     upf_printk("SDF: packet source port: %u, destination port: %u", packet_src_port, packet_dst_port);
-    
-    if ((sdf->protocol != 1 && sdf->protocol != packet_protocol) 
-        || ((ip4->saddr & sdf_src_mask) != sdf_src_ip)  
-        || ((ip4->daddr & sdf_dst_mask) != sdf_dst_ip) 
-        || (packet_src_port < sdf->src_port.lower_bound || packet_src_port > sdf->src_port.upper_bound) 
-        || (packet_dst_port < sdf->dst_port.lower_bound || packet_dst_port > sdf->dst_port.upper_bound)) 
+
+    if ((sdf->protocol != 1 && sdf->protocol != packet_protocol)
+        || ((ip4->saddr & sdf_src_mask) != (sdf_src_ip & sdf_src_mask))
+        || ((ip4->daddr & sdf_dst_mask) != (sdf_dst_ip & sdf_dst_mask))
+        || (packet_src_port < sdf->src_port.lower_bound || packet_src_port > sdf->src_port.upper_bound)
+        || (packet_dst_port < sdf->dst_port.lower_bound || packet_dst_port > sdf->dst_port.upper_bound))
     {
         return 0;
     }
-    
+
     upf_printk("Packet with source ip: %pI4, destination ip: %pI4 matches SDF filter",
                &ip4->saddr, &ip4->daddr);
 
@@ -105,8 +106,8 @@ static /*__always_inline*/ __u8 match_sdf_filter_ipv6(const struct packet_contex
 
     if(sdf->src_addr.type == 1 || sdf->dst_addr.type == 1)
         return 0;
-    
-    const struct ipv6hdr *ipv6 = ctx->ip6;  
+
+    const struct ipv6hdr *ipv6 = ctx->ip6;
     __u8 packet_protocol = get_sdf_protocol(ipv6->nexthdr);
     __u128 packet_src_ip_128 = *((__u128*)ipv6->saddr.s6_addr);
     __u128 packet_dst_ip_128 = *((__u128*)ipv6->daddr.s6_addr);
@@ -119,7 +120,7 @@ static /*__always_inline*/ __u8 match_sdf_filter_ipv6(const struct packet_contex
         packet_src_port = bpf_ntohs(ctx->tcp->source); //TODO: convert port in golang part
         packet_dst_port = bpf_ntohs(ctx->tcp->dest); //TODO: convert port in golang part
     }
-    
+
     __u128 sdf_src_ip = bpf_htonlll(sdf->src_addr.ip);
     __u128 sdf_dst_ip = bpf_htonlll(sdf->dst_addr.ip);
     upf_printk("SDF: filter protocol: %u", sdf->protocol);
@@ -133,8 +134,8 @@ static /*__always_inline*/ __u8 match_sdf_filter_ipv6(const struct packet_contex
     upf_printk("SDF: packet source port: %u, destination port: %u", packet_src_port, packet_dst_port);
 
     if ((sdf->protocol != 1 && sdf->protocol != packet_protocol) ||
-        (packet_src_ip_128 & sdf->src_addr.mask) != sdf_src_ip || 
-        (packet_dst_ip_128 & sdf->dst_addr.mask) != sdf_dst_ip ||
+        (packet_src_ip_128 & bpf_htonlll(sdf->src_addr.mask)) != (sdf_src_ip & bpf_htonlll(sdf->src_addr.mask)) ||
+        (packet_dst_ip_128 & bpf_htonlll(sdf->dst_addr.mask)) != (sdf_dst_ip & bpf_htonlll(sdf->dst_addr.mask)) ||
          packet_src_port < sdf->src_port.lower_bound || packet_src_port > sdf->src_port.upper_bound ||
          packet_dst_port < sdf->dst_port.lower_bound || packet_dst_port > sdf->dst_port.upper_bound) {
         return 0;
@@ -192,14 +193,14 @@ struct {
 } sdf_notify_storage SEC(".maps");
 
 
-static __always_inline void send_sdf_notify_ip4(struct packet_context *packet_ctx, __u32 ref) 
+static __always_inline void send_sdf_notify_ip4(struct packet_context *packet_ctx, __u32 ref)
 {
     if(!packet_ctx || !packet_ctx->xdp_ctx || !packet_ctx->ip4)
         return;
 
     struct xdp_md *ctx = packet_ctx->xdp_ctx;
     __u64 flags = BPF_F_CURRENT_CPU;
-    
+
     const __u32 key = 0;
     struct sdf_notify_ip4 *meta_ip4 = bpf_map_lookup_elem(&sdf_notify_storage, &key);
     if(!meta_ip4)
@@ -220,38 +221,29 @@ static __always_inline void send_sdf_notify_ip4(struct packet_context *packet_ct
         meta_ip4->tuple5.src_port = 0;
         meta_ip4->tuple5.dst_port = 0;
     }
-    
+
     int ret = bpf_perf_event_output(ctx, &sdf_notify_map, flags, meta_ip4, sizeof(struct sdf_notify_ip4));
     if (ret)
         bpf_printk("perf_event_output failed: %d\n", ret);
 }
 
-static __always_inline void send_sdf_notify_ip6(struct packet_context *packet_ctx, __u32 ref) 
+static __always_inline void send_sdf_notify_ip6(struct packet_context *packet_ctx, __u32 ref)
 {
     if(!packet_ctx || !packet_ctx->xdp_ctx || !packet_ctx->ip6)
         return;
-    
-    // struct xdp_md *ctx = packet_ctx->xdp_ctx;
-    // __u64 flags = BPF_F_CURRENT_CPU;
-    
-    // struct sdf_notify_ip6 meta;
-    // meta.cookie = 0x2ea2;
-    // meta.ref = 0;
-    // meta.tuple5.src_ip = *(__u128*)&packet_ctx->ip6->saddr.s6_addr;
-    // meta.tuple5.dst_ip = *(__u128*)&packet_ctx->ip6->daddr.s6_addr;
-    // meta.tuple5.protocol = packet_ctx->ip6->nexthdr;
-    // if(packet_ctx->tcp) {
-    //     meta.tuple5.src_port = packet_ctx->tcp->source;
-    //     meta.tuple5.dst_port = packet_ctx->tcp->dest;
-    // } else if(packet_ctx->udp) {
-    //     meta.tuple5.src_port = packet_ctx->udp->source;
-    //     meta.tuple5.dst_port = packet_ctx->udp->dest;
-    // } else {
-    //     meta.tuple5.src_port = 0;
-    //     meta.tuple5.dst_port = 0;
-    // }
-    
-    // int ret = bpf_perf_event_output(ctx, &sdf_notify_map, flags, &meta, sizeof(meta));
-    // if (ret)
-    //     bpf_printk("perf_event_output failed: %d\n", ret);
+
+    struct sdf_notify_ip6 meta = {};
+    meta.cookie = 0x2ea2;
+    meta.ref = ref;
+    __builtin_memcpy(&meta.tuple5.src_ip, &packet_ctx->ip6->saddr, 16);
+    __builtin_memcpy(&meta.tuple5.dst_ip, &packet_ctx->ip6->daddr, 16);
+    meta.tuple5.protocol = packet_ctx->ip6->nexthdr;
+    if (packet_ctx->tcp) {
+        meta.tuple5.src_port = packet_ctx->tcp->source;
+        meta.tuple5.dst_port = packet_ctx->tcp->dest;
+    } else if (packet_ctx->udp) {
+        meta.tuple5.src_port = packet_ctx->udp->source;
+        meta.tuple5.dst_port = packet_ctx->udp->dest;
+    }
+    bpf_perf_event_output(packet_ctx->xdp_ctx, &sdf_notify_map, BPF_F_CURRENT_CPU, &meta, sizeof(meta));
 }

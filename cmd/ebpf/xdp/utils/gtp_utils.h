@@ -14,50 +14,146 @@
 #include "xdp/utils/packet_context.h"
 #include "xdp/utils/trace.h"
 
-static __always_inline __u32 parse_gtp(struct packet_context *ctx) {
-    struct gtpuhdr *gtp = (struct gtpuhdr *)ctx->data;
-    if ((const char *)(gtp + 1) > ctx->data_end)
-        return -1;
+// One global budget bounds reflection across spoofed peer addresses. Diagnostic
+// control replies share at most 100 responses/s; Echo Responses are not policed.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 1);
+} gtp_error_budget SEC(".maps");
 
-    ctx->data += sizeof(*gtp);
-    if (gtp->e || gtp->s || gtp->pn) {
-        ctx->data += sizeof(struct gtp_hdr_ext);
-        if(gtp->e)
-            ctx->data += 4; // FIXME: add extention headers parsing
-    }
-    
+static __always_inline int allow_gtp_error(void) {
+    __u32 key=0;
+    __u64 *next=bpf_map_lookup_elem(&gtp_error_budget,&key);
+    if (!next) return 0;
+    __u64 now=bpf_ktime_get_ns();
+    __u64 before=*next;
+    if (before>now) return 0;
+    return __sync_val_compare_and_swap(next,before,now+10000000ULL)==before;
+}
+
+// TS 29.281 V19.2.0 clauses 5.1 and 5.2.1: validate the complete
+// UDP/GTP envelope and walk length-delimited extensions before using a TEID.
+static __noinline int parse_gtp(struct packet_context *ctx) {
+    struct gtpuhdr *gtp = (struct gtpuhdr *)ctx->data;
+    if ((const char *)(gtp + 1) > ctx->data_end || !ctx->udp || !ctx->ip4)
+        return -1;
+    __u32 length = bpf_ntohs(gtp->message_length);
+    __u32 udp_length = bpf_ntohs(ctx->udp->len);
+    if (gtp->version != 1 || !gtp->pt || udp_length != length + 16 ||
+        (const char *)(gtp + 1) + length > ctx->data_end)
+        return -1;
     ctx->gtp = gtp;
+    const char *end = (const char *)(gtp + 1) + length;
+    char *cursor = (char *)(gtp + 1);
+    __u8 next = 0;
+    if (gtp->e || gtp->s || gtp->pn) {
+        struct gtp_hdr_ext *opt = (void *)cursor;
+        if ((const char *)(opt + 1) > ctx->data_end || (const char *)(opt + 1) > end)
+            return -1;
+        if (gtp->e) next = opt->next_ext;
+        cursor += sizeof(*opt);
+    }
+    // Bound work on hostile chains; longer chains use the control/error path.
+    for (int i = 0; i < 16 && next; i++) {
+        if (cursor + 4 > ctx->data_end || cursor + 4 > end) return -1;
+        __u64 span = (__u8)*cursor * 4;
+        if (!span) return -1;
+        char *after = cursor + span;
+        asm volatile("" : "+r"(after));
+        if (after > ctx->data_end || after > end) return -1;
+        if (next == GTPU_EXT_TYPE_PDU_SESSION_CONTAINER) {
+            // TS 38.415 V19.1.0 figure 5.5.2.2-1: QFI is the low six bits.
+            ctx->qfi = cursor[2] & 0x3f;
+        } else if (next & 0x80) {
+            // TS 29.281 V19.2.0 figure 5.2.1-2: bits 10 require
+            // comprehension only at an endpoint; bits 11 at every node.
+            ctx->unknown_extensions |= (next & 0x40) ? 2 : 1;
+        } else if (next & 0x40) {
+            ctx->unknown_extensions |= 4;
+        }
+        next = (__u8)*(after - 1);
+        cursor = after;
+    }
+    if (next) return -1;
+    ctx->gtp = gtp;
+    ctx->data = cursor;
+    ctx->gtp_header_length = cursor - (char *)gtp;
+    ctx->tpdu_length = end - cursor;
+    if (gtp->message_type == GTPU_G_PDU) {
+        // Only IP PDU sessions are supported. Validate the entire T-PDU before
+        // policy or accounting; optional GTP words are never subscriber bytes.
+        struct packet_context inner = { .data=cursor, .data_end=ctx->data_end };
+        if (cursor + 1 > ctx->data_end || cursor + 1 > end) return -1;
+        __u8 version = (__u8)*cursor >> 4;
+        if (version == 4) {
+            struct iphdr *ip=(void *)cursor;
+            if ((const char *)(ip+1)>ctx->data_end || (const char *)(ip+1)>end) return -1;
+            // Fragments use the same intact kernel slow path as outer IP.
+            if (ip->frag_off & bpf_htons(0x3fff)) return -3;
+            if (parse_ip4(&inner) < 0 || inner.ip_end != end) return -1;
+            if (parse_l4(ip->protocol,&inner)<0) return -1;
+        } else if (version == 6) {
+            if (parse_ip6(&inner) < 0 || inner.ip_end != end) return -1;
+            if (inner.ip6->nexthdr==IPPROTO_HOPOPTS || inner.ip6->nexthdr==IPPROTO_ROUTING ||
+                inner.ip6->nexthdr==IPPROTO_FRAGMENT || inner.ip6->nexthdr==IPPROTO_DSTOPTS ||
+                inner.ip6->nexthdr==IPPROTO_AH || inner.ip6->nexthdr==IPPROTO_ESP) return -3;
+            if (parse_l4(inner.ip6->nexthdr,&inner)<0) return -1;
+        } else return -1;
+    }
     return gtp->message_type;
 }
 
-static __always_inline __u32 handle_echo_request(struct packet_context *ctx) {
-    struct ethhdr *eth = ctx->eth;
-    struct iphdr *iph = ctx->ip4;
-    struct udphdr *udp = ctx->udp;
-    struct gtpuhdr *gtp = ctx->gtp;
-
-    gtp->message_type = GTPU_ECHO_RESPONSE;
-
-    /* TODO: add support GTP over IPv6 */
-    swap_ip(iph);
-    swap_port(udp);
-    swap_mac(eth);
-    
-    //FIXME: Expect here that packet len will be at least 60 bytes and there will be extra room for Recovery field
-    const char *data_end = (void *)(long)ctx->xdp_ctx->data_end;
-    __u32 recovery_length = insert_recovery(gtp, data_end);
-    if(recovery_length)
-    {
-        gtp->message_length = bpf_htons(bpf_ntohs(gtp->message_length) + recovery_length);
-        udp->len = bpf_htons( bpf_ntohs(udp->len) + recovery_length);
-        iph->tot_len = bpf_htons( bpf_ntohs(iph->tot_len) + recovery_length);
-        iph->check = 0;
-        iph->check = ipv4_csum(iph, sizeof(*iph));
-        upf_printk("upf: send gtp echo response with recovery [ %pI4 -> %pI4 ]", &iph->saddr, &iph->daddr);
-    }
-    else {
-        upf_printk("upf: send gtp echo response [ %pI4 -> %pI4 ]", &iph->saddr, &iph->daddr);
-    }
+// TS 29.281 V19.2.0 clauses 7.2.2, 7.2.3, 7.3.1 and 8.2-8.5:
+// construct mandatory control IEs independently of request data and padding.
+static __noinline enum xdp_action reply_gtp_control(struct packet_context *ctx, __u8 type) {
+    if (!ctx->ip4 || !ctx->udp || !ctx->gtp) return XDP_ABORTED;
+    __u32 ihl=ctx->ip4->ihl*4;
+    __u32 original_teid=ctx->gtp->teid;
+    __u32 original_destination=ctx->ip4->daddr;
+    __u16 sequence=0;
+    if (type==GTPU_ECHO_RESPONSE) {
+        struct gtp_hdr_ext *request_opt=(void *)(ctx->gtp+1);
+        if (!ctx->gtp->s || (const char *)(request_opt+1)>ctx->data_end) return XDP_DROP;
+        sequence=request_opt->sqn;
+    } else if (!allow_gtp_error()) return XDP_DROP;
+    __u32 size=14;
+    if (type==GTPU_ERROR_INDICATION) size=24;
+    else if (type==GTPU_SUPPORTED_EXTENSION_HEADERS_NOTIFICATION) size=16;
+    __s32 target=sizeof(struct ethhdr)+ihl+sizeof(struct udphdr)+size;
+    __s32 current=(void *)(long)ctx->xdp_ctx->data_end-(void *)(long)ctx->xdp_ctx->data;
+    asm volatile("" : "+r"(current));
+    if (bpf_xdp_adjust_tail(ctx->xdp_ctx,target-current)) return XDP_ABORTED;
+    char *data=(void *)(long)ctx->xdp_ctx->data;
+    const char *end=(void *)(long)ctx->xdp_ctx->data_end;
+    struct ethhdr *eth=(void *)data;
+    struct iphdr *ip=(void *)(eth+1);
+    if ((const char *)(ip+1)>end || ihl<20 || ihl>60) return XDP_ABORTED;
+    struct udphdr *udp=(void *)ip+ihl;
+    if ((const char *)(udp+1)>end) return XDP_ABORTED;
+    struct gtpuhdr *gtp=(void *)(udp+1);
+    if ((const char *)gtp+14>end) return XDP_ABORTED;
+    swap_mac(eth);swap_ip(ip);swap_port(udp);
+    ip->ttl=64;ip->tot_len=bpf_htons(ihl+sizeof(*udp)+size);
+    ip->check=0;ip->check=ipv4_header_checksum(ip,end);
+    udp->len=bpf_htons(sizeof(*udp)+size);
+    *(__u8 *)gtp=0x32;
+    gtp->message_type=type;gtp->message_length=bpf_htons(size-8);gtp->teid=0;
+    struct gtp_hdr_ext *opt=(void *)(gtp+1);
+    opt->sqn=sequence;opt->npdu=0;opt->next_ext=0;
+    __u8 *ie=(void *)(opt+1);
+    if (type==GTPU_ERROR_INDICATION) {
+        if ((const char *)gtp+24>end) return XDP_ABORTED;
+        ie[0]=16;
+        __builtin_memcpy(ie+1,&original_teid,4);
+        ie[5]=133;ie[6]=0;ie[7]=4;
+        __builtin_memcpy(ie+8,&original_destination,4);
+    } else if (type==GTPU_SUPPORTED_EXTENSION_HEADERS_NOTIFICATION) {
+        if ((const char *)gtp+16>end) return XDP_ABORTED;
+        ie[0]=141;ie[1]=0;ie[2]=1;ie[3]=GTPU_EXT_TYPE_PDU_SESSION_CONTAINER;
+    } else { ie[0]=14;ie[1]=0; }
+    context_set_ip4(ctx,data,end,eth,ip,udp,gtp);
     return XDP_TX;
 }
 
@@ -83,15 +179,9 @@ static __always_inline long remove_gtp_header(struct packet_context *ctx) {
         return -1;
     }
 
-    size_t ext_gtp_header_size = 0;
-    struct gtpuhdr *gtp = ctx->gtp;
-    if (gtp->e || gtp->s || gtp->pn) {
-        ext_gtp_header_size += sizeof(struct gtp_hdr_ext);
-        if(gtp->e)
-            ext_gtp_header_size += 4; // FIXME: add extention headers parsing
-    }
-
-    const size_t gtp_encap_size = sizeof(struct iphdr) + sizeof(struct udphdr) + sizeof(struct gtpuhdr) + ext_gtp_header_size;
+    __u64 gtp_encap_size = ctx->ip4->ihl * 4 + sizeof(struct udphdr) + ctx->gtp_header_length;
+    asm volatile("" : "+r"(gtp_encap_size));
+    if (gtp_encap_size < 36 || gtp_encap_size > 16400) return -1;
 
     char *data = (char *)(long)ctx->xdp_ctx->data;
     const char *data_end = (const char *)(long)ctx->xdp_ctx->data_end;
@@ -286,7 +376,7 @@ static __always_inline void update_gtp_tunnel(struct packet_context *ctx, int sr
     ctx->ip4->saddr = srcip;
     ctx->ip4->daddr = dstip;
     ctx->ip4->check = 0;
-    ctx->ip4->check = ipv4_csum(ctx->ip4, sizeof(*ctx->ip4));
+    ctx->ip4->check = ipv4_header_checksum(ctx->ip4, ctx->data_end);
     ctx->udp->check = 0;
     /* TODO: Implement UDP csum:
      * cs = 0;

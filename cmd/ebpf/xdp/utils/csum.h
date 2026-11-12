@@ -65,3 +65,16 @@ static __always_inline void ipv4_csum_replace(__u16 *sum, __u16 old, __u16 new)
 	csum += csum < (__u16)new;
 	*sum = ~csum;
 }
+
+// RFC 791 section 3.1 and RFC 1071 section 1: include every IHL word.
+static __always_inline __u16 ipv4_header_checksum(struct iphdr *ip, const char *end) {
+    __u32 sum = 0;
+    __u32 length = ip->ihl * 4;
+    for (int i=0; i<30; i++) {
+        if (i * 2 >= length) break;
+        __u16 *word = (void *)ip + i * 2;
+        if ((const char *)(word+1) > end) return 0;
+        sum += *word;
+    }
+    return csum_fold_helper(sum);
+}

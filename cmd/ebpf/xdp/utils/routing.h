@@ -80,24 +80,17 @@ static __always_inline enum xdp_action do_route(struct xdp_md *ctx, struct ethhd
 
     if (ifindex == ctx->ingress_ifindex)
         return XDP_TX;
-    return bpf_redirect(ifindex, 0);
+    int action = bpf_redirect(ifindex, 0);
+    return action == XDP_REDIRECT ? XDP_REDIRECT : XDP_ABORTED;
 }
 
-static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct ethhdr *eth, const struct iphdr *ip4) {
+static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct ethhdr *eth, struct iphdr *ip4) {
     const __u32 key = 0;
     struct route_stat *statistic = bpf_map_lookup_elem(&upf_route_stat, &key);
     if (!statistic) {
         return XDP_ABORTED;
     }
 
-#ifdef ENABLE_ROUTE_CACHE
-    struct route_record *cache = bpf_map_lookup_elem(&upf_route_cache_ip4, &ip4->daddr);
-    if (cache) {
-        upf_printk("upf: bpf_fib_lookup %pI4 -> %pI4: cached ifindex: %d", &ip4->saddr, &ip4->daddr, cache->ifindex);
-        statistic->fib_lookup_ip4_cache += 1;
-        return do_route_ipv4(ctx, eth, cache->ifindex, &cache->smac, &cache->dmac);
-    }
-#endif
 
     struct bpf_fib_lookup fib_params = {};
     fib_params.family = AF_INET;
@@ -116,11 +109,15 @@ static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct eth
             upf_printk("upf: bpf_fib_lookup %pI4 -> %pI4: nexthop: %pI4", &ip4->saddr, &ip4->daddr, &fib_params.ipv4_dst);
             upf_printk("upf: bpf_fib_lookup2 %pI4 -> %pI4: h_vlan_TCI: %d", &ip4->saddr, &ip4->daddr, fib_params.h_vlan_TCI);
             upf_printk("upf: bpf_fib_lookup3 %pI4 -> %pI4: h_vlan_proto: %d", &ip4->saddr, &ip4->daddr, fib_params.h_vlan_proto);
+            // RFC 1812 section 5.3.1: let the kernel generate Time Exceeded
+            // for an exhausted packet; decrement only on successful redirect.
+            if (ip4->ttl <= 1) return XDP_PASS;
+            __u16 old = *(__u16 *)&ip4->ttl;
+            ip4->ttl--;
+            ipv4_csum_replace(&ip4->check, old, *(__u16 *)&ip4->ttl);
             statistic->fib_lookup_ip4_ok += 1;
 
-#ifdef ENABLE_ROUTE_CACHE
-            update_route_cache_ipv4(&fib_params, ip4->daddr);
-#endif
+
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);
 
         case BPF_FIB_LKUP_RET_BLACKHOLE:
@@ -141,7 +138,7 @@ static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct eth
     }
 }
 
-static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct ethhdr *eth, const struct ipv6hdr *ip6) {
+static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct ethhdr *eth, struct ipv6hdr *ip6) {
     const __u32 key = 0;
     struct route_stat *statistic = bpf_map_lookup_elem(&upf_route_stat, &key);
     if (!statistic) {
@@ -154,7 +151,10 @@ static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct eth
     fib_params.l4_protocol = ip6->nexthdr;
     fib_params.sport = 0;
     fib_params.dport = 0;
-    fib_params.tot_len = bpf_ntohs(ip6->payload_len);
+    // RFC 8200 sections 3 and 5: MTU applies to header plus payload.
+    __u32 total = bpf_ntohs(ip6->payload_len) + sizeof(*ip6);
+    if (total > 65535) return XDP_PASS;
+    fib_params.tot_len = total;
     __builtin_memcpy(fib_params.ipv6_src, &ip6->saddr, sizeof(ip6->saddr));
     __builtin_memcpy(fib_params.ipv6_dst, &ip6->daddr, sizeof(ip6->daddr));
     fib_params.ifindex = ctx->ingress_ifindex;
@@ -163,6 +163,9 @@ static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct eth
     switch (rc) {
         case BPF_FIB_LKUP_RET_SUCCESS:
             upf_printk("upf: bpf_fib_lookup %pI6c -> %pI6c: nexthop: %pI6c", &ip6->saddr, &ip6->daddr, &fib_params.ipv6_dst);
+            // RFC 8200 section 3: retain the original Hop Limit on fallback.
+            if (ip6->hop_limit <= 1) return XDP_PASS;
+            ip6->hop_limit--;
             statistic->fib_lookup_ip6_ok += 1;
 
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);

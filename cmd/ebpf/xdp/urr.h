@@ -30,8 +30,8 @@ static __always_inline void update_urr(__u32 urr_id, __u64 uplink_bytes, __u64 d
 
     struct urr_info *urr = bpf_map_lookup_elem(&urr_map, &urr_id);  
     if (urr) {
-        urr->ul += uplink_bytes;
-        urr->dl += downlink_bytes;
+        __sync_fetch_and_add(&urr->ul, uplink_bytes);
+        __sync_fetch_and_add(&urr->dl, downlink_bytes);
         upf_printk("upf: urr:%u uplink:%u downlink:%u", urr_id, urr->ul, urr->dl);    
     }
 }
