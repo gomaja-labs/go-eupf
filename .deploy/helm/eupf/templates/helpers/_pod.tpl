@@ -104,7 +104,12 @@ startupProbe:
 
 {{- $volumes := .Values.volumes | default list }}
 {{- if .Values.api.tls.existingSecret }}
-{{- $volumes = append $volumes (dict "name" "api-tls" "secret" (dict "secretName" .Values.api.tls.existingSecret)) }}
+{{- $serverItems := list (dict "key" "tls.crt" "path" "tls.crt") (dict "key" "tls.key" "path" "tls.key") }}
+{{- $volumes = append $volumes (dict "name" "api-tls" "secret" (dict "secretName" .Values.api.tls.existingSecret "items" $serverItems)) }}
+{{- if and .Values.cli.enabled .Values.api.tls.caBundleKey }}
+{{- $caItems := list (dict "key" .Values.api.tls.caBundleKey "path" "ca.pem") }}
+{{- $volumes = append $volumes (dict "name" "api-ca" "secret" (dict "secretName" .Values.api.tls.existingSecret "items" $caItems)) }}
+{{- end }}
 {{- end }}
 {{- if .Values.config.enabled }}
 {{- $configVolume := dict "name" "config" "configMap" (dict "name" (printf "%s-config" (include "eupf.fullname" .))) }}
@@ -118,6 +123,20 @@ volumes:
 {{- end -}}
 
 {{- define "helpers.pod.volumeMounts" -}}
+
+{{- $mounts := .Values.volumeMounts | default list }}
+{{- if .Values.config.enabled }}
+{{- $configMount := dict "name" "config" "mountPath" .Values.config.mountPath }}
+{{- $mounts = append $mounts $configMount }}
+{{- end }}
+{{- with $mounts }}
+volumeMounts:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+
+{{- end -}}
+
+{{- define "helpers.pod.upfVolumeMounts" -}}
 
 {{- $mounts := .Values.volumeMounts | default list }}
 {{- if .Values.api.tls.existingSecret }}
@@ -147,17 +166,17 @@ volumeMounts:
       value: {{ printf "%s://127.0.0.1:%v/api/v1" (ternary "https" "http" (not (empty .Values.api.tls.existingSecret))) .Values.service.port | quote }}
     {{- if and .Values.api.tls.existingSecret .Values.api.tls.caBundleKey }}
     - name: CLI_API_CA_BUNDLE
-      value: {{ printf "/etc/eupf/tls/%s" .Values.api.tls.caBundleKey | quote }}
+      value: /etc/eupf/ca/ca.pem
     {{- end }}
     - name: CLI_API_TOKEN
       valueFrom:
         secretKeyRef:
           name: {{ include "eupf.apiSecretName" . }}
           key: api-token
-  {{- if .Values.api.tls.existingSecret }}
+  {{- if and .Values.api.tls.existingSecret .Values.api.tls.caBundleKey }}
   volumeMounts:
-    - name: api-tls
-      mountPath: /etc/eupf/tls
+    - name: api-ca
+      mountPath: /etc/eupf/ca
       readOnly: true
   {{- end }}
 {{- end }}

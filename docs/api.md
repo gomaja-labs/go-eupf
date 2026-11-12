@@ -288,7 +288,9 @@ Supply the token through `UPF_API_TOKEN`. The CLI accepts an `https://` URL in
 For a private CA, set `api_ca_bundle` in `config-cli.yaml`, `CLI_API_CA_BUNDLE`, or
 `--api_ca_bundle` to a PEM CA file. There is no option to disable verification.
 The Helm chart mounts `api.tls.existingSecret` at `/etc/eupf/tls`, selects HTTPS in
-the optional CLI sidecar, and uses `api.tls.caBundleKey` when configured. The server
+the optional CLI sidecar, and uses `api.tls.caBundleKey` when configured. Only the
+UPF mounts the private key; the CLI mounts a separate projection containing only
+the selected CA at `/etc/eupf/ca/ca.pem`. The server
 certificate must cover the addresses clients use, including 127.0.0.1 for that sidecar.
 
 Configuration edits validate a candidate copy with the startup validator. Invalid
