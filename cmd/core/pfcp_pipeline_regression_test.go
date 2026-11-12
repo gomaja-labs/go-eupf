@@ -85,6 +85,9 @@ func TestUPInitiatedSetupPreservesEstablishedSessions(t *testing.T) {
 			if after != before {
 				t.Errorf("UP-initiated Setup Response deleted %d established sessions of an existing association", before-after)
 			}
+			if repeated {
+				t.Error("configured peer repeated Setup while its learned Node ID remained associated")
+			}
 		})
 	}
 }
