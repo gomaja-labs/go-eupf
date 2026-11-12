@@ -13,9 +13,11 @@ type pdrMutationKey struct {
 }
 type pdrMutation struct {
 	pdrMutationKey
-	owner   uint64
-	entries []IpEntrypointPdrEntry
-	changed bool
+	owner    uint64
+	entries  []IpEntrypointPdrEntry
+	changed  bool
+	previous *IpEntrypointPdrInfo
+	present  bool
 }
 
 func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutation, error) {
@@ -24,8 +26,9 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		return draft, nil
 	}
 	var bucket IpEntrypointPdrInfo
-	if err := lookupRuleValue(m, key, &bucket); err != nil && !isKeyAbsent(err) {
-		return nil, err
+	lookupErr := lookupRuleValue(m, key, &bucket)
+	if lookupErr != nil && !isKeyAbsent(lookupErr) {
+		return nil, lookupErr
 	}
 	if bucket.Count > MaxPDRsPerKey {
 		return nil, fmt.Errorf("invalid PDR count %d", bucket.Count)
@@ -33,7 +36,7 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 	if bucket.Count != 0 && bucket.SessionId != tx.sessionID {
 		return nil, ErrKeyOwned
 	}
-	draft := &pdrMutation{pdrMutationKey: k, owner: tx.sessionID, entries: append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)}
+	draft := &pdrMutation{previous: &bucket, present: lookupErr == nil, pdrMutationKey: k, owner: tx.sessionID, entries: append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)}
 	if tx.pdrs == nil {
 		tx.pdrs = make(map[pdrMutationKey]*pdrMutation)
 	}
@@ -110,18 +113,45 @@ func (tx *ruleTransaction) publishPDRs() error {
 			var value IpEntrypointPdrInfo
 			value.SessionId, value.Count = draft.owner, uint32(len(draft.entries))
 			copy(value.Entries[:], draft.entries)
-			if err := journalRule[IpEntrypointPdrInfo](tx, draft.m, draft.key, func() error {
-				if remove {
-					err := draft.m.Delete(draft.key)
-					if isKeyAbsent(err) {
-						return nil
-					}
+			// PDR values are immutable to packet readers. The transaction's
+			// original key lookup is the exact undo image under ruleMutex;
+			// rereading the large bucket twice adds no information.
+			if tx.beforeWrite != nil {
+				if err := tx.beforeWrite(); err != nil {
 					return err
 				}
-				return draft.m.Put(draft.key, &value)
-			}); err != nil {
+			}
+			var err error
+			if remove {
+				err = draft.m.Delete(draft.key)
+				if isKeyAbsent(err) {
+					err = nil
+				}
+			} else {
+				err = draft.m.Put(draft.key, &value)
+			}
+			if err != nil {
 				return err
 			}
+			tx.dirty = true
+			tx.graced = false
+			original := draft
+			tx.undo = append(tx.undo, func() error {
+				var err error
+				if original.present {
+					err = original.m.Put(original.key, original.previous)
+				} else {
+					err = original.m.Delete(original.key)
+					if isKeyAbsent(err) {
+						err = nil
+					}
+				}
+				if err == nil {
+					tx.objects.recordPDRKey(original.m, original.key, original.previous.SessionId, original.present && original.previous.Count > 0)
+				}
+				return err
+			})
+			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {
 				tx.retiredKey = true
 			}
