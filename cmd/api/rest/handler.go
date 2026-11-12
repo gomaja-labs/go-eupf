@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
+	_ "github.com/gomaja-labs/go-eupf/cmd/docs"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
 	"github.com/gin-contrib/cors"
@@ -28,6 +29,9 @@ import (
 )
 
 //	@BasePath	/api/v1
+// @Accept json
+// @Produce json
+// @Schemes http https
 
 //	@contact.name	API Support
 //	@contact.url	http://www.swagger.io/support
