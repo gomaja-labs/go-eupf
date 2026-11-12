@@ -47,16 +47,13 @@ RUN go mod download
 COPY --chown=build:build cli cli
 RUN CGO_ENABLED=0 go build -o bin/eupf ./cli/app
 
-FROM ubuntu:26.10 AS cli
-RUN apt-get update \
-    && apt-get install --no-install-recommends -y bash-completion \
-    && rm -rf /var/lib/apt/lists/*
+FROM alpine:3.24.4 AS cli
+RUN apk add --no-cache bash bash-completion
 WORKDIR /root
 ENV PATH=/root:${PATH}
 COPY --from=cli-builder /app/bin/eupf ./eupf
-RUN ./eupf completion > /etc/bash_completion.d/eupf \
-    && echo 'source /etc/bash_completion' >> /root/.bashrc \
-    && echo 'source /etc/bash_completion.d/eupf' >> /root/.bashrc
+RUN ./eupf completion > /usr/share/bash-completion/completions/eupf \
+    && echo 'source /usr/share/bash-completion/bash_completion' >> /root/.bashrc
 CMD ["bash", "-c", "while true; do sleep 60; done"]
 
 FROM alpine:3.24.4 AS runtime
