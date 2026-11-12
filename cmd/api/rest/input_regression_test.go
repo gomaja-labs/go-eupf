@@ -18,7 +18,7 @@ func TestInvalidPFCPTimersDoNotReplaceTicker(t *testing.T) {
 			original := time.NewTicker(time.Hour)
 			defer original.Stop()
 			conn := &core.PfcpConnection{AssociationSetupTicker: original}
-			h := &ApiHandler{pfcpSrv: map[string]*core.PfcpConnection{core.N4PFCPKeyName: conn}}
+			h := &ApiHandler{Cfg: validEditConfigPtr(), pfcpSrv: map[string]*core.PfcpConnection{core.N4PFCPKeyName: conn}}
 			r := gin.New()
 			r.POST("/config/pfcp_timers", h.editPFCPTimersConfig)
 			defer func() {
