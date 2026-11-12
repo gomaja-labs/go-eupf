@@ -20,9 +20,6 @@ command:
       sysctl -w net.ipv4.ip_forward=1  # to overcome the problem of switched off net.ipv4.ip_forward appearing in some environments ;\
       /app/bin/eupf $0 $@
 
-args:
-  - --config
-  - /app/conf/config.yml
 
 securityContext:
   privileged: true
@@ -34,16 +31,17 @@ podSecurityContext:
   - name: net.ipv6.conf.all.forwarding
     value: "1"
 
-configMaps:
-  config:
-    data:
-      config.yml: |
-        interface_name: [n3, n6]
-        api_address: :8080
-        pfcp_address: 10.100.50.241:8805
-        metrics_address: :9090
-        n3_address: 10.100.50.233
-        gtp_peer: [10.100.50.226:2152, 10.100.50.227:2152]
+config:
+  enabled: true
+  data:
+    config.yml: |
+      max_sessions: 1024
+      interface_name: [n3, n6]
+      api_address: :8080
+      pfcp_address: 10.100.50.241:8805
+      metrics_address: :9090
+      n3_address: 10.100.50.233
+      gtp_peer: [10.100.50.226:2152, 10.100.50.227:2152]
 
 env:
   UPF_PFCP_NODE_ID: 10.100.50.241  # address on n4 interface
@@ -54,17 +52,10 @@ volumes:
   - name: sys
     hostPath:
       path: /sys
-  - name: config
-    configMap:
-      name: eupf-config
-
 volumeMounts:
   - name: sys
     mountPath: /sys
     readOnly:  true
-  - name: config
-    mountPath: /app/conf
-
 metrics:
   enabled: true
   serviceMonitor:

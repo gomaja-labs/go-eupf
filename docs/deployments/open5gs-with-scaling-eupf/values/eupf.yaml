@@ -11,43 +11,29 @@ image:
   tag: main
   pullPolicy: Always
 
-args:
-  - --config
-  - /app/conf/config.yml
 
 env:
   UPF_PFCP_NODE_ID: $(MY_POD_IP)
   UPF_N3_ADDRESS: $(MY_POD_IP)
 
-configMaps:
-  config:
-    data:
-      config.yml: |
-        interface_name: eth0
-        api_address: :8080
-        pfcp_address: :8805
-        metrics_address: :9090
+config:
+  enabled: true
+  data:
+    config.yml: |
+      max_sessions: 1024
+      interface_name: eth0
+      api_address: :8080
+      pfcp_address: :8805
+      metrics_address: :9090
 
 volumes:
   - name: sys
     hostPath:
       path: /sys
-  - name: config
-    configMap:
-      name: eupf-config
-      defaultMode: 420
-      items:
-        - key: config.yml
-          mode: 493
-          path: config.yml
-
 volumeMounts:
   - name: sys
     mountPath: /sys
     readOnly:  true
-  - name: config
-    mountPath: /app/conf
-
 bird:
   enabled: false
 

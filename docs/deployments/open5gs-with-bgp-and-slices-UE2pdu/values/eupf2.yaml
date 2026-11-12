@@ -7,45 +7,31 @@ deploymentStrategy:
   type: Recreate
 
 image:
-  tag: 0ac3d9fb28808dbca7e123205323e2c09f377971@sha256:a03bdd30efa623b0d3ddc99d9a6472453a43d2d64ed715a9a042e893d82ffb68
+  tag: main
 
-args:
-  - --config
-  - /app/conf/config.yml
 
 env:
   UPF_PFCP_NODE_ID: $(MY_POD_IP)
   UPF_N3_ADDRESS: $(MY_POD_IP)
 
-configMaps:
-  config:
-    data:
-      config.yml: |
-        interface_name: eth0
-        api_address: :8080
-        pfcp_address: :8805
-        metrics_address: :9090
+config:
+  enabled: true
+  data:
+    config.yml: |
+      max_sessions: 1024
+      interface_name: eth0
+      api_address: :8080
+      pfcp_address: :8805
+      metrics_address: :9090
 
 volumes:
   - name: sys
     hostPath:
       path: /sys
-  - name: config
-    configMap:
-      name: eupf-config
-      defaultMode: 420
-      items:
-        - key: config.yml
-          mode: 493
-          path: config.yml
-
 volumeMounts:
   - name: sys
     mountPath: /sys
     readOnly:  true
-  - name: config
-    mountPath: /app/conf
-
 bird:
   enabled: true
   env:
@@ -75,6 +61,9 @@ securityContext:
   privileged: true
 
 extraContainerPorts:
+  - name: metrics
+    containerPort: 9090
+    protocol: TCP
   - name: gtpu
     containerPort: 2152
     protocol: UDP
@@ -86,6 +75,10 @@ service:
   type: ClusterIP
   port: 8080
   extraPorts:
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
     - port: 2152
       targetPort: gtpu
       protocol: UDP

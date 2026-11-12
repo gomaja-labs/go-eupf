@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "eupf.labels" . | nindent 4 }}
 spec:
-  serviceName: eupf
+  serviceName: {{ include "eupf.fullname" . }}
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
@@ -44,7 +44,6 @@ spec:
           {{- if or .Values.args .Values.config.enabled }}
           args: {{- include "helpers.pod.args" . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.env (not .Values.config.enabled) }}
           env:
             - name: MY_POD_IP
               valueFrom:
@@ -59,7 +58,6 @@ spec:
                 fieldRef:
                   fieldPath: status.hostIP
             {{- include "helpers.pod.envs" . | indent 12 }}
-          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -155,6 +153,7 @@ spec:
           {{- end }}
           {{- include "helpers.pod.volumeMounts" . | nindent 10 }}
         {{- end }}
+        {{- include "helpers.pod.cli" . | nindent 8 }}
       {{- include "helpers.pod.volumes" . | nindent 6 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

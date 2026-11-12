@@ -10,10 +10,10 @@
 
 {{- define "helpers.pod.uiImage" -}}
 
-{{- if .Values.image.tag }}
+{{- if .Values.ui.image.tag }}
 {{- printf "%s/%s/%s:%s" .Values.ui.image.registry .Values.ui.image.repository .Values.ui.image.name .Values.ui.image.tag }}
 {{- else }}
-{{- printf "%s/%s/%s:%s" .Values.ui.image.registry .Values.ui.image.repository .Values.ui.image.name .Chart.AppVersion }}
+{{- printf "%s/%s/%s:%s" .Values.ui.image.registry .Values.ui.image.repository .Values.ui.image.name "main" }}
 {{- end }}
 
 {{- end -}}
@@ -49,6 +49,12 @@
 {{- if not .Values.config.enabled }}
 {{- $env = merge $env (deepCopy (.Values.defaultEnv | default dict)) }}
 {{- end }}
+{{- $_ := unset $env "UPF_API_TOKEN" }}
+- name: UPF_API_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "eupf.apiSecretName" . }}
+      key: api-token
 {{- range $name, $value := $env }}
 - name: {{ $name }}
   value: {{ $value | quote }}
@@ -111,4 +117,23 @@ volumeMounts:
   {{- toYaml . | nindent 2 }}
 {{- end }}
 
+{{- end -}}
+
+{{- define "eupf.apiSecretName" -}}
+{{- .Values.api.existingSecret | default (printf "%s-api" (include "eupf.fullname" .)) -}}
+{{- end -}}
+
+{{- define "helpers.pod.cli" -}}
+{{- if .Values.cli.enabled }}
+- name: cli
+  image: {{ .Values.cli.image | quote }}
+  env:
+    - name: CLI_EUPF_ADDR
+      value: {{ printf "http://127.0.0.1:%v/api/v1" .Values.service.port | quote }}
+    - name: CLI_API_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "eupf.apiSecretName" . }}
+          key: api-token
+{{- end }}
 {{- end -}}

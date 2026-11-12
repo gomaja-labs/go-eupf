@@ -19,15 +19,8 @@ The default values produce a working pod: eUPF is configured via `UPF_*` environ
   kubelet --allowed-unsafe-sysctls 'net.ipv4.ip_forward'
   ```
 
-- **Privileges**: eUPF loads eBPF programs, mounts bpffs/debugfs (via the image entrypoint) and raises `RLIMIT_MEMLOCK`. By default the chart runs the container as `privileged: true`. If your environment allows a finer-grained setup, override `securityContext`, e.g.:
-
-  ```yaml
-  securityContext:
-    capabilities:
-      add: [NET_ADMIN, SYS_ADMIN, SYS_RESOURCE, BPF, PERFMON]
-  ```
-
-- The `/sys` hostPath is mounted read-only into the pod (required by the entrypoint to mount bpffs/debugfs).
+- **Privileges**: the default container runs as UID/GID 1000 with NET_ADMIN, SYS_RESOURCE, BPF, PERFMON and DAC_OVERRIDE capabilities. It is not privileged. Adapt capabilities and kernel policy for your cluster.
+- The default writable hostPath mount is `/sys/fs/bpf`, where eUPF pins maps. Nodes must provide a mounted BPF filesystem. Root-based examples mount `/sys` and use a privileged container to perform their own mounts.
 
 ## Configuration
 
@@ -74,3 +67,13 @@ The chart creates a ConfigMap from `config.data`, mounts it at `/app/conf` and s
 | 9090 | metrics | Prometheus metrics |
 
 Probes are TCP checks against the `http` port; keep `service.port` in sync with the API address if you change it.
+
+## API access
+
+The chart supplies a bearer token through a Secret and sets `UPF_API_TOKEN` in both ENV and ConfigMap modes. Leave `api.token` empty to generate a random token, set it explicitly from a protected values source, or set `api.existingSecret` to a Secret containing the key `api-token`. The generated token is retained across Helm upgrades through a Secret lookup. An existing Secret must contain a nonempty token. Treat rendered manifests and Helm release storage as sensitive.
+
+Only `GET /api/v1/health` is public. Management routes and Swagger require `Authorization: Bearer <token>`. CORS defaults to an empty origins list; configure `api_allowed_origins` for browser access. Protect cross-host access with TLS at a trusted proxy or a private tunnel. Keep the separate metrics listener private.
+
+Set `cli.enabled=true` to add the published `ghcr.io/gomaja-labs/go-eupf-cli:main` management shell. It receives `CLI_EUPF_ADDR` and `CLI_API_TOKEN` from the same release configuration and Secret. Run commands with `kubectl exec -it <pod> -c cli -- eupf <command>`.
+
+The application image defaults to `ghcr.io/gomaja-labs/go-eupf:main`; `image.tag` overrides it. The UI image has its own tag and defaults to `main` independently. ConfigMap examples use `config.enabled=true`, so chart ENV defaults cannot override their interface and address settings. REST edits cannot persist into a read-only ConfigMap; update values and roll out the deployment instead.

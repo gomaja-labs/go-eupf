@@ -22,6 +22,17 @@ image:
   # Empty by default: falls back to global.imagePullPolicy.
   pullPolicy: ""
 
+# Administration token. Empty generates a random token in a release Secret.
+# existingSecret must contain the key api-token.
+api:
+  token: ""
+  existingSecret: ""
+
+# Optional management shell, using the published CLI image and the same token.
+cli:
+  enabled: false
+  image: ghcr.io/gomaja-labs/go-eupf-cli:main
+
 # Override default container command
 command: []
 
