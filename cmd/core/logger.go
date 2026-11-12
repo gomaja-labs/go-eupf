@@ -37,7 +37,7 @@ func SetLoggerLevel(loggingLevel string) error {
 	if loglvl, err := zerolog.ParseLevel(loggingLevel); err == nil {
 		zerolog.SetGlobalLevel(loglvl)
 	} else {
-		return fmt.Errorf("can't parse logging level: '%s'", loggingLevel)
+		return fmt.Errorf("parse logging level: %w", err)
 	}
 	return nil
 }

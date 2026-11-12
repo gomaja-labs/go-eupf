@@ -37,8 +37,8 @@ var (
 
 func UpdateLogLevel(logLevel string) error {
 	if err := SetLoggerLevel(logLevel); err != nil {
-		return fmt.Errorf("logger configuring error: %s. Using '%s' level",
-			err.Error(), zerolog.GlobalLevel().String())
+		return fmt.Errorf("logger configuring error: %w. Using '%s' level",
+			err, zerolog.GlobalLevel().String())
 	}
 
 	return nil

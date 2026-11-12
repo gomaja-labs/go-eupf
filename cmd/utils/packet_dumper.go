@@ -66,7 +66,7 @@ func NewPacketDumper(dumpPath string, maxFiles, maxSizeBytes, maxPackets int) (*
 
 	err := os.MkdirAll(dir, os.ModePerm)
 	if err != nil {
-		return nil, fmt.Errorf("can't create directories: %s", err.Error())
+		return nil, fmt.Errorf("can't create directories: %w", err)
 	}
 
 	dumper := &PacketDumper{
@@ -132,29 +132,29 @@ func (dumper *PacketDumper) createDumpFile(filename string) error {
 
 	if _, err = w.AddInterface(makeNgInterface("in", layers.LinkTypeEthernet)); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("can't add in ng pcap interface:: %s", err.Error())
+		return fmt.Errorf("can't add in ng pcap interface:: %w", err)
 	}
 
 	if _, err = w.AddInterface(makeNgInterface("out", layers.LinkTypeEthernet)); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("can't add out ng pcap interface:: %s", err.Error())
+		return fmt.Errorf("can't add out ng pcap interface:: %w", err)
 	}
 
 	if _, err = w.AddInterface(makeNgInterface("drop", layers.LinkTypeEthernet)); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("can't add drop ng pcap interface:: %s", err.Error())
+		return fmt.Errorf("can't add drop ng pcap interface:: %w", err)
 	}
 
 	sigIn, err := w.AddInterface(makeNgInterface("sig-in", layers.LinkTypeRaw))
 	if err != nil {
 		_ = f.Close()
-		return fmt.Errorf("can't add sig in ng pcap interface:: %s", err.Error())
+		return fmt.Errorf("can't add sig in ng pcap interface:: %w", err)
 	}
 
 	sigOut, err := w.AddInterface(makeNgInterface("sig-out", layers.LinkTypeRaw))
 	if err != nil {
 		_ = f.Close()
-		return fmt.Errorf("can't add sig out ng pcap interface:: %s", err.Error())
+		return fmt.Errorf("can't add sig out ng pcap interface:: %w", err)
 	}
 
 	if dumper.w == nil {
