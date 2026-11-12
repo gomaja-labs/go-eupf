@@ -57,7 +57,6 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 	if result.outcome == requestAccepted {
 		return
 	} // Clause 6.3.5.2: delivered.
-	PfcpReportFailures.WithLabelValues(string(result.outcome)).Inc()
 	if response, ok := result.response.(*message.SessionReportResponse); ok {
 		if cause, err := response.Cause.Cause(); err == nil && cause == ie.CauseSessionContextNotFound {
 			// Clause 6.3.5.3: the CP has no corresponding context. Queue local
@@ -108,5 +107,12 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 		} else {
 			conn.forgetSession(assoc, session.LocalSEID)
 		}
+	}
+}
+
+func recordUndeliveredUsage(request *pendingRequest, reason string) {
+	for _, usage := range request.usage {
+		PfcpUndeliveredUsage.Add(float64(usage.uplink + usage.downlink))
+		log.Error().Uint64("session", request.localSEID).Uint32("urr", usage.id).Uint64("uplink", usage.uplink).Uint64("downlink", usage.downlink).Str("reason", reason).Msg("Failed report outlived its local context; octets cannot be merged into another rule")
 	}
 }

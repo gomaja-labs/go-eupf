@@ -256,8 +256,15 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			}
 			return
 		}
+		failedReport := req.typ == message.MsgTypeSessionReportRequest && result.outcome != requestAccepted
+		if failedReport {
+			PfcpReportFailures.WithLabelValues(string(result.outcome)).Inc()
+		}
 		assoc := conn.associationByID(req.associationID())
 		if assoc == nil || assoc != req.association {
+			if failedReport {
+				recordUndeliveredUsage(req, "association removed or replaced")
+			}
 			return
 		}
 		switch req.typ {
@@ -268,6 +275,9 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			// reuses its SEID after deletion (TS 29.244 V20.1.0 clause 6.3.5).
 			session := assoc.Sessions[req.localSEID]
 			if session == nil || session.RemoteSEID != req.remoteSEID {
+				if failedReport {
+					recordUndeliveredUsage(req, "session removed or replaced")
+				}
 				return
 			}
 			conn.completeReportLocked(req, session, result)

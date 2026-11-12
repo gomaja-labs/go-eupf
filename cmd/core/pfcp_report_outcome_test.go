@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -79,5 +81,56 @@ func TestReportContextNotFoundDeletesOnlyOriginalSession(t *testing.T) {
 	conn.serviceHeartbeats(time.Now())
 	if assoc.Sessions[12] != nil || assoc.Sessions[11] == nil {
 		t.Fatal("context-not-found did not remove exactly the original session")
+	}
+}
+
+func TestFailedUsageReportAfterSessionDeletionIsCounted(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.requestTimeout = time.Millisecond
+	conn.mapOperations = &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20}}
+	cp := identityPeer(t, "127.0.0.41", 8805)
+	identitySetup(t, conn, cp, "usage.example")
+	assoc := conn.associationByID("usage.example")
+	session := NewSession(11, 77, "", "", false)
+	session.CPFSEIDIPv4 = net.ParseIP("127.0.0.41")
+	session.NewUrr(9, 1, ebpf.UrrInfo{VolumeThreshold: 10, VolumeTrigger: true})
+	assoc.Sessions[11] = session
+	conn.SendReports()
+	_ = identityRead(t, cp)
+	registry := prometheus.NewRegistry()
+	if err := registry.Register(PfcpReportFailures); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(PfcpUndeliveredUsage); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() (float64, float64) {
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failed, lost float64
+		for _, family := range families {
+			for _, metric := range family.GetMetric() {
+				if family.GetName() == "upf_pfcp_undelivered_usage_octets_total" {
+					lost = metric.GetCounter().GetValue()
+				}
+				if family.GetName() == "upf_pfcp_report_failures_total" {
+					for _, label := range metric.GetLabel() {
+						if label.GetName() == "outcome" && label.GetValue() == string(requestTimeout) {
+							failed = metric.GetCounter().GetValue()
+						}
+					}
+				}
+			}
+		}
+		return failed, lost
+	}
+	beforeFailures, beforeLost := counts()
+	delete(assoc.Sessions, 11)
+	conn.serviceTransactions(time.Now().Add(time.Second))
+	afterFailures, afterLost := counts()
+	if afterFailures-beforeFailures != 1 || afterLost-beforeLost != 20 {
+		t.Fatal("late failure silently discarded usage after deletion")
 	}
 }
