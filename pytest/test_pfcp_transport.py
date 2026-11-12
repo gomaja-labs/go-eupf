@@ -105,7 +105,11 @@ def test_originated_report_retries_and_matches_response(server):
     try:
         remote.associate()
         seid = remote.session()
-        request = urllib.request.Request(f"http://127.0.0.1:18080/api/v1/pfcp_sessions?id={seid}", method="DELETE")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:18080/api/v1/pfcp_sessions?id={seid}",
+            method="DELETE",
+            headers={"Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(request, timeout=2) as response:
             assert response.status == 200
         first, _ = remote.sock.recvfrom(65535)
