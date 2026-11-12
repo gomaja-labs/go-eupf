@@ -18,8 +18,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 func TestHeartbeat(t *testing.T) {
@@ -30,7 +30,8 @@ func TestHeartbeat(t *testing.T) {
 		NodeAssociations: map[string]*NodeAssociation{
 			addr: NewNodeAssociation("test-node", ""),
 		},
-		profile: DefaultProfile{},
+		profile:           DefaultProfile{},
+		RecoveryTimestamp: time.Now(),
 	}
 	hbReq := message.NewHeartbeatRequest(0,
 		ie.NewRecoveryTimeStamp(time.Now()),
@@ -59,7 +60,7 @@ func TestAssociationSetup(t *testing.T) {
 		profile:          DefaultProfile{},
 	}
 	asReq := message.NewAssociationSetupRequest(0,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 
@@ -80,8 +81,8 @@ func TestAssociationSetup(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error getting node ID from association setup response: %s", err)
 	}
-	if nodeId != "test-node" {
-		t.Errorf("Unexpected node ID in association setup response: %s", nodeId)
+	if nodeIDText(nodeId) != "test-node" {
+		t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 	}
 	if _, ok := pfcpConn.NodeAssociations[remoteIP]; !ok {
 		t.Errorf("Association not created")
@@ -120,19 +121,21 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 	validator, _ := NewNeValidator(config.AllowedApns, config.DeniedApns)
 
 	pfcpConn := PfcpConnection{
-		NodeAssociations: make(map[string]*NodeAssociation),
-		nodeId:           "test-node",
-		mapOperations:    ebpfMock,
-		pfcpHandlerMap:   pfcpHandlers,
-		n3Address:        net.ParseIP("1.2.3.4"),
-		nodeAddrV4:       netip.MustParseAddrPort("127.0.0.1:8085"),
-		associationMutex: &sync.Mutex{},
-		featuresOctets:   featuresOctets,
-		neValidator:      validator,
-		profile:          profile,
+		NodeAssociations:  make(map[string]*NodeAssociation),
+		nodeId:            "test-node",
+		mapOperations:     ebpfMock,
+		pfcpHandlerMap:    pfcpHandlers,
+		n3Address:         net.ParseIP("1.2.3.4"),
+		n9Address:         net.ParseIP("1.2.3.5"),
+		RecoveryTimestamp: time.Now(),
+		nodeAddrV4:        netip.MustParseAddrPort("127.0.0.1:8085"),
+		associationMutex:  &sync.Mutex{},
+		featuresOctets:    featuresOctets,
+		neValidator:       validator,
+		profile:           profile,
 	}
 	asReq := message.NewAssociationSetupRequest(0,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 	response, _, err := HandlePfcpAssociationSetupRequest(&pfcpConn, asReq, smfIP)
@@ -159,9 +162,9 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 		} else if _, ok := profile.(HuaweiProfile); ok {
 			// HuaweiProfile's FQDN NodeID encoding does not round-trip through
 			// go-pfcp's parser (returns empty string). This is expected (Variant B).
-			t.Logf("Huawei Node ID (non-roundtrippable): %q", nodeId)
-		} else if nodeId != "test-node" {
-			t.Errorf("Unexpected node ID in association setup response: %s", nodeId)
+			t.Logf("Huawei Node ID (non-roundtrippable): %q", nodeIDText(nodeId))
+		} else if nodeIDText(nodeId) != "test-node" {
+			t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 		}
 	}
 	if _, ok := pfcpConn.NodeAssociations[smfIP]; !ok {
@@ -178,9 +181,8 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 	// Requests for default mapping (without SDF filter)
 
 	// Request with UEIP Address
-	seReqPre1 := message.NewSessionEstablishmentRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReqPre1 := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
@@ -192,15 +194,14 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 	)
 
 	// Request with TEID
-	seReqPre2 := message.NewSessionEstablishmentRequest(0, 0,
-		3, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReqPre2 := message.NewSessionEstablishmentRequest(3, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceAccess),
-				ie.NewFTEID(0, 10, ip2.IP, nil, 0),
+				ie.NewFTEID(1, 10, ip2.IP, nil, 0),
 			),
 		),
 	)
@@ -254,33 +255,31 @@ func TestSdfFilterStoreValid(t *testing.T) {
 	// Requests for additional mapping (with SDF filter)
 
 	// Request with UEIP Address
-	seReq1 := message.NewSessionModificationRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq1 := message.NewSessionModificationRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil), // Why do we need FSEID?
 		ie.NewCreatePDR(
 			ie.NewPDRID(2),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				//ie.NewFTEID(0, 0, ip1.IP, nil, 0),
+				//ie.NewFTEID(1, 0, ip1.IP, nil, 0),
 				ie.NewUEIPAddress(2, ip1.IP.String(), "", 0, 0),
-				ie.NewSDFFilter(fd.FlowDescription, "", "", "", 0),
+				ie.NewSDFFilter(fd.FlowDescription, nil, nil, nil, 0),
 			),
 		),
 	)
 
 	// Request with TEID
-	seReq2 := message.NewSessionModificationRequest(0, 0,
-		3, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq2 := message.NewSessionModificationRequest(3, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(2),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewFTEID(0, 10, ip2.IP, nil, 0),
+				ie.NewFTEID(1, 10, ip2.IP, nil, 0),
 				// ie.NewUEIPAddress(2, ip2.IP.String(), "", 0, 0),
-				ie.NewSDFFilter(fd.FlowDescription, "", "", "", 0),
+				ie.NewSDFFilter(fd.FlowDescription, nil, nil, nil, 0),
 			),
 		),
 	)
@@ -333,16 +332,15 @@ func TestSdfFilterStoreInvalid(t *testing.T) {
 	ip1, _ := net.ResolveIPAddr("ip", "1.1.1.1")
 
 	// Request with bad/unsuported SDF
-	seReq1 := message.NewSessionModificationRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq1 := message.NewSessionModificationRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewFTEID(0, 10, ip1.IP, nil, 0),
-				ie.NewSDFFilter("deny out ip from 10.62.0.1 to 8.8.8.8/32", "", "", "", 0),
+				ie.NewFTEID(1, 10, ip1.IP, nil, 0),
+				ie.NewSDFFilter("deny out ip from 10.62.0.1 to 8.8.8.8/32", nil, nil, nil, 0),
 			),
 		),
 	)
@@ -395,17 +393,16 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 		DstPortUpper:    1236}
 
 	// Request with bad/unsuported SDF
-	seReq1 := message.NewSessionModificationRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq1 := message.NewSessionModificationRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(2),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewFTEID(0, 10, ip1.IP, nil, 0),
-				ie.NewSDFFilter(fd1.FlowDescription, "", "", "", 0),
-				ie.NewSDFFilter(fd2.FlowDescription, "", "", "", 0),
+				ie.NewFTEID(1, 10, ip1.IP, nil, 0),
+				ie.NewSDFFilter(fd1.FlowDescription, nil, nil, nil, 0),
+				ie.NewSDFFilter(fd2.FlowDescription, nil, nil, nil, 0),
 			),
 		),
 	)
@@ -445,7 +442,7 @@ func TestFTUPInAssociationSetupResponse(t *testing.T) {
 
 	// Creating an Association Setup Request
 	asReq := message.NewAssociationSetupRequest(1,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 
@@ -484,7 +481,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	}
 	pfcpConn.ResourceManager = resourceManager
 
-	fteid1 := ie.NewFTEID(0x04, 0, net.ParseIP("127.0.0.1"), nil, 1) // 0x04 - CH true
+	fteid1 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.1"), nil, 1) // 0x04 - CH true
 	createPDR1 := ie.NewCreatePDR(
 		ie.NewPDRID(1),
 		ie.NewPDI(
@@ -493,7 +490,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 		),
 	)
 
-	fteid2 := ie.NewFTEID(0x04, 0, net.ParseIP("127.0.0.2"), nil, 1)
+	fteid2 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.2"), nil, 1)
 	createPDR2 := ie.NewCreatePDR(
 		ie.NewPDRID(2),
 		ie.NewPDI(
@@ -502,7 +499,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 		),
 	)
 
-	fteid3 := ie.NewFTEID(0, 10, net.ParseIP("127.0.0.2"), nil, 1)
+	fteid3 := ie.NewFTEID(1, 10, net.ParseIP("127.0.0.2"), nil, 1)
 	createPDR3 := ie.NewCreatePDR(
 		ie.NewPDRID(2),
 		ie.NewPDI(
@@ -512,9 +509,8 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	)
 
 	// Creating a Session Establishment Request
-	seReq := message.NewSessionEstablishmentRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		createPDR1,
 		createPDR2,
@@ -540,14 +536,21 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	}
 
 	for _, pdr := range seRes.CreatedPDR {
-		fteid, err := pdr.FindByType(ie.FTEID)
+		fields, err := pdr.CreatedPDR()
 		if err != nil {
-			log.Fatal().Err(err)
+			t.Fatal(err)
+		}
+		if len(fields.FTEID) != 1 {
+			t.Fatalf("F-TEID count: %d", len(fields.FTEID))
+		}
+		fteid := fields.FTEID[0]
+		if err != nil {
+			t.Fatal(err)
 		}
 
 		teid, err := fteid.FTEID()
 		if err != nil {
-			log.Fatal().Err(err)
+			t.Fatal(err)
 		}
 
 		if teid.TEID != 1 && teid.TEID != 2 {
@@ -584,9 +587,8 @@ func TestIPAllocationInSessionEstablishmentResponse(t *testing.T) {
 		)
 
 		// Creating a Session Establishment Request
-		seReq := message.NewSessionEstablishmentRequest(0, 0,
-			2, 1, 0,
-			ie.NewNodeID("", "", "test"),
+		seReq := message.NewSessionEstablishmentRequest(2, 1,
+			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			createPDR1,
 		)
@@ -611,7 +613,14 @@ func TestIPAllocationInSessionEstablishmentResponse(t *testing.T) {
 
 		for _, pdr := range seRes.CreatedPDR {
 
-			ueipType, err := pdr.FindByType(ie.UEIPAddress)
+			fields, err := pdr.CreatedPDR()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fields.UEIPAddress) != 1 {
+				t.Fatalf("UE address count: %d", len(fields.UEIPAddress))
+			}
+			ueipType := fields.UEIPAddress[0]
 			if err != nil {
 				t.Errorf("FindByType err: %v", err)
 			}
@@ -648,7 +657,7 @@ func TestUEIPInAssociationSetupResponse(t *testing.T) {
 
 	// Creating an Association Setup Request
 	asReq := message.NewAssociationSetupRequest(1,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 
@@ -674,8 +683,8 @@ func TestUEIPInAssociationSetupResponse(t *testing.T) {
 func TestHandlePfcpSessionEstablishmentRequestWithURR(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnection(t)
 
-	estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	estReq := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(0xffff),
@@ -698,8 +707,8 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 	ebpfMock := &MapOperationsMock{}
 	pfcpConn, smfIP := PreparePfcpConnectionWithMock(t, ebpfMock, config.UpfConfig{})
 
-	estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	estReq := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(0xffff),
@@ -710,7 +719,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 		t.Errorf("Error handling session establishment request: %s", err)
 	}
 
-	modReq := message.NewSessionModificationRequest(0, 0, 2, 1, 0,
+	modReq := message.NewSessionModificationRequest(2, 1,
 		ie.NewCreateURR(
 			ie.NewURRID(0xf),
 		),
@@ -725,7 +734,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 	}
 
 	// TODO: add case for UpdateURR
-	// modReq = message.NewSessionModificationRequest(0, 0, 2, 1, 0,
+	// modReq = message.NewSessionModificationRequest(2, 1,
 	// 	ie.NewUpdateURR(
 	// 		ie.NewURRID(0xf),
 	// 		ie.NewMeasurementMethod(1, 1, 1),
@@ -739,7 +748,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 	// 	t.Errorf("URR wasn't updated")
 	// }
 
-	modReq = message.NewSessionModificationRequest(0, 0, 2, 1, 0,
+	modReq = message.NewSessionModificationRequest(2, 1,
 		ie.NewRemoveURR(
 			ie.NewURRID(0xf),
 		),
@@ -757,13 +766,16 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 		t.Errorf("SessionModificationResponse doesn't contain Usage Reports")
 	}
 
-	ur := modResp.UsageReport[0]
-	urrID, _ := ur.URRID()
+	ur, decodeErr := modResp.UsageReport[0].UsageReportWithinSessionModificationResponse()
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	urrID, _ := ur.URRID.URRID()
 	if urrID != 0xf {
 		t.Errorf("URRID not equal 0xf")
 	}
 
-	vol, _ := ur.VolumeMeasurement()
+	vol, _ := ur.VolumeMeasurement.VolumeMeasurement()
 	if !vol.HasTOVOL() {
 		t.Errorf("No TotalVolume")
 	}
@@ -798,8 +810,8 @@ func TestHandlePfcpSessionDeletionRequestWithURR(t *testing.T) {
 	ebpfMock := &MapOperationsMock{}
 	pfcpConn, smfIP := PreparePfcpConnectionWithMock(t, ebpfMock, config.UpfConfig{})
 
-	estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	estReq := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(0xffff),
@@ -815,7 +827,7 @@ func TestHandlePfcpSessionDeletionRequestWithURR(t *testing.T) {
 
 	ebpfMock.urr.UplinkVolume = 100
 	ebpfMock.urr.DownlinkVolume = 200
-	delReq := message.NewSessionDeletionRequest(0, 0, 2, 1, 0)
+	delReq := message.NewSessionDeletionRequest(2, 1)
 	msg, _, err := HandlePfcpSessionDeletionRequest(pfcpConn, delReq, smfIP)
 	if err != nil {
 		t.Errorf("Error handling session deletion request: %s", err)
@@ -826,13 +838,16 @@ func TestHandlePfcpSessionDeletionRequestWithURR(t *testing.T) {
 		t.Errorf("SessionDeletionResponse doesn't contain Usage Reports")
 	}
 
-	ur := delRes.UsageReport[0]
-	urrID, _ := ur.URRID()
+	ur, decodeErr := delRes.UsageReport[0].UsageReportWithinSessionDeletionResponse()
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	urrID, _ := ur.URRID.URRID()
 	if urrID != 0xf {
 		t.Errorf("URRID not equal 0xf")
 	}
 
-	vol, _ := ur.VolumeMeasurement()
+	vol, _ := ur.VolumeMeasurement.VolumeMeasurement()
 
 	if !vol.HasTOVOL() {
 		t.Errorf("No TotalVolume")
@@ -867,8 +882,8 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config)
 
 	{
-		estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-			ie.NewNodeID("", "", "test"),
+		estReq := message.NewSessionEstablishmentRequest(2, 1,
+			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			ie.NewCreatePDR(
 				ie.NewPDRID(0xffff),
@@ -895,8 +910,8 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 		}
 	}
 	{
-		estReqWithAllowed := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-			ie.NewNodeID("", "", "test"),
+		estReqWithAllowed := message.NewSessionEstablishmentRequest(2, 1,
+			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			ie.NewCreatePDR(
 				ie.NewPDRID(0xffff),
@@ -937,8 +952,8 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 	}
 	pfcpConn.ResourceManager = resourceManager
 
-	estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	estReq := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(0xffff),

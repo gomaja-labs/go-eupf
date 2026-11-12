@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/hex"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"reflect"
 	"testing"
 )
@@ -9,16 +10,16 @@ import (
 func TestHuaweiParseOuterHeaderCreationFields(t *testing.T) {
 
 	buffer := []byte{0x00, 0x74, 0x03, 0x30, 0x0b, 0x0a, 0xa9, 0x70, 0xae}
-	result, err := ParseOuterHeaderCreationFields(buffer)
+	result, err := HuaweiOuterHeaderCreation(ie.New(ie.OuterHeaderCreation, buffer))
 	if err != nil {
 		t.Errorf("Error")
 	}
 
-	if !result.HasTEID() {
+	if result.TEID != 0x7403300b {
 		t.Errorf("Error")
 	}
 
-	if !result.HasIPv4() {
+	if result.IPv4Address.String() != "10.169.112.174" {
 		t.Errorf("Error")
 	}
 

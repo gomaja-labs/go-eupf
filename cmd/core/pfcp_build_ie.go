@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 // buildSessionReportUsageIEs builds the IEs for SendSessionReportUsage

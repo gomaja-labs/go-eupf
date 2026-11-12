@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 func TestHandlePfcpAssociationSetupRequestProfileNodeID(t *testing.T) {
@@ -28,7 +28,7 @@ func TestHandlePfcpAssociationSetupRequestProfileNodeID(t *testing.T) {
 				profile:          tt.profile,
 			}
 			asReq := message.NewAssociationSetupRequest(0,
-				ie.NewNodeID("", "", "test"),
+				ie.NewNodeIDFQDN("test"),
 				ie.NewRecoveryTimeStamp(time.Now()),
 			)
 			response, _, err := HandlePfcpAssociationSetupRequest(&pfcpConn, asReq, "127.0.0.1")
@@ -43,8 +43,8 @@ func TestHandlePfcpAssociationSetupRequestProfileNodeID(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error parsing NodeID: %v", err)
 			}
-			if v != "127.0.0.1" {
-				t.Errorf("expected 127.0.0.1, got %s", v)
+			if nodeIDText(v) != "127.0.0.1" {
+				t.Errorf("expected 127.0.0.1, got %s", nodeIDText(v))
 			}
 		})
 	}
@@ -63,8 +63,8 @@ func TestHandlePfcpSessionEstablishmentResponseSecondFSEID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pfcpConn, smfIP := PreparePfcpConnectionWithMockAndProfile(t, &MapOperationsMock{}, config.UpfConfig{}, tt.profile)
 
-			estReq := message.NewSessionEstablishmentRequest(0, 0, 2, 1, 0,
-				ie.NewNodeID("", "", "test"),
+			estReq := message.NewSessionEstablishmentRequest(2, 1,
+				ie.NewNodeIDFQDN("test"),
 				ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 				ie.NewCreatePDR(
 					ie.NewPDRID(0xffff),
@@ -82,7 +82,7 @@ func TestHandlePfcpSessionEstablishmentResponseSecondFSEID(t *testing.T) {
 			if estResp.UPFSEID != nil && estResp.UPFSEID.Type == ie.FSEID {
 				fseidCount++
 			}
-			for _, item := range estResp.IEs {
+			for _, item := range estResp.OtherIEs {
 				if item.Type == ie.FSEID {
 					fseidCount++
 				}

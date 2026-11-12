@@ -6,12 +6,13 @@ package core
 
 import (
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
 )
 
 type PfcpFunc func(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error)
@@ -91,7 +92,7 @@ func HandlePfcpAssociationReleaseRequest(
 	nodeID := asreq.NodeID
 	if nodeID == nil {
 		log.Warn().Msgf("Got Association Release Request without NodeID from: %s", addr)
-		nodeID = ie.NewNodeID("0.0.0.0", "", "")
+		nodeID = newIeNodeID("0.0.0.0")
 	}
 
 	conn.associationMutex.Lock()
@@ -176,12 +177,12 @@ func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message
 	conn.associationMutex.Lock()
 	defer conn.associationMutex.Unlock()
 	if _, ok := conn.NodeAssociations[addr]; ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", remoteNodeID, addr)
+		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", nodeIDText(remoteNodeID), addr)
 		// retain the PFCP sessions that were established with the existing PFCP association and that are requested to be retained, if the PFCP Session Retention Information IE was received in the request; otherwise, delete the PFCP sessions that were established with the existing PFCP association;
 		//log.Warn().Msg("Session retention is not yet implemented")
 	} else {
 		// Create RemoteNode from AssociationSetupRequest
-		remoteNode := NewNodeAssociation(remoteNodeID, addr)
+		remoteNode := NewNodeAssociation(nodeIDText(remoteNodeID), addr)
 		// Add or replace RemoteNode to NodeAssociationMap
 		conn.NodeAssociations[addr] = remoteNode
 
@@ -300,7 +301,7 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 	conn.associationMutex.Lock()
 	defer conn.associationMutex.Unlock()
 	if _, ok := conn.NodeAssociations[addr]; !ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s doesn't exist", remoteNodeID, addr)
+		log.Warn().Msgf("Association with NodeID: %s and address: %s doesn't exist", nodeIDText(remoteNodeID), addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		asres := message.NewAssociationUpdateResponse(asreq.SequenceNumber,
 			ie.NewCause(ie.CauseNoEstablishedPFCPAssociation),
@@ -320,14 +321,17 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 }
 
 func newIeNodeID(nodeID string) *ie.IE {
-	ip := net.ParseIP(nodeID)
-	if ip != nil {
-		if ip.To4() != nil {
-			return ie.NewNodeID(nodeID, "", "")
-		}
-		return ie.NewNodeID("", nodeID, "")
+	if address, err := netip.ParseAddr(nodeID); err == nil {
+		return ie.NewNodeIDAddress(address)
 	}
-	return ie.NewNodeID("", "", nodeID)
+	return ie.NewNodeIDFQDN(nodeID)
+}
+
+func nodeIDText(value ie.NodeIDValue) string {
+	if value.Address.IsValid() {
+		return value.Address.String()
+	}
+	return value.FQDN
 }
 
 func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
@@ -383,12 +387,12 @@ func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Messag
 	conn.associationMutex.Lock()
 	defer conn.associationMutex.Unlock()
 	if _, ok := conn.NodeAssociations[addr]; ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", remoteNodeID, addr)
+		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", nodeIDText(remoteNodeID), addr)
 		// retain the PFCP sessions that were established with the existing PFCP association and that are requested to be retained, if the PFCP Session Retention Information IE was received in the request; otherwise, delete the PFCP sessions that were established with the existing PFCP association;
 		//log.Warn().Msg("Session retention is not yet implemented")
 	} else {
 		// Create RemoteNode from AssociationSetupResponse
-		remoteNode := NewNodeAssociation(remoteNodeID, addr)
+		remoteNode := NewNodeAssociation(nodeIDText(remoteNodeID), addr)
 		// Add or replace RemoteNode to NodeAssociationMap
 		conn.NodeAssociations[addr] = remoteNode
 		log.Info().Msgf("Saving new association: %+v", remoteNode)

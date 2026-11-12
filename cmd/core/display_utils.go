@@ -4,14 +4,13 @@
 package core
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
 )
 
 func writeLineTabbed(sb *strings.Builder, s string, tab int) {
@@ -26,7 +25,7 @@ func printAssociationSetupRequest(req *message.AssociationSetupRequest) {
 	writeLineTabbed(&sb, "Association Setup Request:", 0)
 	nodeId, err := req.NodeID.NodeID()
 	if err == nil {
-		writeLineTabbed(&sb, fmt.Sprintf("Node ID: %s", nodeId), 1)
+		writeLineTabbed(&sb, fmt.Sprintf("Node ID: %s", nodeIDText(nodeId)), 1)
 	}
 	if req.RecoveryTimeStamp != nil {
 		recoveryTime, err := req.RecoveryTimeStamp.RecoveryTimeStamp()
@@ -43,7 +42,7 @@ func printAssociationUpdateRequest(req *message.AssociationUpdateRequest) {
 	writeLineTabbed(&sb, "Association Update Request:", 0)
 	nodeId, err := req.NodeID.NodeID()
 	if err == nil {
-		writeLineTabbed(&sb, fmt.Sprintf("Node ID: %s", nodeId), 1)
+		writeLineTabbed(&sb, fmt.Sprintf("Node ID: %s", nodeIDText(nodeId)), 1)
 	}
 	log.Info().Msg(sb.String())
 }
@@ -87,7 +86,7 @@ func printSessionEstablishmentRequest(req *message.SessionEstablishmentRequest, 
 		displayBar(&sb, req.CreateBAR)
 	}
 
-	if imsi, msisdn := profile.ParseSubscriberData(req.IEs); imsi != "" || msisdn != "" {
+	if imsi, msisdn := profile.ParseSubscriberData(req.OtherIEs); imsi != "" || msisdn != "" {
 		if imsi != "" {
 			writeLineTabbed(&sb, fmt.Sprintf("IMSI: %s ", imsi), 1)
 		}
@@ -178,20 +177,24 @@ func printSessionModificationRequest(req *message.SessionModificationRequest, pr
 	}
 
 	if req.UpdateBAR != nil {
+		updateBAR, err := req.UpdateBAR.UpdateBARWithinSessionModificationRequest()
+		if err != nil {
+			return
+		}
 		writeLineTabbed(&sb, "Update BAR:", 1)
-		barId, err := req.UpdateBAR.BARID()
+		barId, err := updateBAR.BARID.BARID()
 		if err == nil {
 			writeLineTabbed(&sb, fmt.Sprintf("BAR ID: %d ", barId), 2)
 		}
-		downlink, err := req.UpdateBAR.DownlinkDataNotificationDelay()
+		downlink, err := updateBAR.DownlinkDataNotificationDelay.DownlinkDataNotificationDelay()
 		if err == nil {
 			writeLineTabbed(&sb, fmt.Sprintf("Downlink Data Notification Delay: %s ", downlink), 2)
 		}
-		suggestedBufferingPackets, err := req.UpdateBAR.SuggestedBufferingPacketsCount()
+		suggestedBufferingPackets, err := updateBAR.SuggestedBufferingPacketsCount.SuggestedBufferingPacketsCount()
 		if err == nil {
 			writeLineTabbed(&sb, fmt.Sprintf("Suggested Buffering Packets Count: %d ", suggestedBufferingPackets), 2)
 		}
-		mtEdtControl, err := req.UpdateBAR.MTEDTControlInformation()
+		mtEdtControl, err := updateBAR.MTEDTControlInformation.MTEDTControlInformation()
 		if err == nil {
 			writeLineTabbed(&sb, fmt.Sprintf("MT EDI: %d ", mtEdtControl), 2)
 		}
@@ -219,14 +222,18 @@ func printSessionModificationRequest(req *message.SessionModificationRequest, pr
 	}
 
 	if req.RemoveBAR != nil {
+		removeBAR, err := req.RemoveBAR.RemoveBAR()
+		if err != nil {
+			return
+		}
 		writeLineTabbed(&sb, "Remove BAR:", 1)
-		barId, err := req.RemoveBAR.BARID()
+		barId, err := removeBAR.BARID.BARID()
 		if err == nil {
 			writeLineTabbed(&sb, fmt.Sprintf("BAR ID: %d ", barId), 2)
 		}
 	}
 
-	if imsi, msisdn := profile.ParseSubscriberData(req.IEs); imsi != "" || msisdn != "" {
+	if imsi, msisdn := profile.ParseSubscriberData(req.OtherIEs); imsi != "" || msisdn != "" {
 		if imsi != "" {
 			writeLineTabbed(&sb, fmt.Sprintf("IMSI: %s ", imsi), 1)
 		}
@@ -246,55 +253,127 @@ func printSessionDeleteRequest(req *message.SessionDeletionRequest) {
 }
 
 func displayBar(sb *strings.Builder, bar *ie.IE) {
-	barId, _ := bar.BARID()
+	var fieldBARID, fieldDownlinkDataNotificationDelay, fieldSuggestedBufferingPacketsCount, fieldMTEDTControlInformation *ie.IE
+	switch bar.Type {
+	case ie.CreateBAR:
+		f, err := bar.CreateBAR()
+		if err != nil {
+			return
+		}
+		fieldBARID, fieldDownlinkDataNotificationDelay, fieldMTEDTControlInformation = f.BARID, f.DownlinkDataNotificationDelay, f.MTEDTControlInformation
+	case ie.UpdateBARWithinSessionModificationRequest:
+		f, err := bar.UpdateBARWithinSessionModificationRequest()
+		if err != nil {
+			return
+		}
+		fieldBARID, fieldDownlinkDataNotificationDelay, fieldSuggestedBufferingPacketsCount, fieldMTEDTControlInformation = f.BARID, f.DownlinkDataNotificationDelay, f.SuggestedBufferingPacketsCount, f.MTEDTControlInformation
+	case ie.RemoveBAR:
+		f, err := bar.RemoveBAR()
+		if err != nil {
+			return
+		}
+		fieldBARID = f.BARID
+	default:
+		return
+	}
+
+	barId, _ := fieldBARID.BARID()
 	fmt.Fprintf(sb, "BAR ID: %d\n", barId)
 
-	downlink, err := bar.DownlinkDataNotificationDelay()
+	downlink, err := fieldDownlinkDataNotificationDelay.DownlinkDataNotificationDelay()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Downlink Data Notification Delay: %s ", downlink), 2)
 	}
-	suggestedBufferingPackets, err := bar.SuggestedBufferingPacketsCount()
+	suggestedBufferingPackets, err := fieldSuggestedBufferingPacketsCount.SuggestedBufferingPacketsCount()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Suggested Buffering Packets Count: %d ", suggestedBufferingPackets), 2)
 	}
-	mtEdtControl, err := bar.MTEDTControlInformation()
+	mtEdtControl, err := fieldMTEDTControlInformation.MTEDTControlInformation()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("MT EDI: %d ", mtEdtControl), 2)
 	}
 }
 
 func displayUrr(sb *strings.Builder, urr *ie.IE) {
-	urrId, _ := urr.URRID()
+	var fieldURRID, fieldMeasurementMethod, fieldVolumeThreshold, fieldTimeThreshold, fieldMonitoringTime *ie.IE
+	switch urr.Type {
+	case ie.CreateURR:
+		f, err := urr.CreateURR()
+		if err != nil {
+			return
+		}
+		fieldURRID, fieldMeasurementMethod, fieldVolumeThreshold, fieldTimeThreshold, fieldMonitoringTime = f.URRID, f.MeasurementMethod, f.VolumeThreshold, f.TimeThreshold, f.MonitoringTime
+	case ie.UpdateURR:
+		f, err := urr.UpdateURR()
+		if err != nil {
+			return
+		}
+		fieldURRID, fieldMeasurementMethod, fieldVolumeThreshold, fieldTimeThreshold, fieldMonitoringTime = f.URRID, f.MeasurementMethod, f.VolumeThreshold, f.TimeThreshold, f.MonitoringTime
+	case ie.RemoveURR:
+		f, err := urr.RemoveURR()
+		if err != nil {
+			return
+		}
+		fieldURRID = f.URRID
+	default:
+		return
+	}
+
+	urrId, _ := fieldURRID.URRID()
 	fmt.Fprintf(sb, "URR ID: %d \n", urrId)
 
-	if measurementMethod, err := urr.MeasurementMethod(); err == nil {
+	if measurementMethod, err := fieldMeasurementMethod.MeasurementMethod(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Measurement Method: %d ", measurementMethod), 2)
 	}
-	if volumeThreshold, err := urr.VolumeThreshold(); err == nil {
+	if volumeThreshold, err := fieldVolumeThreshold.VolumeThreshold(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Volume Threshold: %+v ", volumeThreshold), 2)
 	}
-	if timeThreshold, err := urr.TimeThreshold(); err == nil {
+	if timeThreshold, err := fieldTimeThreshold.TimeThreshold(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Time Threshold: %f s", timeThreshold.Seconds()), 2)
 	}
-	if monitoringTime, err := urr.MonitoringTime(); err == nil {
+	if monitoringTime, err := fieldMonitoringTime.MonitoringTime(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Monitoring Time: %s ", monitoringTime.Format(time.RFC3339)), 2)
 	}
 }
 
 func displayQer(sb *strings.Builder, qer *ie.IE, profile PfcpProfile) {
-	qerId, _ := qer.QERID()
+	var fieldQERID, fieldGateStatus, fieldMBR *ie.IE
+	switch qer.Type {
+	case ie.CreateQER:
+		f, err := qer.CreateQER()
+		if err != nil {
+			return
+		}
+		fieldQERID, fieldGateStatus, fieldMBR = f.QERID, f.GateStatus, f.MaximumBitrate
+	case ie.UpdateQER:
+		f, err := qer.UpdateQER()
+		if err != nil {
+			return
+		}
+		fieldQERID, fieldGateStatus, fieldMBR = f.QERID, f.GateStatus, f.MaximumBitrate
+	case ie.RemoveQER:
+		f, err := qer.RemoveQER()
+		if err != nil {
+			return
+		}
+		fieldQERID = f.QERID
+	default:
+		return
+	}
+
+	qerId, _ := fieldQERID.QERID()
 	fmt.Fprintf(sb, "QER ID: %d \n", qerId)
 
-	if gateStatusDL, err := qer.GateStatusDL(); err == nil {
+	if gateStatusDL, err := fieldGateStatus.GateStatusDL(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Gate Status DL: %d ", gateStatusDL), 2)
 	}
-	if gateStatusUL, err := qer.GateStatusUL(); err == nil {
+	if gateStatusUL, err := fieldGateStatus.GateStatusUL(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Gate Status UL: %d ", gateStatusUL), 2)
 	}
-	if maxBitrateDL, err := qer.MBRDL(); err == nil {
+	if maxBitrateDL, err := fieldMBR.MBRDL(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Max Bitrate DL: %d ", uint32(maxBitrateDL)), 2)
 	}
-	if maxBitrateUL, err := qer.MBRUL(); err == nil {
+	if maxBitrateUL, err := fieldMBR.MBRUL(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Max Bitrate UL: %d ", uint32(maxBitrateUL)), 2)
 	}
 	if qfi, ok := profile.ParseQFI(qer); ok {
@@ -303,121 +382,135 @@ func displayQer(sb *strings.Builder, qer *ie.IE, profile PfcpProfile) {
 }
 
 func displayFar(sb *strings.Builder, far *ie.IE, profile PfcpProfile) {
-	farId, _ := far.FARID()
+	var id, action, bar, forwardIE *ie.IE
+	var update bool
+	switch far.Type {
+	case ie.CreateFAR:
+		f, err := far.CreateFAR()
+		if err != nil {
+			return
+		}
+		id, action, bar, forwardIE = f.FARID, f.ApplyAction, f.BARID, f.ForwardingParameters
+	case ie.UpdateFAR:
+		f, err := far.UpdateFAR()
+		if err != nil {
+			return
+		}
+		id, action, bar, forwardIE = f.FARID, f.ApplyAction, f.BARID, f.UpdateForwardingParameters
+		update = true
+	case ie.RemoveFAR:
+		f, err := far.RemoveFAR()
+		if err != nil {
+			return
+		}
+		id = f.FARID
+	default:
+		return
+	}
+	farId, _ := id.FARID()
 	fmt.Fprintf(sb, "FAR ID: %d \n", farId)
 
-	applyAction, err := far.ApplyAction()
+	applyAction, err := action.ApplyAction()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Apply Action: %+v ", applyAction), 2)
 	}
-	if forwardingParameters, err := far.ForwardingParameters(); err == nil {
-		writeLineTabbed(sb, "Forwarding Parameters:", 2)
-		for _, forwardingParameter := range forwardingParameters {
-			networkInstance, err := forwardingParameter.NetworkInstance()
-			if err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Network Instance: %s ", networkInstance), 3)
+	var network, outer, redirect, enrichment, marking *ie.IE
+	if forwardIE != nil {
+		if update {
+			f, err := forwardIE.UpdateForwardingParameters()
+			if err != nil {
+				return
 			}
-			//outerHeaderCreation, err := forwardingParameter.OuterHeaderCreation()
-			fields, err := profile.ParseOuterHeaderCreation(forwardingParameter)
-			if err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Outer Header Creation: description=%d teid=%d ipv4=%v ipv6=%v port=%d ctag=%d stag=%d ", fields.Description, fields.Teid, fields.IPv4Address, fields.IPv6Address, fields.PortNumber, fields.CTag, fields.STag), 3)
+			network, outer, redirect, enrichment, marking = f.NetworkInstance, f.OuterHeaderCreation, f.RedirectInformation, f.HeaderEnrichment, f.TransportLevelMarking
+		} else {
+			f, err := forwardIE.ForwardingParameters()
+			if err != nil {
+				return
 			}
-			redirectInformation, err := forwardingParameter.RedirectInformation()
-			if err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Redirect Information, server address: %s ", redirectInformation.RedirectServerAddress), 3)
-				writeLineTabbed(sb, fmt.Sprintf("Redirect Information, other server address: %s ", redirectInformation.OtherRedirectServerAddress), 3)
-			}
-			headerEnrichment, err := forwardingParameter.HeaderEnrichment()
-			if err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Header Enrichment: %s : %s ", headerEnrichment.HeaderFieldName, headerEnrichment.HeaderFieldValue), 3)
+			network, outer, redirect, enrichment, marking = f.NetworkInstance, f.OuterHeaderCreation, f.RedirectInformation, f.HeaderEnrichment, f.TransportLevelMarking
+		}
+		if value, err := network.NetworkInstance(); err == nil {
+			writeLineTabbed(sb, fmt.Sprintf("Network Instance: %s", value), 3)
+		}
+		if outer != nil {
+			if f, err := profile.ParseOuterHeaderCreation(outer); err == nil {
+				writeLineTabbed(sb, fmt.Sprintf("Outer Header Creation: description=%d teid=%d ipv4=%v ipv6=%v port=%d ctag=%d stag=%d", f.Description, f.Teid, f.IPv4Address, f.IPv6Address, f.PortNumber, f.CTag, f.STag), 3)
 			}
 		}
-	}
-	if updateForwardingParameters, err := far.UpdateForwardingParameters(); err == nil {
-		writeLineTabbed(sb, "Update forwarding Parameters:", 2)
-		for _, updateForwardingParameter := range updateForwardingParameters {
-			if networkInstance, err := updateForwardingParameter.NetworkInstance(); err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Network Instance: %s ", networkInstance), 3)
-			}
-
-			//outerHeaderCreation, err := updateForwardingParameter.OuterHeaderCreation()
-			fields, err := profile.ParseOuterHeaderCreation(updateForwardingParameter)
-			if err == nil {
-				writeLineTabbed(sb, "Outer Header Creation:", 3)
-				writeLineTabbed(sb, fmt.Sprintf("Outer Header Creation Description: %+v ", fields.Description), 4)
-				writeLineTabbed(sb, fmt.Sprintf("TEID: %+v ", fields.Teid), 4)
-				writeLineTabbed(sb, fmt.Sprintf("IPv4Address: %+v ", fields.IPv4Address), 4)
-				writeLineTabbed(sb, fmt.Sprintf("IPv6Address: %+v ", fields.IPv6Address), 4)
-				writeLineTabbed(sb, fmt.Sprintf("PortNumber: %+v ", fields.PortNumber), 4)
-				writeLineTabbed(sb, fmt.Sprintf("CTag: %+v ", fields.CTag), 4)
-				writeLineTabbed(sb, fmt.Sprintf("STag: %+v ", fields.STag), 4)
-			}
-
-			if redirectInformation, err := updateForwardingParameter.RedirectInformation(); err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Redirect Information, server address: %s ", redirectInformation.RedirectServerAddress), 3)
-				writeLineTabbed(sb, fmt.Sprintf("Redirect Information, other server address: %s ", redirectInformation.OtherRedirectServerAddress), 3)
-			}
-
-			if headerEnrichment, err := updateForwardingParameter.HeaderEnrichment(); err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Header Enrichment: %s : %s ", headerEnrichment.HeaderFieldName, headerEnrichment.HeaderFieldValue), 3)
-			}
-
-			if transportLevelMarking, err := updateForwardingParameter.TransportLevelMarking(); err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("Transport Level Marking: %+v", transportLevelMarking), 3)
-			}
+		if value, err := redirect.RedirectInformation(); err == nil {
+			writeLineTabbed(sb, fmt.Sprintf("Redirect Information: %s %s", value.RedirectServerAddress, value.OtherRedirectServerAddress), 3)
+		}
+		if value, err := enrichment.HeaderEnrichment(); err == nil {
+			writeLineTabbed(sb, fmt.Sprintf("Header Enrichment: %s : %s", value.HeaderFieldName, value.HeaderFieldValue), 3)
 		}
 	}
-
-	duplicatingParameters, err := far.DuplicatingParameters()
-	if err == nil {
-		writeLineTabbed(sb, fmt.Sprintf("Duplicating Parameters: %+v ", duplicatingParameters), 2)
-	}
-	barId, err := far.BARID()
+	barId, err := bar.BARID()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("BAR ID: %d ", barId), 2)
 	}
-	transportLevelMarking, err := GetTransportLevelMarking(far)
+	transportLevelMarking, err := marking.TransportLevelMarking()
 	if err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Transport Level Marking: %d", transportLevelMarking), 2)
 		// DSCP (first octet) and ToS or Traffic Class mask (second octet)
-		buf := make([]byte, 2)
-		binary.BigEndian.PutUint16(buf, transportLevelMarking)
+		buf := transportLevelMarking
 		writeLineTabbed(sb, fmt.Sprintf("DSCP: %x", buf[0]), 3)
 		writeLineTabbed(sb, fmt.Sprintf("ToS or Traffic Class mask: %x", buf[1]), 3)
 	}
 }
 
 func displayPdr(sb *strings.Builder, pdr *ie.IE) {
-	pdrId, _ := pdr.PDRID()
+	var id, removal, farID, pdiIE *ie.IE
+	var qerIDs, urrIDs []*ie.IE
+	switch pdr.Type {
+	case ie.CreatePDR:
+		f, err := pdr.CreatePDR()
+		if err != nil {
+			return
+		}
+		id, removal, farID, pdiIE, qerIDs, urrIDs = f.PDRID, f.OuterHeaderRemoval, f.FARID, f.PDI, f.QERID, f.URRID
+	case ie.UpdatePDR:
+		f, err := pdr.UpdatePDR()
+		if err != nil {
+			return
+		}
+		id, removal, farID, pdiIE, qerIDs, urrIDs = f.PDRID, f.OuterHeaderRemoval, f.FARID, f.PDI, f.QERID, f.URRID
+	case ie.RemovePDR:
+		f, err := pdr.RemovePDR()
+		if err != nil {
+			return
+		}
+		id = f.PDRID
+	default:
+		return
+	}
+
+	pdrId, _ := id.PDRID()
 	fmt.Fprintf(sb, "PDR ID: %d \n", pdrId)
 
-	if outerHeaderRemoval, err := pdr.OuterHeaderRemovalDescription(); err == nil {
+	if outerHeaderRemoval, err := removal.OuterHeaderRemovalDescription(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("Outer Header Removal: %d ", outerHeaderRemoval), 2)
 	}
 
-	if farid, err := pdr.FARID(); err == nil {
+	if farid, err := farID.FARID(); err == nil {
 		writeLineTabbed(sb, fmt.Sprintf("FAR ID: %d ", farid), 2)
 	}
 
-	// No method to get several IEs in go-pfcp. So go through all child IEs
-	for _, x := range pdr.ChildIEs {
-		if x.Type == ie.QERID {
-			if qerid, err := x.QERID(); err == nil {
-				writeLineTabbed(sb, fmt.Sprintf("QER ID: %d ", qerid), 2)
-			}
+	for _, value := range qerIDs {
+		if id, err := value.QERID(); err == nil {
+			writeLineTabbed(sb, fmt.Sprintf("QER ID: %d", id), 2)
+		}
+	}
+	for _, value := range urrIDs {
+		if id, err := value.URRID(); err == nil {
+			writeLineTabbed(sb, fmt.Sprintf("URR ID: %d", id), 2)
 		}
 	}
 
-	if urrid, err := pdr.URRID(); err == nil {
-		writeLineTabbed(sb, fmt.Sprintf("URR ID: %d ", urrid), 2)
-	}
-
-	if barid, err := pdr.BARID(); err == nil {
-		writeLineTabbed(sb, fmt.Sprintf("BAR ID: %d ", barid), 2)
-	}
-
-	if pdi, err := pdr.PDI(); err == nil {
-		for _, x := range pdi {
+	if pdi, err := pdiIE.PDI(); err == nil {
+		for _, x := range append(append([]*ie.IE{pdi.SourceInterface, pdi.LocalFTEID, pdi.NetworkInstance}, pdi.UEIPAddress...), pdi.SDFFilter...) {
+			if x == nil {
+				continue
+			}
 			switch x.Type {
 			case 20: // IE Type source interface
 				srcInterface, _ := x.SourceInterface()

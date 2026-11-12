@@ -3,7 +3,7 @@ package core
 import (
 	"net"
 
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 // FarHeaderFields is the profile-agnostic result of parsing an Outer Header
@@ -137,7 +137,11 @@ func (DefaultProfile) ParseSubscriberData(ieArr []*ie.IE) (imsi, msisdn string) 
 }
 
 func (DefaultProfile) ParseQFI(qer *ie.IE) (uint8, bool) {
-	qfi, err := qer.QFI()
+	qfiIE, _, err := qerQFI(qer)
+	if err != nil {
+		return 0, false
+	}
+	qfi, err := qfiIE.QFI()
 	if err != nil {
 		return 0, false
 	}
@@ -228,13 +232,36 @@ func (h HuaweiProfile) ParseSubscriberData(ieArr []*ie.IE) (imsi, msisdn string)
 }
 
 func (h HuaweiProfile) ParseQFI(qer *ie.IE) (uint8, bool) {
-	if qfi, err := qer.QFI(); err == nil {
+	qfiIE, extensions, err := qerQFI(qer)
+	if err != nil {
+		return 0, false
+	}
+	if qfi, err := qfiIE.QFI(); err == nil {
 		return qfi, true
 	}
-	if qfiId := findEnterpriseSpecificIEindex(qer.ChildIEs, 32785, 2011); qfiId != -1 {
-		return qer.ChildIEs[qfiId].Payload[0], true
+	if index := findEnterpriseSpecificIEindex(extensions, 32785, 2011); index != -1 && len(extensions[index].Payload) > 0 {
+		return extensions[index].Payload[0], true
 	}
 	return 0, false
+}
+
+func qerQFI(qer *ie.IE) (*ie.IE, []*ie.IE, error) {
+	switch qer.Type {
+	case ie.CreateQER:
+		f, err := qer.CreateQER()
+		if err != nil {
+			return nil, nil, err
+		}
+		return f.QoSFlowIdentifier, f.OtherIEs, nil
+	case ie.UpdateQER:
+		f, err := qer.UpdateQER()
+		if err != nil {
+			return nil, nil, err
+		}
+		return f.QoSFlowIdentifier, f.OtherIEs, nil
+	default:
+		return nil, nil, &ie.InvalidTypeError{Type: qer.Type}
+	}
 }
 
 func (h HuaweiProfile) NodeID(nodeID string) *ie.IE {

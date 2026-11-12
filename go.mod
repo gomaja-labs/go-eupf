@@ -8,6 +8,7 @@ require (
 	github.com/gin-contrib/cors v1.7.9
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-resty/resty/v2 v2.17.2
+	github.com/gomaja-labs/go-pfcp v0.0.0-20261112034300-97644dfd6452
 	github.com/google/wire v0.7.0
 	github.com/gopacket/gopacket v1.7.7
 	github.com/jedib0t/go-pretty/v6 v6.8.3
@@ -21,7 +22,6 @@ require (
 	github.com/swaggo/files v1.0.1
 	github.com/swaggo/gin-swagger v1.6.1
 	github.com/swaggo/swag v1.16.6
-	github.com/wmnsk/go-pfcp v0.0.24
 	golang.org/x/sys v0.50.0
 )
 

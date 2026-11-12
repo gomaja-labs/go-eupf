@@ -6,9 +6,9 @@ package core
 import (
 	"net"
 
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
 )
 
 func HandlePfcpHeartbeatRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
@@ -50,7 +50,7 @@ func HandlePfcpHeartbeatResponse(conn *PfcpConnection, msg message.Message, addr
 }
 
 func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) {
-	hbreq := message.NewHeartbeatRequest(sequenceID, ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp), nil, conn.profile.HeartbeatRequestAdditionalIEs()...)
+	hbreq := message.NewHeartbeatRequest(sequenceID, append([]*ie.IE{ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)}, conn.profile.HeartbeatRequestAdditionalIEs()...)...)
 	log.Debug().Msgf("Sent Heartbeat Request to: %s", associationAddr)
 	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
 	if err == nil {

@@ -18,10 +18,10 @@ import (
 
 	"slices"
 
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
 )
 
 var errMandatoryIeMissing = fmt.Errorf("mandatory IE missing")
@@ -32,21 +32,21 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	req := msg.(*message.SessionEstablishmentRequest)
 	log.Debug().Msgf("Got Session Establishment Request from: %s.", addr)
 
-	imsi, msisdn := conn.profile.ParseSubscriberData(req.IEs)
+	imsi, msisdn := conn.profile.ParseSubscriberData(req.OtherIEs)
 	isTraced := conn.NeedSessionTrace(imsi, msisdn)
 
 	remoteSEID, err := validateRequest(req.NodeID, req.CPFSEID)
 	if err != nil {
 		log.Warn().Msgf("Rejecting Session Establishment Request from: %s (missing NodeID or F-SEID)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		return message.NewSessionEstablishmentResponse(0, 0, 0, req.Sequence(), 0, conn.profile.NodeID(conn.nodeId), convertErrorToIeCause(err)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), convertErrorToIeCause(err)), isTraced, nil
 	}
 
 	association, ok := conn.NodeAssociations[addr]
 	if !ok {
 		log.Warn().Msgf("Rejecting Session Establishment Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
-		return message.NewSessionEstablishmentResponse(0, 0, 0, req.Sequence(), 0, conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), isTraced, nil
 	}
 
 	localSEID := association.NewLocalSEID()
@@ -70,7 +70,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Establishment Request: (error in applying IEs): %s", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionEstablishmentResponse(0, 0, remoteSEID.SEID, req.Sequence(), 0, conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
 	}
 
 	logger.Debug().Msgf("session rules before commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
@@ -78,7 +78,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Establishment Request from %s failed, rolling back", addr)
 		logger.Debug().Msgf("session rules after failed commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
-		return message.NewSessionEstablishmentResponse(0, 0, remoteSEID.SEID, req.Sequence(), 0, conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRuleCreationModificationFailure)), isTraced, nil
 	}
 
 	logger.Debug().Msgf("session rules arter commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
@@ -103,11 +103,11 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	additionalIEs = append(additionalIEs, pdrIEs...)
 
 	// Send SessionEstablishmentResponse
-	estResp := message.NewSessionEstablishmentResponse(0, 0, remoteSEID.SEID, req.Sequence(), 0, additionalIEs...)
+	estResp := message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), additionalIEs...)
 
 	if extraIEs := conn.profile.SessionEstablishmentResponseAdditionalIEs(localSEID, cloneIP(conn.nodeAddrV4.Addr().AsSlice())); len(extraIEs) > 0 {
-		estResp.IEs = append(estResp.IEs, extraIEs...)
-		estResp.SetLength()
+		estResp.OtherIEs = append(estResp.OtherIEs, extraIEs...)
+
 	}
 
 	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
@@ -124,7 +124,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	if !ok {
 		log.Warn().Msgf("Rejecting Session Deletion Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
-		return message.NewSessionDeletionResponse(0, 0, 0, req.Sequence(), 0, ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
+		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
 	}
 	printSessionDeleteRequest(req)
 
@@ -132,7 +132,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	if !ok {
 		log.Warn().Msgf("Rejecting Session Deletion Request from: %s (unknown SEID)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseSessionContextNotFound)).Inc()
-		return message.NewSessionDeletionResponse(0, 0, 0, req.Sequence(), 0, ie.NewCause(ie.CauseSessionContextNotFound)), false, nil
+		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseSessionContextNotFound)), false, nil
 	}
 
 	logger := log.With().
@@ -150,13 +150,13 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	if err != nil {
 		logger.Warn().Msgf("Session Deletion Request from %s failed, rolling back", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionDeletionResponse(0, 0, 0, req.Sequence(), 0, ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, err
+		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, err
 	}
 
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Deletion Request from %s failed, rolling back", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionDeletionResponse(0, 0, 0, req.Sequence(), 0, ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, err
+		return message.NewSessionDeletionResponse(0, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, err
 	}
 
 	additionalIEs := []*ie.IE{
@@ -172,7 +172,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	conn.ReleaseResources(req.SEID())
 
 	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
-	delResp := message.NewSessionDeletionResponse(0, 0, session.RemoteSEID, req.Sequence(), 0, additionalIEs...)
+	delResp := message.NewSessionDeletionResponse(session.RemoteSEID, req.Sequence(), additionalIEs...)
 
 	return delResp, traced, nil
 }
@@ -186,7 +186,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if !ok {
 		log.Warn().Msgf("Rejecting Session Modification Request from: %s (no association)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
-		return message.NewSessionModificationResponse(0, 0, req.SEID(), req.Sequence(), 0, ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
+		return message.NewSessionModificationResponse(req.SEID(), req.Sequence(), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), false, nil
 	}
 
 	log.Debug().Msgf("Finding session %d", req.SEID())
@@ -194,7 +194,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if !ok {
 		log.Warn().Msgf("Rejecting Session Modification Request from: %s (unknown SEID)", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseSessionContextNotFound)).Inc()
-		return message.NewSessionModificationResponse(0, 0, 0, req.Sequence(), 0, ie.NewCause(ie.CauseSessionContextNotFound)), false, nil
+		return message.NewSessionModificationResponse(0, req.Sequence(), ie.NewCause(ie.CauseSessionContextNotFound)), false, nil
 	}
 
 	logger := log.With().
@@ -227,13 +227,13 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionModificationResponse(0, 0, session.RemoteSEID, req.Sequence(), 0, ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
+		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
 	}
 
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		return message.NewSessionModificationResponse(0, 0, session.RemoteSEID, req.Sequence(), 0, ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
+		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseRuleCreationModificationFailure)), traced, nil
 	}
 
 	association.Sessions[req.SEID()] = session
@@ -255,7 +255,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	}
 
 	// Send SessionEstablishmentResponse
-	modResp := message.NewSessionModificationResponse(0, 0, session.RemoteSEID, req.Sequence(), 0, additionalIEs...)
+	modResp := message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), additionalIEs...)
 	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
 
 	return modResp, traced, nil
@@ -382,14 +382,14 @@ func validateRequest(nodeId *ie.IE, cpfseid *ie.IE) (fseid *ie.FSEIDFields, err 
 	return fseid, nil
 }
 
-func findIEindex(ieArr []*ie.IE, ieType uint16) int {
+func findIEindex(ieArr []*ie.IE, ieType ie.IEType) int {
 	arrIndex := slices.IndexFunc(ieArr, func(ie *ie.IE) bool {
 		return ie.Type == ieType
 	})
 	return arrIndex
 }
 
-func findEnterpriseSpecificIEindex(ieArr []*ie.IE, ieType uint16, ieEnterpriseID uint16) int {
+func findEnterpriseSpecificIEindex(ieArr []*ie.IE, ieType ie.IEType, ieEnterpriseID uint16) int {
 	arrIndex := slices.IndexFunc(ieArr, func(ie *ie.IE) bool {
 		return ie.Type == ieType && ie.EnterpriseID == ieEnterpriseID
 	})
@@ -442,64 +442,99 @@ func cloneIP(ip net.IP) net.IP {
 }
 
 func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf.FarInfo, error) {
-	if applyAction, err := far.ApplyAction(); err == nil {
-		farInfo.Action = applyAction[0]
-	}
-	var forward []*ie.IE
-	var err error
+	var action, outer, marking *ie.IE
 	switch far.Type {
 	case ie.CreateFAR:
-		forward, err = far.ForwardingParameters()
-	case ie.UpdateFAR:
-		forward, err = far.UpdateForwardingParameters()
-	default:
-		return ebpf.FarInfo{}, fmt.Errorf("unsupported IE type")
-	}
-
-	if err == nil {
-		outerHeaderCreationIndex := findIEindex(forward, 84) // IE Type Outer Header Creation
-		if outerHeaderCreationIndex == -1 {
-			log.Debug().Msg("No OuterHeaderCreation")
-		} else {
-			fields, err := profile.ParseOuterHeaderCreation(forward[outerHeaderCreationIndex])
+		f, err := far.CreateFAR()
+		if err != nil {
+			return farInfo, err
+		}
+		action = f.ApplyAction
+		if f.ForwardingParameters != nil {
+			forward, err := f.ForwardingParameters.ForwardingParameters()
 			if err != nil {
-				log.Error().Msgf("Error creating OuterHeaderCreation: %s", err.Error())
-				return ebpf.FarInfo{}, err
+				return farInfo, err
 			}
-
-			farInfo.OuterHeaderCreation = fields.OuterHeaderCreation
-			farInfo.Teid = fields.Teid
-			if fields.IPv4Address != nil {
-				farInfo.RemoteIP = binary.LittleEndian.Uint32(fields.IPv4Address)
+			outer, marking = forward.OuterHeaderCreation, forward.TransportLevelMarking
+		}
+	case ie.UpdateFAR:
+		f, err := far.UpdateFAR()
+		if err != nil {
+			return farInfo, err
+		}
+		action = f.ApplyAction
+		if f.UpdateForwardingParameters != nil {
+			forward, err := f.UpdateForwardingParameters.UpdateForwardingParameters()
+			if err != nil {
+				return farInfo, err
 			}
-			if fields.IPv6Address != nil {
-				log.Warn().Msg("IPv6 not supported yet, ignoring")
-				return ebpf.FarInfo{}, fmt.Errorf("IPv6 not supported yet")
-			}
+			outer, marking = forward.OuterHeaderCreation, forward.TransportLevelMarking
+		}
+	default:
+		return farInfo, &ie.InvalidTypeError{Type: far.Type}
+	}
+	if action != nil {
+		flags, err := action.ApplyAction()
+		if err != nil {
+			return farInfo, err
+		}
+		farInfo.Action = flags[0]
+	}
+	if outer != nil {
+		fields, err := profile.ParseOuterHeaderCreation(outer)
+		if err != nil {
+			return farInfo, err
+		}
+		farInfo.OuterHeaderCreation, farInfo.Teid = fields.OuterHeaderCreation, fields.Teid
+		if fields.IPv4Address != nil {
+			farInfo.RemoteIP = binary.LittleEndian.Uint32(fields.IPv4Address)
+		}
+		if fields.IPv6Address != nil {
+			return farInfo, fmt.Errorf("IPv6 not supported yet")
 		}
 	}
-
-	if transportLevelMarking, err := GetTransportLevelMarking(far); err == nil {
-		farInfo.TransportLevelMarking = transportLevelMarking
+	if marking != nil {
+		value, err := marking.TransportLevelMarking()
+		if err != nil {
+			return farInfo, err
+		}
+		farInfo.TransportLevelMarking = binary.BigEndian.Uint16(value)
 	}
 	return farInfo, nil
 }
 
 func updateQer(qerInfo *ebpf.QerInfo, qer *ie.IE, profile PfcpProfile) {
 
-	gateStatusDL, err := qer.GateStatusDL()
+	var gate, mbr *ie.IE
+	switch qer.Type {
+	case ie.CreateQER:
+		f, err := qer.CreateQER()
+		if err != nil {
+			return
+		}
+		gate, mbr = f.GateStatus, f.MaximumBitrate
+	case ie.UpdateQER:
+		f, err := qer.UpdateQER()
+		if err != nil {
+			return
+		}
+		gate, mbr = f.GateStatus, f.MaximumBitrate
+	default:
+		return
+	}
+	gateStatusDL, err := gate.GateStatusDL()
 	if err == nil {
 		qerInfo.GateStatusDL = gateStatusDL
 	}
-	gateStatusUL, err := qer.GateStatusUL()
+	gateStatusUL, err := gate.GateStatusUL()
 	if err == nil {
 		qerInfo.GateStatusUL = gateStatusUL
 	}
-	maxBitrateDL, err := qer.MBRDL()
+	maxBitrateDL, err := mbr.MBRDL()
 	if err == nil {
 		qerInfo.MaxBitrateDL = maxBitrateDL * 1000
 	}
-	maxBitrateUL, err := qer.MBRUL()
+	maxBitrateUL, err := mbr.MBRUL()
 	if err == nil {
 		qerInfo.MaxBitrateUL = maxBitrateUL * 1000
 	}
@@ -511,30 +546,68 @@ func updateQer(qerInfo *ebpf.QerInfo, qer *ie.IE, profile PfcpProfile) {
 }
 
 func GetTransportLevelMarking(far *ie.IE) (uint16, error) {
-	for _, informationalElement := range far.ChildIEs {
-		if informationalElement.Type == ie.TransportLevelMarking {
-			return informationalElement.TransportLevelMarking()
+	switch far.Type {
+	case ie.CreateFAR:
+		f, err := far.CreateFAR()
+		if err != nil {
+			return 0, err
 		}
+		forward, err := f.ForwardingParameters.ForwardingParameters()
+		if err != nil {
+			return 0, err
+		}
+		value, err := forward.TransportLevelMarking.TransportLevelMarking()
+		if err != nil {
+			return 0, err
+		}
+		return binary.BigEndian.Uint16(value), nil
+	case ie.UpdateFAR:
+		f, err := far.UpdateFAR()
+		if err != nil {
+			return 0, err
+		}
+		forward, err := f.UpdateForwardingParameters.UpdateForwardingParameters()
+		if err != nil {
+			return 0, err
+		}
+		value, err := forward.TransportLevelMarking.TransportLevelMarking()
+		if err != nil {
+			return 0, err
+		}
+		return binary.BigEndian.Uint16(value), nil
+	default:
+		return 0, &ie.InvalidTypeError{Type: far.Type}
 	}
-	return 0, fmt.Errorf("no TransportLevelMarking found")
 }
 
 func updateUrr(urrInfo *ebpf.UrrInfo, urr *ie.IE) {
-
-	if urr.HasVOLUM() {
-		if volumeThreshold, err := urr.VolumeThreshold(); err == nil {
-			if volumeThreshold.HasTOVOL() {
-				urrInfo.VolumeThreshold = volumeThreshold.TotalVolume
-			}
+	var method, volume, duration *ie.IE
+	switch urr.Type {
+	case ie.CreateURR:
+		f, err := urr.CreateURR()
+		if err != nil {
+			return
+		}
+		method, volume, duration = f.MeasurementMethod, f.VolumeThreshold, f.TimeThreshold
+	case ie.UpdateURR:
+		f, err := urr.UpdateURR()
+		if err != nil {
+			return
+		}
+		method, volume, duration = f.MeasurementMethod, f.VolumeThreshold, f.TimeThreshold
+	default:
+		return
+	}
+	if method.HasVOLUM() {
+		if threshold, err := volume.VolumeThreshold(); err == nil && threshold.HasTOVOL() {
+			urrInfo.VolumeThreshold = threshold.TotalVolume
 		}
 	}
-
-	if urr.HasDURAT() {
-		if timeThreshold, err := urr.TimeThreshold(); err == nil {
-			urrInfo.TimeThreshold = timeThreshold.Seconds()
+	if method.HasDURAT() {
+		if threshold, err := duration.TimeThreshold(); err == nil {
+			urrInfo.TimeThreshold = threshold.Seconds()
 		}
 	}
-
 }
 
 func HandlePfcpSessionReportResponse(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
@@ -570,7 +643,7 @@ func processEstablishmentRequestRules(
 		return err
 	}
 
-	imsi, msisdn := conn.profile.ParseSubscriberData(req.IEs)
+	imsi, msisdn := conn.profile.ParseSubscriberData(req.OtherIEs)
 	isTraced := conn.NeedSessionTrace(imsi, msisdn)
 
 	err = createPDRs(req.CreatePDR, session, operationPool, logger, isTraced, conn, pdrContext, createdPDRs)
@@ -764,7 +837,7 @@ func processModificationRequestRules(
 	}
 
 	// obtain tracing flag from storage by IMSI or MSISDN
-	imsi, msisdn := conn.profile.ParseSubscriberData(req.IEs)
+	imsi, msisdn := conn.profile.ParseSubscriberData(req.OtherIEs)
 	isTraced := conn.NeedSessionTrace(imsi, msisdn)
 
 	err = createPDRs(req.CreatePDR, session, operationPool, logger, isTraced, conn, pdrContext, createdPDRs)
@@ -792,13 +865,17 @@ func createFARs(
 	profile PfcpProfile,
 ) error {
 	for _, far := range FARs {
+		fields, decodeErr := far.CreateFAR()
+		if decodeErr != nil {
+			return decodeErr
+		}
 		farInfo, err := composeFarInfo(far, ebpf.FarInfo{}, profile)
 		if err != nil {
 			logger.Warn().Msgf("Error extracting FAR info: %s", err.Error())
 			continue
 		}
 
-		farID, _ := far.FARID()
+		farID, _ := fields.FARID.FARID()
 		logger.Info().Msgf("Saving FAR info to session: %d, %+v", farID, farInfo)
 
 		var created bool
@@ -847,7 +924,11 @@ func createQERs(
 	profile PfcpProfile,
 ) error {
 	for _, qer := range QERs {
-		qerID, err := qer.QERID()
+		fields, decodeErr := qer.CreateQER()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		qerID, err := fields.QERID.QERID()
 		if err != nil {
 			return err
 		}
@@ -900,7 +981,11 @@ func createURRs(
 	logger zerolog.Logger,
 ) error {
 	for _, urr := range URRs {
-		urrID, err := urr.URRID()
+		fields, decodeErr := urr.CreateURR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		urrID, err := fields.URRID.URRID()
 		if err != nil {
 			return err
 		}
@@ -963,24 +1048,21 @@ func createPDRs(
 	sdfFilters := make([]ebpf.SdfFilter, 0, len(PDRs))
 
 	for _, pdr := range PDRs {
-		pdi, err := pdr.PDI()
+		fields, decodeErr := pdr.CreatePDR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		pdi, err := fields.PDI.PDI()
 		if err != nil {
 			continue
 		}
 
-		for _, x := range pdi {
-			ne, err := x.NetworkInstance()
-			if err != nil {
-				continue
-			}
-
-			if !conn.ValidateNetworkInstance(ne) {
-				return errNotAllowedNetworkInstance
-			}
+		if ne, err := pdi.NetworkInstance.NetworkInstance(); err == nil && !conn.ValidateNetworkInstance(ne) {
+			return errNotAllowedNetworkInstance
 		}
 
 		// PDR should be created last, because we need to reference FARs and QERs global id
-		pdrID, err := pdr.PDRID()
+		pdrID, err := fields.PDRID.PDRID()
 		if err != nil {
 			continue
 		}
@@ -1050,7 +1132,11 @@ func updateFARs(
 	profile PfcpProfile,
 ) error {
 	for _, far := range FARs {
-		farID, err := far.FARID()
+		fields, decodeErr := far.UpdateFAR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		farID, err := fields.FARID.FARID()
 		if err != nil {
 			return err
 		}
@@ -1094,7 +1180,11 @@ func updateQERs(
 	profile PfcpProfile,
 ) error {
 	for _, qer := range QERs {
-		qerID, err := qer.QERID()
+		fields, decodeErr := qer.UpdateQER()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		qerID, err := fields.QERID.QERID()
 		if err != nil {
 			logger.Warn().Msgf("Can't get QER ID: %s", err.Error())
 			return err
@@ -1133,7 +1223,11 @@ func updateURRs(
 	profile PfcpProfile,
 ) error {
 	for _, urr := range URRs {
-		urrID, err := urr.URRID()
+		fields, decodeErr := urr.UpdateURR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		urrID, err := fields.URRID.URRID()
 		if err != nil {
 			logger.Warn().Msgf("Can't get URR ID: %s", err.Error())
 			return err
@@ -1179,7 +1273,11 @@ func updatePDRs(
 	sdfFilters := make([]ebpf.SdfFilter, 0, len(PDRs))
 
 	for _, pdr := range PDRs {
-		pdrID, err := pdr.PDRID()
+		fields, decodeErr := pdr.UpdatePDR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		pdrID, err := fields.PDRID.PDRID()
 		if err != nil {
 			return err
 		}
@@ -1268,7 +1366,11 @@ func removeFARs(
 	logger zerolog.Logger,
 ) error {
 	for _, far := range FARs {
-		farID, _ := far.FARID()
+		fields, decodeErr := far.RemoveFAR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		farID, _ := fields.FARID.FARID()
 		logger.Info().Msgf("Removing FAR: %d", farID)
 		oldFar, err := session.RemoveFar(farID)
 		if err != nil {
@@ -1302,7 +1404,11 @@ func removeQERs(
 	logger zerolog.Logger,
 ) error {
 	for _, qer := range QERs {
-		qerID, _ := qer.QERID()
+		fields, decodeErr := qer.RemoveQER()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		qerID, _ := fields.QERID.QERID()
 		logger.Debug().Msgf("Removing QER: %d", qerID)
 		oldQer, err := session.RemoveQer(qerID)
 		if err != nil {
@@ -1337,7 +1443,11 @@ func removeURRs(
 	profile PfcpProfile,
 ) error {
 	for _, urr := range URRs {
-		urrID, _ := urr.URRID()
+		fields, decodeErr := urr.RemoveURR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		urrID, _ := fields.URRID.URRID()
 		logger.Debug().Msgf("Removing URR: %d", urrID)
 		oldUrr, err := session.RemoveUrr(urrID)
 		if err != nil {
@@ -1397,7 +1507,11 @@ func removePDRs(
 	pdrContext *PDRCreationContext,
 ) error {
 	for _, pdr := range PDRs {
-		pdrID, _ := pdr.PDRID()
+		fields, decodeErr := pdr.RemovePDR()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		pdrID, _ := fields.PDRID.PDRID()
 		pdrKey := uint32(pdrID)
 
 		oldPdr, err := session.RemovePDR(pdrKey)

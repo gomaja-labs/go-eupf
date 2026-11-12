@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 func TestPDRCreationContext_extractPDR(t *testing.T) {
@@ -40,7 +40,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
 						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
-						ie.NewSDFFilter("", "ttc", "", "", 0),
+						ie.NewSDFFilter("", []byte("ttc"), nil, nil, 0),
 					),
 				),
 				spdrInfo: &SPDRInfo{},
@@ -60,7 +60,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
 						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
-						ie.NewSDFFilter("", "", "", "", 4096),
+						ie.NewSDFFilter("", nil, nil, nil, 4096),
 					),
 				),
 				spdrInfo: &SPDRInfo{},
@@ -80,7 +80,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
 						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
-						ie.NewSDFFilter("123", "", "", "", 4096),
+						ie.NewSDFFilter("123", nil, nil, nil, 4096),
 					),
 				),
 				spdrInfo: &SPDRInfo{},
@@ -100,7 +100,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
 						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
-						ie.NewSDFFilter("permit out ip from 10.62.0.1 to 8.8.8.8/32", "", "", "", 0),
+						ie.NewSDFFilter("permit out ip from 10.62.0.1 to 8.8.8.8/32", nil, nil, nil, 0),
 					),
 				),
 				spdrInfo: &SPDRInfo{},

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 func TestBuildSessionReportUsageIEs(t *testing.T) {
@@ -29,20 +29,21 @@ func TestBuildSessionReportUsageIEs(t *testing.T) {
 			if ies[1].Type != ie.UsageReportWithinSessionReportRequest {
 				t.Errorf("expected UsageReport, got %d", ies[1].Type)
 			}
-			// UsageReport is a grouped IE — check children
-			childIEs := ies[1].ChildIEs
-			// Find URSEQN
-			var urseqnVal uint32
+			fields, err := ies[1].UsageReportWithinSessionReportRequest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			urseqnVal, err := fields.URSEQN.URSEQN()
+			if err != nil {
+				t.Fatal(err)
+			}
 			vendorCount := 0
-			for _, c := range childIEs {
-				if c.Type == ie.URSEQN {
-					v, _ := c.URSEQN()
-					urseqnVal = v
-				}
-				if c.EnterpriseID == 2011 {
+			for _, child := range fields.OtherIEs {
+				if child.EnterpriseID == 2011 {
 					vendorCount++
 				}
 			}
+
 			if urseqnVal != tt.wantURSEQNVal {
 				t.Errorf("URSEQN: expected %d, got %d", tt.wantURSEQNVal, urseqnVal)
 			}
@@ -71,18 +72,21 @@ func TestBuildSessionReportADCIEs(t *testing.T) {
 			if len(ies) != 2 {
 				t.Fatalf("expected 2 top-level IEs, got %d", len(ies))
 			}
-			childIEs := ies[1].ChildIEs
-			var urseqnVal uint32
+			fields, err := ies[1].UsageReportWithinSessionReportRequest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			urseqnVal, err := fields.URSEQN.URSEQN()
+			if err != nil {
+				t.Fatal(err)
+			}
 			vendorCount := 0
-			for _, c := range childIEs {
-				if c.Type == ie.URSEQN {
-					v, _ := c.URSEQN()
-					urseqnVal = v
-				}
-				if c.EnterpriseID == 2011 {
+			for _, child := range fields.OtherIEs {
+				if child.EnterpriseID == 2011 {
 					vendorCount++
 				}
 			}
+
 			if urseqnVal != tt.wantURSEQNVal {
 				t.Errorf("URSEQN: expected %d, got %d", tt.wantURSEQNVal, urseqnVal)
 			}
@@ -178,7 +182,7 @@ func TestBuildSxaSetupRequestIEs(t *testing.T) {
 			if ies[0].Type != ie.NodeID {
 				t.Errorf("expected NodeID, got %d", ies[0].Type)
 			}
-			vendorTypes := []uint16{32787, 32803, 32806, 32857, 32900, 32901}
+			vendorTypes := []ie.IEType{32787, 32803, 32806, 32857, 32900, 32901}
 			vendorCount := 0
 			for _, item := range ies {
 				if item.EnterpriseID == 2011 {

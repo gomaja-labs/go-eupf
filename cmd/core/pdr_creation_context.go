@@ -12,8 +12,8 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
 )
 
 type PDRCreationContext struct {
@@ -31,73 +31,102 @@ func NewPDRCreationContext(session *Session, resourceManager *service.ResourceMa
 }
 
 func GetURRIDs(i *ie.IE) ([]uint32, error) {
-
-	var urrs []uint32
-
+	var children []*ie.IE
 	switch i.Type {
 	case ie.CreatePDR:
-		ies, err := i.CreatePDR()
+		f, err := i.CreatePDR()
 		if err != nil {
-			return urrs, err
+			return nil, err
 		}
-		for _, x := range ies {
-			if x.Type == ie.URRID {
-				if value, err := x.URRID(); err == nil {
-					urrs = append(urrs, value)
-				}
-			}
-		}
-		return urrs, nil
-
+		children = f.URRID
 	case ie.UpdatePDR:
-		ies, err := i.UpdatePDR()
+		f, err := i.UpdatePDR()
 		if err != nil {
-			return urrs, err
+			return nil, err
 		}
-		for _, x := range ies {
-			if x.Type == ie.URRID {
-				if value, err := x.URRID(); err == nil {
-					urrs = append(urrs, value)
-				}
-			}
-		}
-		return urrs, nil
+		children = f.URRID
 	default:
-		return urrs, &ie.InvalidTypeError{Type: i.Type}
+		return nil, &ie.InvalidTypeError{Type: i.Type}
 	}
+	var ids []uint32
+	for _, child := range children {
+		// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2: a null URR ID removes the list.
+		if len(child.Payload) == 0 && len(child.ChildIEs) == 0 {
+			continue
+		}
+		id, err := child.URRID()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo) error {
-	if ruleName, err := pdr.ActivatePredefinedRules(); err == nil {
-		log.Debug().Msgf("find activate pcc rule with name: %s", ruleName)
-
-		if spdrInfo.PCCInfo == nil {
-			spdrInfo.PCCInfo = &PCCInfo{
-				PCCName: ruleName,
+	var activate, deactivate, qerIDs []*ie.IE
+	var removal, farID, pdiIE *ie.IE
+	var removeURRs bool
+	switch pdr.Type {
+	case ie.CreatePDR:
+		f, err := pdr.CreatePDR()
+		if err != nil {
+			return err
+		}
+		activate, qerIDs, removal, farID, pdiIE = f.ActivatePredefinedRules, f.QERID, f.OuterHeaderRemoval, f.FARID, f.PDI
+	case ie.UpdatePDR:
+		f, err := pdr.UpdatePDR()
+		if err != nil {
+			return err
+		}
+		activate, deactivate, qerIDs, removal, farID, pdiIE = f.ActivatePredefinedRules, f.DeactivatePredefinedRules, f.QERID, f.OuterHeaderRemoval, f.FARID, f.PDI
+		for _, id := range f.URRID {
+			if len(id.Payload) == 0 && len(id.ChildIEs) == 0 {
+				removeURRs = true
 			}
-		} else {
-			spdrInfo.PCCInfo.PCCName = ruleName
 		}
+	default:
+		return &ie.InvalidTypeError{Type: pdr.Type}
 	}
+	if removeURRs {
+		spdrInfo.PdrInfo.Urr1Id, spdrInfo.PdrInfo.Urr2Id = 0, 0
+	}
+	for _, rule := range activate {
+		if ruleName, err := rule.ActivatePredefinedRules(); err == nil {
+			log.Debug().Msgf("find activate pcc rule with name: %s", ruleName)
 
-	if ruleName, err := pdr.DeactivatePredefinedRules(); err == nil {
-		log.Debug().Msgf("find deactivate pcc rule with name: %s", ruleName)
-
-		if spdrInfo.PCCInfo != nil && spdrInfo.PCCInfo.PCCName == ruleName {
-			spdrInfo.PCCInfo = nil
+			if spdrInfo.PCCInfo == nil {
+				spdrInfo.PCCInfo = &PCCInfo{
+					PCCName: ruleName,
+				}
+			} else {
+				spdrInfo.PCCInfo.PCCName = ruleName
+			}
 		}
-	}
 
-	if outerHeaderRemoval, err := pdr.OuterHeaderRemovalDescription(); err == nil {
+	}
+	for _, rule := range deactivate {
+		if ruleName, err := rule.DeactivatePredefinedRules(); err == nil {
+			log.Debug().Msgf("find deactivate pcc rule with name: %s", ruleName)
+
+			if spdrInfo.PCCInfo != nil && spdrInfo.PCCInfo.PCCName == ruleName {
+				spdrInfo.PCCInfo = nil
+			}
+		}
+
+	}
+	if outerHeaderRemoval, err := removal.OuterHeaderRemovalDescription(); err == nil {
 		spdrInfo.PdrInfo.OuterHeaderRemoval = outerHeaderRemoval
 	}
-	if farid, err := pdr.FARID(); err == nil {
+	if farid, err := farID.FARID(); err == nil {
 		spdrInfo.PdrInfo.FarId = pdrContext.getFARID(farid)
 	}
-	if qerid, err := pdr.QERID(); err == nil {
-		spdrInfo.PdrInfo.QerId = pdrContext.getQERID(qerid)
-	}
+	for _, id := range qerIDs {
+		if qerid, err := id.QERID(); err == nil {
+			spdrInfo.PdrInfo.QerId = pdrContext.getQERID(qerid)
+		}
 
+	}
 	if urrs, err := GetURRIDs(pdr); err == nil {
 		if len(urrs) > 0 {
 			spdrInfo.PdrInfo.Urr1Id = pdrContext.getURRID(urrs[0])
@@ -108,22 +137,22 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		}
 	}
 
-	pdi, err := pdr.PDI()
+	pdi, err := pdiIE.PDI()
 	if err != nil {
 		//return fmt.Errorf("PDI IE is missing")
 		return nil
 	}
 
-	if ne, err := pdr.NetworkInstance(); err == nil {
+	if ne, err := pdi.NetworkInstance.NetworkInstance(); err == nil {
 		spdrInfo.NetworkInstance = ne
 	}
 
-	if sourceInterface, err := pdr.SourceInterface(); err == nil {
+	if sourceInterface, err := pdi.SourceInterface.SourceInterface(); err == nil {
 		spdrInfo.SourceInterface = sourceInterface
 	}
 
-	for _, x := range pdi {
-		if x.Type == ie.SDFFilter {
+	for _, x := range pdi.SDFFilter {
+		{
 			if sdfFilter, err := x.SDFFilter(); err == nil {
 				if sdfFilter.FlowDescription == "" {
 					log.Warn().Msgf("SDFFilter is empty")
@@ -140,8 +169,8 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		}
 	}
 
-	if teidPdiId := findIEindex(pdi, ie.FTEID); teidPdiId != -1 { // IE Type F-TEID
-		fteid, err := pdi[teidPdiId].FTEID()
+	if pdi.LocalFTEID != nil {
+		fteid, err := pdi.LocalFTEID.FTEID()
 		if err != nil {
 			return fmt.Errorf("F-TEID IE is missing")
 		}
@@ -172,8 +201,8 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		return nil
 	}
 
-	if ueipPdiId := findIEindex(pdi, ie.UEIPAddress); ueipPdiId != -1 {
-		ueIP, err := pdi[ueipPdiId].UEIPAddress()
+	for _, address := range pdi.UEIPAddress {
+		ueIP, err := address.UEIPAddress()
 		if err != nil {
 			return fmt.Errorf("UE IP Address IE is missing")
 		}

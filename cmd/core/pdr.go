@@ -8,8 +8,8 @@ import (
 	"net"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/rs/zerolog/log"
-	"github.com/wmnsk/go-pfcp/ie"
 )
 
 const flagPresentIPv4 = 2

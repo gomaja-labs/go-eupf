@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 type MapOperationsMock struct {
@@ -117,7 +117,7 @@ func TestSessionOverwrite(t *testing.T) {
 		profile:          DefaultProfile{},
 	}
 	asReq := message.NewAssociationSetupRequest(0,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 	remoteIP := "127.0.0.1"
@@ -137,8 +137,8 @@ func TestSessionOverwrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error getting node ID from association setup response: %s", err)
 	}
-	if nodeId != "test-node" {
-		t.Errorf("Unexpected node ID in association setup response: %s", nodeId)
+	if nodeIDText(nodeId) != "test-node" {
+		t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 	}
 	if _, ok := pfcpConn.NodeAssociations[remoteIP]; !ok {
 		t.Errorf("Association not created")
@@ -146,29 +146,27 @@ func TestSessionOverwrite(t *testing.T) {
 
 	// Create two send two Session Establishment Requests with downlink PDRs
 	// and check that the first session is not overwritten
-	seReq1 := message.NewSessionEstablishmentRequest(0, 0,
-		1, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq1 := message.NewSessionEstablishmentRequest(1, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(remoteIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				//ie.NewFTEID(0, 0, ip1.IP, nil, 0),
+				//ie.NewFTEID(1, 0, ip1.IP, nil, 0),
 				ie.NewUEIPAddress(2, "1.1.1.1", "", 0, 0),
 			),
 		),
 	)
 
-	seReq2 := message.NewSessionEstablishmentRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq2 := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(remoteIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				//ie.NewFTEID(0, 0, ip2.IP, nil, 0),
+				//ie.NewFTEID(1, 0, ip2.IP, nil, 0),
 				ie.NewUEIPAddress(2, "2.2.2.2", "", 0, 0),
 			),
 		),
@@ -195,9 +193,8 @@ func TestSessionOverwrite(t *testing.T) {
 	}
 
 	// Send Session Modification Request, create FAR
-	smReq := message.NewSessionModificationRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	smReq := message.NewSessionModificationRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(remoteIP), nil),
 		ie.NewCreateFAR(
 			ie.NewFARID(1),

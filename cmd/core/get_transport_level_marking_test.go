@@ -4,15 +4,15 @@
 package core
 
 import (
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"testing"
 )
 
 func TestGetTransportLevelMarking(t *testing.T) {
-	// Create CreateFAR_IE with TransportLevelMarking
+	// TS 29.244 V20.1.0 Table 7.5.2.3-2: marking belongs inside Forwarding Parameters.
 	CreateFAR := ie.NewCreateFAR(
 		ie.NewFARID(10),
-		ie.NewTransportLevelMarking(55),
+		ie.NewForwardingParameters(ie.NewTransportLevelMarking([]byte{0, 55})),
 	)
 
 	tlm, err := GetTransportLevelMarking(CreateFAR)

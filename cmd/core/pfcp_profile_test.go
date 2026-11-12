@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wmnsk/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 // testHuaweiProfile is a shared HuaweiProfile fixture for tests that don't
@@ -111,8 +111,8 @@ func TestProfileNodeID(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error parsing NodeID: %v", err)
 			}
-			if v != nodeIDStr {
-				t.Errorf("expected %s, got %s", nodeIDStr, v)
+			if nodeIDText(v) != nodeIDStr {
+				t.Errorf("expected %s, got %s", nodeIDStr, nodeIDText(v))
 			}
 		})
 	}
@@ -217,7 +217,7 @@ func TestProfileHeartbeatRequestAdditionalIEs(t *testing.T) {
 		name     string
 		profile  PfcpProfile
 		wantLen  int
-		wantType uint16
+		wantType ie.IEType
 	}{
 		{"Default", DefaultProfile{}, 0, 0},
 		{"Huawei", testHuaweiProfile, 1, ie.Metric},
@@ -246,7 +246,7 @@ func TestProfileSessionEstablishmentResponseAdditionalIEs(t *testing.T) {
 		name     string
 		profile  PfcpProfile
 		wantLen  int
-		wantType uint16
+		wantType ie.IEType
 	}{
 		{"Default", DefaultProfile{}, 0, 0},
 		{"Huawei", testHuaweiProfile, 1, ie.FSEID},
@@ -275,10 +275,10 @@ func TestProfileUsageReportDeletionVendorIEs(t *testing.T) {
 		name      string
 		profile   PfcpProfile
 		wantLen   int
-		wantTypes []uint16
+		wantTypes []ie.IEType
 	}{
 		{"Default", DefaultProfile{}, 0, nil},
-		{"Huawei", testHuaweiProfile, 3, []uint16{34000, 32843, 34010}},
+		{"Huawei", testHuaweiProfile, 3, []ie.IEType{34000, 32843, 34010}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -306,10 +306,10 @@ func TestProfileUsageReportSessionReportVendorIEs(t *testing.T) {
 		name      string
 		profile   PfcpProfile
 		wantLen   int
-		wantTypes []uint16
+		wantTypes []ie.IEType
 	}{
 		{"Default", DefaultProfile{}, 0, nil},
-		{"Huawei", testHuaweiProfile, 5, []uint16{34000, 32843, 34010, 34011, 34012}},
+		{"Huawei", testHuaweiProfile, 5, []ie.IEType{34000, 32843, 34010, 34011, 34012}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -338,12 +338,12 @@ func TestProfileUsageReportADCVendorIEs(t *testing.T) {
 		profile   PfcpProfile
 		sdfFilter string
 		wantLen   int
-		wantTypes []uint16
+		wantTypes []ie.IEType
 	}{
 		{"Default/empty", DefaultProfile{}, "", 0, nil},
 		{"Default/filter", DefaultProfile{}, "permit in 6", 0, nil},
-		{"Huawei/empty", testHuaweiProfile, "", 3, []uint16{34000, 32843, 36001}},
-		{"Huawei/filter", testHuaweiProfile, "permit in 6", 4, []uint16{34000, 32843, 36001, 36017}},
+		{"Huawei/empty", testHuaweiProfile, "", 3, []ie.IEType{34000, 32843, 36001}},
+		{"Huawei/filter", testHuaweiProfile, "permit in 6", 4, []ie.IEType{34000, 32843, 36001, 36017}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,7 +372,7 @@ func TestProfileSessionReportReleaseVendorIE(t *testing.T) {
 		name         string
 		profile      PfcpProfile
 		wantNil      bool
-		wantType     uint16
+		wantType     ie.IEType
 		wantVendorID uint16
 	}{
 		{"Default", DefaultProfile{}, true, 0, 0},

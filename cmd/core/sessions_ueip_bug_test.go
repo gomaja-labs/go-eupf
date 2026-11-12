@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wmnsk/go-pfcp/ie"
-	"github.com/wmnsk/go-pfcp/message"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // Test for the bug where the session's UE IP address is overwritten because it is a pointer to the buffer for incoming UDP packets.
@@ -37,7 +37,7 @@ func TestSessionUEIpOverwrite(t *testing.T) {
 		profile:          DefaultProfile{},
 	}
 	asReq := message.NewAssociationSetupRequest(0,
-		ie.NewNodeID("", "", "test"),
+		ie.NewNodeIDFQDN("test"),
 		ie.NewRecoveryTimeStamp(time.Now()),
 	)
 	response, _, err := HandlePfcpAssociationSetupRequest(&pfcpConn, asReq, smfIP)
@@ -56,8 +56,8 @@ func TestSessionUEIpOverwrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error getting node ID from association setup response: %s", err)
 	}
-	if nodeId != "test-node" {
-		t.Errorf("Unexpected node ID in association setup response: %s", nodeId)
+	if nodeIDText(nodeId) != "test-node" {
+		t.Errorf("Unexpected node ID in association setup response: %s", nodeIDText(nodeId))
 	}
 	if _, ok := pfcpConn.NodeAssociations[smfIP]; !ok {
 		t.Errorf("Association not created")
@@ -71,29 +71,27 @@ func TestSessionUEIpOverwrite(t *testing.T) {
 
 	// Create two send two Session Establishment Requests with downlink PDRs
 	// and check that the first session is not overwritten
-	seReq1 := message.NewSessionEstablishmentRequest(0, 0,
-		1, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq1 := message.NewSessionEstablishmentRequest(1, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				//ie.NewFTEID(0, 0, ip1.IP, nil, 0),
+				//ie.NewFTEID(1, 0, ip1.IP, nil, 0),
 				ie.NewUEIPAddress(2, ip1.IP.String(), "", 0, 0),
 			),
 		),
 	)
 
-	seReq2 := message.NewSessionEstablishmentRequest(0, 0,
-		2, 1, 0,
-		ie.NewNodeID("", "", "test"),
+	seReq2 := message.NewSessionEstablishmentRequest(2, 1,
+		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				//ie.NewFTEID(0, 0, ip2.IP, nil, 0),
+				//ie.NewFTEID(1, 0, ip2.IP, nil, 0),
 				ie.NewUEIPAddress(2, ip2.IP.String(), "", 0, 0),
 			),
 		),
