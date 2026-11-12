@@ -1,11 +1,11 @@
 module github.com/gomaja-labs/go-eupf
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/cilium/ebpf v0.22.0
-	github.com/gin-contrib/cors v1.7.9
+	github.com/gin-contrib/cors v1.7.11
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/gomaja-labs/go-pfcp v0.0.0-20261112034300-97644dfd6452
@@ -84,7 +84,7 @@ require (
 	github.com/bytedance/sonic v1.15.5 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
-	github.com/gin-contrib/sse v1.1.2 // indirect
+	github.com/gin-contrib/sse v1.2.1 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
 	github.com/go-playground/validator/v10 v10.30.6
