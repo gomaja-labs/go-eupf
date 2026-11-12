@@ -78,9 +78,9 @@ Map capacities are configured before Load. Live resizing returns an error
 without changing handles, instructions or data. All map buffers use bpf2go
 value types and typed map calls so the library checks their size; REST DTOs are
 converted explicitly. Notification delivery uses a bounded queue and drops events
-when the receiver is slow; it does not block packet-reader shutdown. Route-cache build flags retain
-map definitions but forwarding always consults the current FIB: cached results
-cannot safely replace live MTU, route and neighbor checks without invalidation.
+when the receiver is slow; it does not block packet-reader shutdown. Forwarding
+consults the kernel FIB for every packet, so route, neighbour and MTU changes
+take effect immediately.
 
 Tests enter private network and mount namespaces and create their own permanent
 neighbors. Run them inside the privileged development image, or with

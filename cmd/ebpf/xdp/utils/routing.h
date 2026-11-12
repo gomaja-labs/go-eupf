@@ -32,47 +32,6 @@ struct
     __uint(max_entries, 1);
 } upf_route_stat SEC(".maps");
 
-#ifdef ENABLE_ROUTE_CACHE
-
-#warning "Routing cache enabled"
-
-#define ROUTE_CACHE_IPV4_SIZE 256
-#define ROUTE_CACHE_IPV6_SIZE 256
-
-struct route_record {
-    int ifindex;
-    __u8 smac[6];
-    __u8 dmac[6];
-};
-
-/* ipv4 -> fib cached result */
-struct
-{
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __type(key, __u32);
-    __type(value, struct route_record);
-    __uint(max_entries, ROUTE_CACHE_IPV4_SIZE);
-} upf_route_cache_ip4 SEC(".maps");
-
-/* ipv6 -> fib cached result */
-struct
-{
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __type(key, struct in6_addr);
-    __type(value, struct route_record);
-    __uint(max_entries, ROUTE_CACHE_IPV6_SIZE);
-} upf_route_cache_ip6 SEC(".maps");
-
-static __always_inline void update_route_cache_ipv4(const struct bpf_fib_lookup *fib_params, __u32 daddr) {
-    struct route_record route = {
-        .ifindex = fib_params->ifindex,
-    };
-    __builtin_memcpy(route.smac, fib_params->smac, ETH_ALEN);
-    __builtin_memcpy(route.dmac, fib_params->dmac, ETH_ALEN);
-    bpf_map_update_elem(&upf_route_cache_ip4, &daddr, &route, BPF_ANY);
-}
-#endif
-
 static __always_inline enum xdp_action do_route(struct xdp_md *ctx, struct ethhdr *eth, int ifindex, __u8 (*smac)[6], __u8 (*dmac)[6]) {
     //_decr_ttl(ether_proto, l3hdr);
     __builtin_memcpy(eth->h_source, smac, ETH_ALEN);

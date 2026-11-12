@@ -20,8 +20,6 @@ import (
 // Supported BPF_CFLAGS:
 // 	- ENABLE_LOG:
 //		- enables debug output to tracepipe (`bpftool prog tracelog`)
-// 	- ENABLE_ROUTE_CACHE
-//		- enable routing decision cache
 //
 
 //go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g

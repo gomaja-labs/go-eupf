@@ -194,9 +194,8 @@ docker build --target cli -t local/eupf-cli:latest .
 
 Run the application image with the capabilities and mounts shown in the quick
 start above. For CLI usage, run `docker run --rm local/eupf-cli:latest eupf --help`.
-Enable packet logging with `--build-arg BPF_ENABLE_LOG=1`.
-The route-cache build flag currently retains cache map definitions while routing
-uses the live FIB. See [data-plane behaviour and limits](docs/dataplane.md).
+Enable packet logging with `--build-arg BPF_ENABLE_LOG=1`. See
+[data-plane behaviour and limits](docs/dataplane.md).
 
 ### Build and test from source
 
