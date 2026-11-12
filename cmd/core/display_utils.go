@@ -260,7 +260,7 @@ func displayBar(sb *strings.Builder, bar *ie.IE) {
 		if err != nil {
 			return
 		}
-		fieldBARID, fieldDownlinkDataNotificationDelay, fieldMTEDTControlInformation = f.BARID, f.DownlinkDataNotificationDelay, f.MTEDTControlInformation
+		fieldBARID, fieldDownlinkDataNotificationDelay, fieldSuggestedBufferingPacketsCount, fieldMTEDTControlInformation = f.BARID, f.DownlinkDataNotificationDelay, f.SuggestedBufferingPacketsCount, f.MTEDTControlInformation
 	case ie.UpdateBARWithinSessionModificationRequest:
 		f, err := bar.UpdateBARWithinSessionModificationRequest()
 		if err != nil {

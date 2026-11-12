@@ -5,6 +5,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -363,9 +364,23 @@ func IsMessageTraceable(msgType uint8) bool {
 }
 
 func (connection *PfcpConnection) SendMessageWithTrace(msg message.Message, addr *net.UDPAddr, trace bool) error {
+	err := connection.sendMessageWithTrace(msg, addr, trace)
+	var encode *ie.EncodeError
+	if errors.As(err, &encode) && !msg.IsRequest() {
+		// TS 29.244 V20.1.0 clause 8.2.1: an unencodable response is a system failure.
+		log.Error().Err(err).Str("peer", addr.String()).Str("message", msg.MessageTypeName()).Msg("Cannot encode PFCP response")
+		fallback := connection.errorResponse(msg.MessageType(), msg.SEID(), msg.Sequence(), ie.CauseSystemFailure, nil)
+		if fallback != nil {
+			return errors.Join(err, connection.sendMessageWithTrace(fallback, addr, trace))
+		}
+	}
+	return err
+}
+
+func (connection *PfcpConnection) sendMessageWithTrace(msg message.Message, addr *net.UDPAddr, trace bool) error {
 	responseBytes := make([]byte, msg.MarshalLen())
 	if err := msg.MarshalTo(responseBytes); err != nil {
-		log.Warn().Msg(err.Error())
+		log.Warn().Err(err).Str("peer", addr.String()).Str("message", msg.MessageTypeName()).Msg("Cannot encode PFCP message")
 		return err
 	}
 

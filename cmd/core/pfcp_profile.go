@@ -141,6 +141,9 @@ func (DefaultProfile) ParseQFI(qer *ie.IE) (uint8, bool) {
 	if err != nil {
 		return 0, false
 	}
+	if qer.Type == ie.UpdateQER && isNullIE(qfiIE) {
+		return 0, true
+	}
 	qfi, err := qfiIE.QFI()
 	if err != nil {
 		return 0, false
@@ -235,6 +238,9 @@ func (h HuaweiProfile) ParseQFI(qer *ie.IE) (uint8, bool) {
 	qfiIE, extensions, err := qerQFI(qer)
 	if err != nil {
 		return 0, false
+	}
+	if qer.Type == ie.UpdateQER && isNullIE(qfiIE) {
+		return 0, true
 	}
 	if qfi, err := qfiIE.QFI(); err == nil {
 		return qfi, true

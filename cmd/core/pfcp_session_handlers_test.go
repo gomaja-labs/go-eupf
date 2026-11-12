@@ -978,7 +978,9 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 		t.Errorf("can't enable trace: %s", err.Error())
 	}
 
-	estReq.SetSEID(estReq.SEID() + 1)
+	if err := estReq.SetSEID(estReq.SEID() + 1); err != nil {
+		t.Fatal(err)
+	}
 	_, _, err = HandlePfcpSessionEstablishmentRequest(pfcpConn, estReq, smfIP)
 	if err != nil {
 		t.Errorf("Error handling session establishment request: %s", err.Error())

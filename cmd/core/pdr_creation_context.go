@@ -30,6 +30,7 @@ func NewPDRCreationContext(session *Session, resourceManager *service.ResourceMa
 	}
 }
 
+// GetURRIDs reads the PDR usage-rule list; a null occurrence removes the entire list.
 func GetURRIDs(i *ie.IE) ([]uint32, error) {
 	var children []*ie.IE
 	switch i.Type {
@@ -51,8 +52,8 @@ func GetURRIDs(i *ie.IE) ([]uint32, error) {
 	var ids []uint32
 	for _, child := range children {
 		// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2: a null URR ID removes the list.
-		if len(child.Payload) == 0 && len(child.ChildIEs) == 0 {
-			continue
+		if isNullIE(child) {
+			return nil, nil
 		}
 		id, err := child.URRID()
 		if err != nil {
@@ -81,7 +82,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		}
 		activate, deactivate, qerIDs, removal, farID, pdiIE = f.ActivatePredefinedRules, f.DeactivatePredefinedRules, f.QERID, f.OuterHeaderRemoval, f.FARID, f.PDI
 		for _, id := range f.URRID {
-			if len(id.Payload) == 0 && len(id.ChildIEs) == 0 {
+			if isNullIE(id) {
 				removeURRs = true
 			}
 		}
@@ -121,17 +122,29 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 	if farid, err := farID.FARID(); err == nil {
 		spdrInfo.PdrInfo.FarId = pdrContext.getFARID(farid)
 	}
+	// TS 29.244 V20.1.0 clause 5.6.3: one null occurrence removes every binding of that type.
+	removeQERs := false
 	for _, id := range qerIDs {
-		if qerid, err := id.QERID(); err == nil {
-			spdrInfo.PdrInfo.QerId = pdrContext.getQERID(qerid)
+		if isNullIE(id) {
+			removeQERs = true
 		}
-
 	}
-	if urrs, err := GetURRIDs(pdr); err == nil {
+	if removeQERs {
+		spdrInfo.PdrInfo.QerId = 0
+	} else if len(qerIDs) > 0 {
+		// The forwarding-plane representation currently stores one QER binding.
+		if id, err := qerIDs[0].QERID(); err == nil {
+			spdrInfo.PdrInfo.QerId = pdrContext.getQERID(id)
+		}
+	}
+	if !removeURRs {
+		urrs, err := GetURRIDs(pdr)
+		if err != nil {
+			return err
+		}
 		if len(urrs) > 0 {
 			spdrInfo.PdrInfo.Urr1Id = pdrContext.getURRID(urrs[0])
 		}
-
 		if len(urrs) > 1 {
 			spdrInfo.PdrInfo.Urr2Id = pdrContext.getURRID(urrs[1])
 		}
@@ -201,8 +214,8 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		return nil
 	}
 
-	for _, address := range pdi.UEIPAddress {
-		ueIP, err := address.UEIPAddress()
+	if len(pdi.UEIPAddress) > 0 {
+		ueIP, err := pdi.UEIPAddress[0].UEIPAddress()
 		if err != nil {
 			return fmt.Errorf("UE IP Address IE is missing")
 		}
@@ -324,4 +337,10 @@ func (pdrContext *PDRCreationContext) setTEIDCache(chooseID uint8, teid uint32) 
 
 func hasCHV4(flags uint8) bool {
 	return flags&(1<<4) != 0
+}
+
+// isNullIE distinguishes a present removal instruction from an absent field.
+// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2.
+func isNullIE(value *ie.IE) bool {
+	return value != nil && len(value.Payload) == 0 && len(value.ChildIEs) == 0
 }

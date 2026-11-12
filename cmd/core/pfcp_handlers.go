@@ -5,6 +5,7 @@
 package core
 
 import (
+	"errors"
 	"net"
 	"net/netip"
 	"time"
@@ -21,12 +22,84 @@ type PfcpHandlerMap map[uint8]PfcpFunc
 
 func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *net.UDPAddr) error {
 	log.Debug().Msgf("Handling PFCP message from %s", addr)
-	incomingMsg, err := message.Parse(buf)
-	if err != nil {
-		log.Warn().Msgf("Ignored undecodable message: %x, error: %s", buf, err)
-		return err
+	incoming, parseErr := message.ParseDatagram(buf)
+	var results []error
+	if parseErr != nil {
+		log.Warn().Err(parseErr).Str("peer", addr.String()).Msg("Invalid PFCP datagram")
+		results = append(results, parseErr)
+		for _, failure := range datagramFailures(parseErr) {
+			var version *message.UnsupportedVersionError
+			var decode *ie.DecodeError
+			switch {
+			case errors.As(failure.Err, &version):
+				// TS 29.244 V20.1.0 clauses 7.6.2 and 7.4.4.7.
+				if err := conn.SendMessage(message.NewVersionNotSupportedResponse(version.Header.Sequence()), addr); err != nil {
+					results = append(results, err)
+				}
+			case failure.Header != nil && errors.As(failure.Err, &decode) && failure.Header.Type != message.MsgTypeHeartbeatRequest:
+				// TS 29.244 V20.1.0 clause 7.6.7: malformed IE framing requires Cause 68.
+				var offending *ie.IE
+				if !decode.TypeUnknown {
+					offending = ie.NewOffendingIE(decode.Type)
+				}
+				response := conn.errorResponse(failure.Header.Type+1, 0, failure.Header.Sequence(), ie.CauseInvalidLength, offending)
+				if response != nil {
+					if err := conn.SendMessage(response, addr); err != nil {
+						results = append(results, err)
+					}
+				}
+			}
+		}
 	}
+	for _, incomingMsg := range incoming {
+		invalidFrame := false
+		for _, failure := range datagramFailures(parseErr) {
+			if failure.Header != nil && failure.Header.Type == incomingMsg.MessageType() && failure.Header.Sequence() == incomingMsg.Sequence() && failure.Header.SEID == incomingMsg.SEID() {
+				invalidFrame = true
+				break
+			}
+		}
+		if invalidFrame {
+			continue
+		}
+		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr); err != nil {
+			results = append(results, err)
+		}
+	}
+	return errors.Join(results...)
+}
+
+func datagramFailures(err error) []*message.DatagramError {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var failures []*message.DatagramError
+		for _, child := range joined.Unwrap() {
+			failures = append(failures, datagramFailures(child)...)
+		}
+		return failures
+	}
+	var failure *message.DatagramError
+	if errors.As(err, &failure) {
+		return []*message.DatagramError{failure}
+	}
+	return nil
+}
+
+func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr) error {
 	PfcpMessageRx.WithLabelValues(incomingMsg.MessageTypeName()).Inc()
+	if incomingMsg.IsRequest() {
+		if failure := validateIncomingRequest(incomingMsg); failure != nil {
+			PfcpMessageRxErrors.WithLabelValues(incomingMsg.MessageTypeName(), causeToString(failure.cause)).Inc()
+			response := conn.errorResponse(incomingMsg.MessageType()+1, conn.peerSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending))
+			if response != nil {
+				return errors.Join(failure, conn.SendMessage(response, addr))
+			}
+			return failure
+		}
+	}
+
 	if handler, ok := handlerMap[incomingMsg.MessageType()]; ok {
 		startTime := time.Now()
 		// TODO: Trim port as a workaround for NAT changing the port. Explore proper solutions.
@@ -123,7 +196,7 @@ func HandlePfcpAssociationReleaseRequest(
 	), false, nil
 }
 
-// https://www.etsi.org/deliver/etsi_ts/129200_129299/129244/16.04.00_60/ts_129244v160400p.pdf page 95
+// TS 29.244 V20.1.0 clause 7.4.4.1.
 func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
 	asreq := msg.(*message.AssociationSetupRequest)
 	log.Info().Msgf("Got Association Setup Request from: %s", addr)

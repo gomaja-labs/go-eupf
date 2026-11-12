@@ -382,13 +382,6 @@ func validateRequest(nodeId *ie.IE, cpfseid *ie.IE) (fseid *ie.FSEIDFields, err 
 	return fseid, nil
 }
 
-func findIEindex(ieArr []*ie.IE, ieType ie.IEType) int {
-	arrIndex := slices.IndexFunc(ieArr, func(ie *ie.IE) bool {
-		return ie.Type == ieType
-	})
-	return arrIndex
-}
-
 func findEnterpriseSpecificIEindex(ieArr []*ie.IE, ieType ie.IEType, ieEnterpriseID uint16) int {
 	arrIndex := slices.IndexFunc(ieArr, func(ie *ie.IE) bool {
 		return ie.Type == ieType && ie.EnterpriseID == ieEnterpriseID
@@ -480,7 +473,10 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 		}
 		farInfo.Action = flags[0]
 	}
-	if outer != nil {
+	// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2: null removes a provisioned value.
+	if far.Type == ie.UpdateFAR && isNullIE(outer) {
+		farInfo.OuterHeaderCreation, farInfo.Teid, farInfo.RemoteIP = 0, 0, 0
+	} else if outer != nil {
 		fields, err := profile.ParseOuterHeaderCreation(outer)
 		if err != nil {
 			return farInfo, err
@@ -493,7 +489,9 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 			return farInfo, fmt.Errorf("IPv6 not supported yet")
 		}
 	}
-	if marking != nil {
+	if far.Type == ie.UpdateFAR && isNullIE(marking) {
+		farInfo.TransportLevelMarking = 0
+	} else if marking != nil {
 		value, err := marking.TransportLevelMarking()
 		if err != nil {
 			return farInfo, err
@@ -522,6 +520,13 @@ func updateQer(qerInfo *ebpf.QerInfo, qer *ie.IE, profile PfcpProfile) {
 	default:
 		return
 	}
+	// TS 29.244 V20.1.0 clause 5.6.3: absent values preserve the old rule; null values remove them.
+	if qer.Type == ie.UpdateQER && isNullIE(gate) {
+		qerInfo.GateStatusDL, qerInfo.GateStatusUL = 0, 0
+	}
+	if qer.Type == ie.UpdateQER && isNullIE(mbr) {
+		qerInfo.MaxBitrateDL, qerInfo.MaxBitrateUL = 0, 0
+	}
 	gateStatusDL, err := gate.GateStatusDL()
 	if err == nil {
 		qerInfo.GateStatusDL = gateStatusDL
@@ -545,6 +550,7 @@ func updateQer(qerInfo *ebpf.QerInfo, qer *ie.IE, profile PfcpProfile) {
 	qerInfo.Dscp = config.Conf.GetDscpMarkByQci(qerInfo.Qfi)
 }
 
+// GetTransportLevelMarking reads the forwarding parameters as the value/mask pair used by the data plane.
 func GetTransportLevelMarking(far *ie.IE) (uint16, error) {
 	switch far.Type {
 	case ie.CreateFAR:
@@ -598,12 +604,18 @@ func updateUrr(urrInfo *ebpf.UrrInfo, urr *ie.IE) {
 	default:
 		return
 	}
-	if method.HasVOLUM() {
+	if urr.Type == ie.UpdateURR && isNullIE(volume) {
+		urrInfo.VolumeThreshold = 0
+	}
+	if urr.Type == ie.UpdateURR && isNullIE(duration) {
+		urrInfo.TimeThreshold = 0
+	}
+	if urr.Type == ie.UpdateURR || method.HasVOLUM() {
 		if threshold, err := volume.VolumeThreshold(); err == nil && threshold.HasTOVOL() {
 			urrInfo.VolumeThreshold = threshold.TotalVolume
 		}
 	}
-	if method.HasDURAT() {
+	if urr.Type == ie.UpdateURR || method.HasDURAT() {
 		if threshold, err := duration.TimeThreshold(); err == nil {
 			urrInfo.TimeThreshold = threshold.Seconds()
 		}
