@@ -332,11 +332,16 @@ func (connection *PfcpConnection) GetAssociation(identity string) *NodeAssociati
 		return assoc
 	}
 	var match *NodeAssociation
+	// TS 29.244 V20.1.0 clause 6.2.6.3: a matching UP-initiated Setup
+	// Response can confirm another address without replacing the association.
+	if nodeID := connection.connectorNodes[identity]; nodeID != "" {
+		match = connection.NodeAssociations[nodeID]
+	}
 	for assoc := range connection.addressIndex[identity] {
 		if connection.NodeAssociations[assoc.ID] != assoc {
 			continue
 		}
-		if match != nil {
+		if match != nil && match != assoc {
 			return nil
 		}
 		match = assoc

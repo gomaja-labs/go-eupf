@@ -88,6 +88,9 @@ func TestUPInitiatedSetupPreservesEstablishedSessions(t *testing.T) {
 			if repeated {
 				t.Error("configured peer repeated Setup while its learned Node ID remained associated")
 			}
+			if len(tc.setups) == 1 && conn.GetAssociation("127.0.0.2") != conn.associationByID("first.example") {
+				t.Error("learned Setup Response address did not resolve to its existing association")
+			}
 		})
 	}
 }
