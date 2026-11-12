@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 )
 
 func TestChooseIDCannotProduceDifferentInterfaceAddresses(t *testing.T) {
-	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true})
+	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
 	conn.ResourceManager, _ = service.NewResourceManager("", 4)
 	request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)))
 	for i, source := range []uint8{0, 1} {
@@ -34,7 +35,7 @@ func TestChooseIDCannotProduceDifferentInterfaceAddresses(t *testing.T) {
 }
 
 func TestRestorationRejectsUnavailableLocalFTEIDAddress(t *testing.T) {
-	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true})
+	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
 	conn.ResourceManager, _ = service.NewResourceManager("", 4)
 	request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewPFCPSEReqFlags(1), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, 17, net.ParseIP("192.0.2.99"), nil, 0)), ie.NewFARID(1)))
 	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
@@ -48,7 +49,7 @@ func TestRestorationRejectsUnavailableLocalFTEIDAddress(t *testing.T) {
 }
 
 func TestNewPDRCanReferenceExistingUPFAllocatedFTEID(t *testing.T) {
-	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true})
+	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
 	conn.ResourceManager, _ = service.NewResourceManager("", 4)
 	request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(5, 0, nil, nil, 0)), ie.NewFARID(1)))
 	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
@@ -67,5 +68,16 @@ func TestNewPDRCanReferenceExistingUPFAllocatedFTEID(t *testing.T) {
 	cause, _ := changed.(*message.SessionModificationResponse).Cause.Cause()
 	if cause != 1 {
 		t.Fatalf("existing UPF F-TEID treated as CP allocation: cause=%d", cause)
+	}
+}
+
+func TestDefaultFTEIDAllocationRejectsNewCPChoice(t *testing.T) {
+	context := NewPDRCreationContext(NewSession(9, 42, "", "", false), nil)
+	info := SPDRInfo{PdrID: 1}
+	request := ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, 17, net.ParseIP("192.0.2.1"), nil, 0)))
+	err := context.extractPDR(request, &info)
+	var invalid *requestIEError
+	if !errors.As(err, &invalid) || invalid.cause != ie.CauseInvalidFTEIDAllocationOption {
+		t.Fatalf("CP allocation accepted by default: %v", err)
 	}
 }

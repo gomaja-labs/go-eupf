@@ -14,7 +14,7 @@ func TestCreatedPDRReturnsBothChosenResources(t *testing.T) {
 	old := config.Conf
 	config.Conf.FeatureUEIP = true
 	t.Cleanup(func() { config.Conf = old })
-	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true, FeatureUEIP: true})
+	conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureUEIP: true})
 	conn.ResourceManager, _ = service.NewResourceManager("192.0.2.0/30", 4)
 	req := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(1, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2)), ie.NewCreatePDR(ie.NewOuterHeaderRemoval(0, 0), ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceAccess), ie.NewFTEID(5, 0, nil, nil, 0), ie.NewUEIPAddress(16, "", "", 0, 0)), ie.NewFARID(1)))
 	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, req, peer)

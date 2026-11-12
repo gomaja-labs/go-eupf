@@ -25,7 +25,7 @@ func TestUnsupportedRuleCombinationsAreRejected(t *testing.T) {
 			if test.outer {
 				forward = ie.NewForwardingParameters(ie.NewDestinationInterface(0), ie.NewOuterHeaderCreation(0x100, 100, "192.0.2.2", "", 0, 0, 0))
 			}
-			request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), forward), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), test.pdi, ie.NewFARID(1)))
+			request := restorationEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), forward), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), test.pdi, ie.NewFARID(1)))
 			reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
 			if err != nil {
 				t.Fatal(err)
@@ -41,7 +41,7 @@ func TestUnsupportedRuleCombinationsAreRejected(t *testing.T) {
 func TestCoreFTEIDRequiresDistinctIngressAddress(t *testing.T) {
 	conn, peer := PreparePfcpConnection(t)
 	conn.n9Address = conn.n3Address
-	request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(1), ie.NewFTEID(1, 10, conn.n3Address, nil, 0)), ie.NewFARID(1)))
+	request := restorationEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("test"), ie.NewFSEID(42, net.ParseIP(peer), nil), ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(1), ie.NewFTEID(1, 10, conn.n3Address, nil, 0)), ie.NewFARID(1)))
 	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, peer)
 	if err != nil {
 		t.Fatal(err)

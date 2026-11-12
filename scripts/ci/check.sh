@@ -54,7 +54,7 @@ smoke)
 			sleep .1
 		done
 		grep -q 'listening on lo' "ci-results/capture-$ueip.log"
-		sudo env UPF_MAX_SESSIONS=1024 UPF_FEATURE_FTUP=true UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
+		sudo env UPF_MAX_SESSIONS=1024 UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
 		app_pid=$!
 		python3 - <<'PY'
 import socket, time

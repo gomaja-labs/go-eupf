@@ -244,7 +244,7 @@ func TestProtocolFirstOccurrenceWins(t *testing.T) {
 		t.Fatalf("association %+v", association)
 	}
 	request := message.NewSessionEstablishmentRequest(0, 2,
-		ie.NewNodeIDFQDN("first.example"), ie.NewFSEID(22, net.IPv4(127, 0, 0, 1), nil),
+		ie.NewPFCPSEReqFlags(1), ie.NewNodeIDFQDN("first.example"), ie.NewFSEID(22, net.IPv4(127, 0, 0, 1), nil),
 		ie.NewCreateFAR(ie.NewFARID(1), ie.NewFARID(99), ie.NewApplyAction(1)),
 		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(1), ie.NewFARID(1), ie.NewFARID(99),
 			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceAccess), ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewFTEID(1, 10, net.IPv4(127, 0, 0, 1), nil, 0))),

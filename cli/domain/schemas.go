@@ -64,7 +64,6 @@ type UpfConfig struct {
 	UEIPPool                string         `json:"ueip_pool" yaml:"ueip_pool"`
 	FTEIDPool               uint32         `json:"teid_pool" yaml:"teid_pool"`
 	FeatureUEIP             bool           `json:"feature_ueip" yaml:"feature_ueip"`
-	FeatureFTUP             bool           `json:"feature_ftup" yaml:"feature_ftup"`
 	Qci2DscpMapping         map[string]int `json:"qci_dscp_mapping" yaml:"qci_dscp_mapping"`
 	AllowedApns             string         `json:"allowed_apns" yaml:"allowed_apns"`
 	DeniedApns              string         `json:"denied_apns" yaml:"denied_apns"`

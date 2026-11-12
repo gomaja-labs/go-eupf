@@ -95,7 +95,6 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 
 	createdPDRs := make([]SPDRInfo, 0)
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
-	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
 	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 	pdrContext.Restoration = req.PFCPSEReqFlags.HasRESTI()
 	operationPool := NewOperationPool()
@@ -201,7 +200,6 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 	operationPool.Before = start
 	deletedURRs := make([]*ie.IE, 0, len(session.URRs))
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
-	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
 	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 
 	err := processDeletionRequestRules(conn, logger, operationPool, pdrContext, session, &deletedURRs)
@@ -295,7 +293,6 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	updatedPDRs := make([]SPDRInfo, 0, len(req.UpdatePDR))
 	removedURRs := make([]*ie.IE, 0, len(req.RemoveURR))
 	pdrContext := NewPDRCreationContext(session, conn.ResourceManager)
-	pdrContext.FTUP = len(conn.featuresOctets) > 0 && conn.featuresOctets[0]&0x10 != 0
 	pdrContext.N3Address, pdrContext.N9Address = conn.sessionN3Address(session), cloneIP(conn.n9Address)
 	operationPool := NewOperationPool()
 	operationPool.Before = start

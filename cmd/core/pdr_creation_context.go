@@ -21,7 +21,6 @@ type PDRCreationContext struct {
 	ResourceManager      *service.ResourceManager
 	TEIDCache            map[uint8]uint32
 	TEIDSources          map[uint8]uint8
-	FTUP                 bool
 	Restoration          bool
 	N3Address, N9Address net.IP
 }
@@ -252,7 +251,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 			return fmt.Errorf("F-TEID IE is missing")
 		}
 		// TS 29.244 V20.1.0 clauses 5.5.1, 8.2.3 and Table 7.5.2.1-1 note 4.
-		if fteid.HasChID() && !fteid.HasCh() || fteid.Flags&3 == 0 || fteid.HasCh() && !pdrContext.FTUP || !fteid.HasCh() && pdrContext.FTUP && !pdrContext.Restoration && !pdrContext.hasSessionFTEID(fteid.TEID, spdrInfo.SourceInterface, fteid.IPv4Address) {
+		if fteid.HasChID() && !fteid.HasCh() || fteid.Flags&3 == 0 || !fteid.HasCh() && !pdrContext.Restoration && !pdrContext.hasSessionFTEID(fteid.TEID, spdrInfo.SourceInterface, fteid.IPv4Address) {
 			return &requestIEError{ie.CauseInvalidFTEIDAllocationOption, ie.FTEID, fmt.Errorf("incompatible F-TEID allocation option")}
 		}
 		if fteid.Flags&2 != 0 {

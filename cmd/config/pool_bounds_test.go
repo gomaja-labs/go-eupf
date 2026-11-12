@@ -12,7 +12,7 @@ func TestValidateRejectsUnboundedResourcePools(t *testing.T) {
 	}{
 		{"ipv6_subnet", func(c *UpfConfig) { c.FeatureUEIP = true; c.UEIPPool = "2001:db8::/64" }},
 		{"ipv4_entire_space", func(c *UpfConfig) { c.FeatureUEIP = true; c.UEIPPool = "0.0.0.0/0" }},
-		{"wrapping_teid_counter", func(c *UpfConfig) { c.FeatureFTUP = true; c.FTEIDPool = math.MaxUint32 }},
+		{"wrapping_teid_counter", func(c *UpfConfig) { c.FTEIDPool = math.MaxUint32 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validLimitsConfig()

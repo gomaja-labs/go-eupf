@@ -112,9 +112,7 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 	}
 
 	featuresOctets := []uint8{0, 0, 0}
-	if config.FeatureFTUP {
-		featuresOctets[0] = setBit(featuresOctets[0], 4)
-	}
+	featuresOctets[0] = setBit(featuresOctets[0], 4)
 	featuresOctets[2] = setBit(featuresOctets[2], 2)
 
 	smfIP := "127.0.0.1"
@@ -180,7 +178,7 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 	// Requests for default mapping (without SDF filter)
 
 	// Request with UEIP Address
-	seReqPre1 := message.NewSessionEstablishmentRequest(2, 1,
+	seReqPre1 := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
@@ -193,14 +191,14 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 	)
 
 	// Request with TEID. TS 29.244 V20.1.0 clause 8.2.3 requires the IPv4 family bit.
-	seReqPre2 := message.NewSessionEstablishmentRequest(3, 1,
+	seReqPre2 := restorationEstablishmentRequest(3, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
 			ie.NewPDRID(1),
 			ie.NewPDI(
-				ie.NewSourceInterface(ie.SrcInterfaceAccess),
-				ie.NewFTEID(1, 10, pfcpConn.n3Address, nil, 0),
+				ie.NewSourceInterface(ie.SrcInterfaceCore),
+				ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 0),
 			),
 		),
 	)
@@ -430,8 +428,7 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 func TestFTUPInAssociationSetupResponse(t *testing.T) {
 
 	config.Conf = config.UpfConfig{
-		FTEIDPool:   65536,
-		FeatureFTUP: true,
+		FTEIDPool: 65536,
 	}
 
 	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config.Conf)
@@ -469,7 +466,7 @@ func TestFTUPInAssociationSetupResponse(t *testing.T) {
 }
 
 func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
-	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true})
+	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
 
 	resourceManager, err := service.NewResourceManager("10.61.0.0/16", 65536)
 	if err != nil {
@@ -505,7 +502,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	)
 
 	// Creating a Session Establishment Request
-	seReq := message.NewSessionEstablishmentRequest(2, 1,
+	seReq := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewPFCPSEReqFlags(1),
@@ -584,7 +581,7 @@ func TestIPAllocationInSessionEstablishmentResponse(t *testing.T) {
 		)
 
 		// Creating a Session Establishment Request
-		seReq := message.NewSessionEstablishmentRequest(2, 1,
+		seReq := restorationEstablishmentRequest(2, 1,
 			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			createPDR1,
@@ -647,7 +644,6 @@ func TestUEIPInAssociationSetupResponse(t *testing.T) {
 		UEIPPool:    "10.61.0.0/16",
 		FTEIDPool:   65536,
 		FeatureUEIP: true,
-		FeatureFTUP: false,
 	}
 
 	pfcpConn, smfIP := PreparePfcpConnection(t)
@@ -680,7 +676,7 @@ func TestUEIPInAssociationSetupResponse(t *testing.T) {
 func TestHandlePfcpSessionEstablishmentRequestWithURR(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnection(t)
 
-	estReq := message.NewSessionEstablishmentRequest(2, 1,
+	estReq := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
@@ -704,7 +700,7 @@ func TestHandlePfcpSessionModificationRequestWithURR(t *testing.T) {
 	ebpfMock := &MapOperationsMock{}
 	pfcpConn, smfIP := PreparePfcpConnectionWithMock(t, ebpfMock, config.UpfConfig{})
 
-	estReq := message.NewSessionEstablishmentRequest(2, 1,
+	estReq := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
@@ -807,7 +803,7 @@ func TestHandlePfcpSessionDeletionRequestWithURR(t *testing.T) {
 	ebpfMock := &MapOperationsMock{}
 	pfcpConn, smfIP := PreparePfcpConnectionWithMock(t, ebpfMock, config.UpfConfig{})
 
-	estReq := message.NewSessionEstablishmentRequest(2, 1,
+	estReq := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
@@ -879,7 +875,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config)
 
 	{
-		estReq := message.NewSessionEstablishmentRequest(2, 1,
+		estReq := restorationEstablishmentRequest(2, 1,
 			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			ie.NewCreatePDR(
@@ -907,7 +903,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 		}
 	}
 	{
-		estReqWithAllowed := message.NewSessionEstablishmentRequest(2, 1,
+		estReqWithAllowed := restorationEstablishmentRequest(2, 1,
 			ie.NewNodeIDFQDN("test"),
 			ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 			ie.NewCreatePDR(
@@ -949,7 +945,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 	}
 	pfcpConn.ResourceManager = resourceManager
 
-	estReq := message.NewSessionEstablishmentRequest(2, 1,
+	estReq := restorationEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
 		ie.NewCreatePDR(
@@ -993,4 +989,10 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 	if !ebpfMock.downlinkPDR.TraceFlag {
 		t.Errorf("unexpected trace disabled")
 	}
+}
+
+// restorationEstablishmentRequest gives fixed F-TEIDs in these fixtures their
+// required restoration context (TS 29.244 V20.1.0 clause 5.5.1).
+func restorationEstablishmentRequest(seid uint64, sequence uint32, children ...*ie.IE) *message.SessionEstablishmentRequest {
+	return message.NewSessionEstablishmentRequest(seid, sequence, append(children, ie.NewPFCPSEReqFlags(1))...)
 }

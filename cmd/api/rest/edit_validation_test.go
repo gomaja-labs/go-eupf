@@ -23,7 +23,7 @@ func validEditConfig() config.UpfConfig {
 		PfcpAddress: "127.0.0.1:8805", PfcpNodeId: "127.0.0.1", MetricsAddress: ":9090",
 		N3Address: "127.0.0.1", N9Address: "127.0.0.1", N3AdvertisedAddress: "127.0.0.1",
 		N3AdvertisedAddress5G: "127.0.0.1", N9AdvertisedAddress: "127.0.0.1",
-		UEIPPool: "10.60.0.0/24", Ip6RaPrefix: "2a03:d000:29a0:509::/64", MaxSessions: 65535,
+		FTEIDPool: 65535, UEIPPool: "10.60.0.0/24", Ip6RaPrefix: "2a03:d000:29a0:509::/64", MaxSessions: 65535,
 		TraceMaxDumpFiles: 10, TraceMaxDumpSize: 10 << 20, TraceMaxDumpPackets: 100000,
 		HeartbeatTimeout: 5, HeartbeatRetries: 3, HeartbeatInterval: 5,
 		PfcpRequestTimeout: 5, PfcpRequestRetries: 3, PfcpResponseRetention: 60,

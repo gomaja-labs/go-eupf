@@ -53,10 +53,9 @@ Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
    - UPF_METRICS_ADDRESS=:9090   *Local host:port for serving Prometheus metrics endpoint*
    - UPF_MAX_SESSIONS=65535      *Maximum number of sessions. Automatically sizes the eBPF maps when individual map sizes are not set*
    - UPF_PDR_MAP_SIZE=0          *Size of the PDR eBPF map. Overrides the value derived from max_sessions when set (non-zero). See also QER/FAR/URR_MAP_SIZE*
-   - UPF_FEATURE_FTUP=false      *Enable F-TEID allocation / release in the UP function*
    - UPF_FEATURE_UEIP=false      *Enable UE IP address allocation*
    - UPF_UEIP_POOL=10.60.0.0/24  *IP pool for the UEIP feature*
-   - UPF_TEID_POOL=65535         *TEID pool size for the FTUP feature*
+   - UPF_TEID_POOL=65535         *TEID allocation pool size*
 </p>
 </details>
 

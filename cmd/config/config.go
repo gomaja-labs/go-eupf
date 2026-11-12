@@ -37,7 +37,7 @@ var (
 	// RFC 9110 section 11.2: token68 excludes whitespace and control bytes.
 	apiTokenRegex  = regexp.MustCompile(`^[A-Za-z0-9._~+/-]+=*$`)
 	pccConfigV     = viper.New()
-	SDFFilterRegex = regexp.MustCompile(`^permit (out|in) (icmp|ip|tcp|udp|\d+) from (any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))? to (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))?$`)
+	SDFFilterRegex = regexp.MustCompile(`^permit (out|in) (icmp|ip|tcp|udp|\d+) from (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))? to (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))?$`)
 )
 
 type PCCRulesConfig struct {
@@ -124,7 +124,6 @@ type UpfConfig struct {
 	UEIPPool                string         `mapstructure:"ueip_pool" validate:"omitempty,cidr" json:"ueip_pool"`
 	FTEIDPool               uint32         `mapstructure:"teid_pool" json:"teid_pool"`
 	FeatureUEIP             bool           `mapstructure:"feature_ueip" json:"feature_ueip"`
-	FeatureFTUP             bool           `mapstructure:"feature_ftup" json:"feature_ftup"`
 	Qci2DscpMapping         map[string]int `mapstructure:"qci_dscp_mapping" json:"qci_dscp_mapping"`
 	AllowedApns             string         `mapstructure:"allowed_apns" json:"allowed_apns"`
 	DeniedApns              string         `mapstructure:"denied_apns" json:"denied_apns"`
@@ -218,7 +217,6 @@ func defineFlags() {
 	pflag.String("loglvl", "info", "Logging level")
 	pflag.Bool("logcaller", false, "Enable or disable logging caller")
 	pflag.Bool("ueip", false, "Enable or disable UEIP feature")
-	pflag.Bool("ftup", false, "Enable or disable FTUP feature")
 	pflag.String("ueippool", "10.60.0.0/24", "IP pool for UEIP feature")
 	pflag.Uint32("teidpool", 65535, "TEID pool for FTUP feature")
 	pflag.StringArray("pfcprnode", []string{}, "Address of remote PFCP node")
@@ -324,7 +322,6 @@ func initCommonConfig() error {
 	_ = commonConfigV.BindPFlag("logging_level", pflag.Lookup("loglvl"))
 	_ = commonConfigV.BindPFlag("logging_caller", pflag.Lookup("logcaller"))
 	_ = commonConfigV.BindPFlag("feature_ueip", pflag.Lookup("ueip"))
-	_ = commonConfigV.BindPFlag("feature_ftup", pflag.Lookup("ftup"))
 	_ = commonConfigV.BindPFlag("ueip_pool", pflag.Lookup("ueippool"))
 	_ = commonConfigV.BindPFlag("teid_pool", pflag.Lookup("teidpool"))
 	_ = commonConfigV.BindPFlag("qci_dscp_mapping", pflag.Lookup("qdmap"))
@@ -444,12 +441,8 @@ func (c *UpfConfig) Validate() error {
 			return fmt.Errorf("ueip_pool must contain at most 1048576 addresses (/12 or narrower)")
 		}
 	}
-	if c.FeatureFTUP && (c.FTEIDPool == 0 || c.FTEIDPool > 1<<20) {
+	if c.FTEIDPool == 0 || c.FTEIDPool > 1<<20 {
 		return fmt.Errorf("teid_pool must be between 1 and 1048576")
-	}
-
-	if !c.FeatureFTUP {
-		c.FTEIDPool = 0
 	}
 
 	if !c.FeatureUEIP {

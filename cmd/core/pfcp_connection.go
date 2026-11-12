@@ -137,9 +137,8 @@ func NewPfcpConnection(
 
 	featuresOctets := []uint8{0, 0, 0x40} // BUNDL: IE octet 7 (payload byte 2), TS 29.244 V20.1.0 table 8.2.25-1
 	// TS 29.244 V20.1.0 clause 8.2.25: EMPU denotes sending End Markers, not receiving them.
-	if config.Conf.FeatureFTUP {
-		featuresOctets[0] = setBit(featuresOctets[0], 4)
-	}
+	// TS 29.244 V20.1.0 clause 5.5.1: EPC and 5GC require UP allocation.
+	featuresOctets[0] = setBit(featuresOctets[0], 4)
 	if config.Conf.FeatureUEIP {
 		featuresOctets[2] = setBit(featuresOctets[2], 2)
 	}
