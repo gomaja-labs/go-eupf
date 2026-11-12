@@ -6,6 +6,7 @@ package core
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
@@ -54,11 +55,6 @@ var (
 		Help:       "Duration of the PFCP message processing",
 		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 	}, []string{"message_type"})
-
-	UpfPfcpAssociations = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "upf_pfcp_associations",
-		Help: "The current status of PFCP associations",
-	}, []string{"node_id"})
 )
 
 func StartMetrics(addr string) error {
@@ -136,28 +132,55 @@ func RegisterMetrics(stats ebpf.UpfXdpActionStatistic, conn []*PfcpConnection) {
 	prometheus.MustRegister(UpfPfcpAssociationsTotal)
 }
 
-func GatherMetrics(stats ebpf.UpfXdpActionStatistic) {
-	RxPacketCounters := stats.GetUpfExtStatDelta()
-	UpfRx.WithLabelValues("arp").Add(float64(RxPacketCounters.RxArp))
-	UpfRx.WithLabelValues("icmp").Add(float64(RxPacketCounters.RxIcmp))
-	UpfRx.WithLabelValues("icmp6").Add(float64(RxPacketCounters.RxIcmp6))
-	UpfRx.WithLabelValues("ip4").Add(float64(RxPacketCounters.RxIp4))
-	UpfRx.WithLabelValues("ip6").Add(float64(RxPacketCounters.RxIp6))
-	UpfRx.WithLabelValues("tcp").Add(float64(RxPacketCounters.RxTcp))
-	UpfRx.WithLabelValues("udp").Add(float64(RxPacketCounters.RxUdp))
-	UpfRx.WithLabelValues("other").Add(float64(RxPacketCounters.RxOther))
-	UpfRx.WithLabelValues("gtp-echo").Add(float64(RxPacketCounters.RxGtpEcho))
-	UpfRx.WithLabelValues("gtp-pdu").Add(float64(RxPacketCounters.RxGtpPdu))
-	UpfRx.WithLabelValues("gtp-other").Add(float64(RxPacketCounters.RxGtpOther))
-	UpfRx.WithLabelValues("gtp-unexp").Add(float64(RxPacketCounters.RxGtpUnexp))
+// Packet and route metrics share one process-wide dataplane, like the metric
+// vectors themselves. Serialize the previous absolute snapshot across scrapes;
+// the UpfXdpActionStatistic argument is a value and cannot own this history.
+var metricSnapshots struct {
+	sync.Mutex
+	source  *ebpf.BpfObjects
+	packets ebpf.UpfCounters
+	routes  ebpf.IpEntrypointRouteStat
+}
 
-	RouteStats := stats.GetUpfRouteStatDelta()
-	UpfRoute.WithLabelValues("ip4-cache").Add(float64(RouteStats.FibLookupIp4Cache))
-	UpfRoute.WithLabelValues("ip4-ok").Add(float64(RouteStats.FibLookupIp4Ok))
-	UpfRoute.WithLabelValues("ip4-error-drop").Add(float64(RouteStats.FibLookupIp4ErrorDrop))
-	UpfRoute.WithLabelValues("ip4-error-pass").Add(float64(RouteStats.FibLookupIp4ErrorPass))
-	UpfRoute.WithLabelValues("ip6-cache").Add(float64(RouteStats.FibLookupIp6Cache))
-	UpfRoute.WithLabelValues("ip6-ok").Add(float64(RouteStats.FibLookupIp6Ok))
-	UpfRoute.WithLabelValues("ip6-error-drop").Add(float64(RouteStats.FibLookupIp6ErrorDrop))
-	UpfRoute.WithLabelValues("ip6-error-pass").Add(float64(RouteStats.FibLookupIp6ErrorPass))
+func GatherMetrics(stats ebpf.UpfXdpActionStatistic) {
+	metricSnapshots.Lock()
+	defer metricSnapshots.Unlock()
+	if metricSnapshots.source != stats.BpfObjects {
+		metricSnapshots.source = stats.BpfObjects
+		metricSnapshots.packets = ebpf.UpfCounters{}
+		metricSnapshots.routes = ebpf.IpEntrypointRouteStat{}
+	}
+	packets := stats.GetUpfExtStat()
+	routes := stats.GetUpfRouteStat()
+	add := func(counter *prometheus.CounterVec, label string, current, previous uint64) {
+		delta := current
+		if current >= previous {
+			delta -= previous
+		}
+		counter.WithLabelValues(label).Add(float64(delta))
+	}
+	previous := metricSnapshots.packets
+	add(UpfRx, "arp", packets.RxArp, previous.RxArp)
+	add(UpfRx, "icmp", packets.RxIcmp, previous.RxIcmp)
+	add(UpfRx, "icmp6", packets.RxIcmp6, previous.RxIcmp6)
+	add(UpfRx, "ip4", packets.RxIp4, previous.RxIp4)
+	add(UpfRx, "ip6", packets.RxIp6, previous.RxIp6)
+	add(UpfRx, "tcp", packets.RxTcp, previous.RxTcp)
+	add(UpfRx, "udp", packets.RxUdp, previous.RxUdp)
+	add(UpfRx, "other", packets.RxOther, previous.RxOther)
+	add(UpfRx, "gtp-echo", packets.RxGtpEcho, previous.RxGtpEcho)
+	add(UpfRx, "gtp-pdu", packets.RxGtpPdu, previous.RxGtpPdu)
+	add(UpfRx, "gtp-other", packets.RxGtpOther, previous.RxGtpOther)
+	add(UpfRx, "gtp-unexp", packets.RxGtpUnexp, previous.RxGtpUnexp)
+	prior := metricSnapshots.routes
+	add(UpfRoute, "ip4-cache", routes.FibLookupIp4Cache, prior.FibLookupIp4Cache)
+	add(UpfRoute, "ip4-ok", routes.FibLookupIp4Ok, prior.FibLookupIp4Ok)
+	add(UpfRoute, "ip4-error-drop", routes.FibLookupIp4ErrorDrop, prior.FibLookupIp4ErrorDrop)
+	add(UpfRoute, "ip4-error-pass", routes.FibLookupIp4ErrorPass, prior.FibLookupIp4ErrorPass)
+	add(UpfRoute, "ip6-cache", routes.FibLookupIp6Cache, prior.FibLookupIp6Cache)
+	add(UpfRoute, "ip6-ok", routes.FibLookupIp6Ok, prior.FibLookupIp6Ok)
+	add(UpfRoute, "ip6-error-drop", routes.FibLookupIp6ErrorDrop, prior.FibLookupIp6ErrorDrop)
+	add(UpfRoute, "ip6-error-pass", routes.FibLookupIp6ErrorPass, prior.FibLookupIp6ErrorPass)
+	metricSnapshots.packets = packets
+	metricSnapshots.routes = routes
 }

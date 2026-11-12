@@ -11,7 +11,7 @@ Metric Name         | Description                                               
 upf_pfcp_rx         | The total number of received PFCP messages                 | `message_name`
 upf_pfcp_tx         | The total number of transmitted PFCP messages              | `message_name`
 upf_pfcp_rx_errors  | The total number of received PFCP messages with cause code | `message_name`, `cause_code`
-pfcp_upf_pfcp_rx_latency | PFCP request processing duration summary      | `message_type`
+pfcp_upf_pfcp_rx_latency | PFCP processing duration in microseconds (summary)      | `message_type`
 
 ## XDP Action metrics
 
@@ -57,5 +57,6 @@ upf_route `ip6-error-pass` | The total number of IPv6 packets passed to stack du
 Metric Name                 | Description                                            | Labels
 --------------------------- | ------------------------------------------------------ | ---------
 upf_pfcp_sessions           | Number of currently established sessions               | -
-upf_pfcp_associations       | Number of currently established associations           | `node_id`
 upf_pfcp_associations_total | The total number of currently established associations | -
+
+Packet and route counters add only the increase since the preceding scrape; concurrent scrapes share one snapshot. A dataplane counter reset starts a new increment. Association metrics expose aggregate counts only, so peer-controlled Node IDs do not create metric labels.
