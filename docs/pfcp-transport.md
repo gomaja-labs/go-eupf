@@ -6,7 +6,7 @@ and retransmissions share the receive loop, with no goroutine per association.
 
 The following startup options use the listed YAML key. The environment name is
 `UPF_` followed by the uppercase key, and the CLI flag replaces underscores with
-hyphens. Transport policy changes require a restart. The existing timer API can
+hyphens. All seven policy options in the table require a configuration file update and restart; REST does not edit them. The existing timer API can
 change `heartbeat_timeout` and `association_setup_timeout` while running.
 
 | Key | Default | Meaning |
@@ -73,3 +73,9 @@ The session index currently admits one Node ID per peer IP address. Setup for a
 different Node ID at an occupied address is rejected instead of deleting the
 existing node's sessions. Multiple nodes behind the same translated IP require
 separate peer IPs; transaction response matching still includes the UDP port.
+
+The CLI retains every configuration field returned by `GET /config` in `eupf show`
+and backup archives. Archives use the server's YAML key names. Restore checks all
+startup-only fields before any runtime edit: if any differ, it lists their keys
+and returns an error requiring a configuration file update and restart. It never
+reports a successful restore while discarding a changed transport policy.

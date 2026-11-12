@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -13,7 +14,21 @@ func (c *CLI) newConfigShowCmd() *cobra.Command {
 	showCmd := &cobra.Command{
 		Use:   "show",
 		Short: "Display current configuration settings",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
+			baseURL, _ := cmd.Flags().GetString("baseurl")
+			cfg, err := c.usecase.GetConfig(ctx, baseURL)
+			if err != nil {
+				return err
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(cfg)
+		},
 	}
+
+	showCmd.Flags().String("baseurl", "", "Optional base URL to override eupf API address")
 
 	loggingCmd := &cobra.Command{
 		Use:   "logging",

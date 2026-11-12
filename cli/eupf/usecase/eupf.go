@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
+	"strings"
 
 	"github.com/gomaja-labs/go-eupf/cli/config"
 	"github.com/gomaja-labs/go-eupf/cli/domain"
@@ -112,6 +114,15 @@ func (e *Eupf) BackupRestore(ctx context.Context, tempBaseURL string, name strin
 	config, err := e.fileRepo.ReadUpfConfig(ctx, name)
 	if err != nil {
 		return err
+	}
+
+	// Check restart-only fields before applying any runtime-editable sections.
+	current, err := e.eupfRepo.GetUpfConfig(ctx, baseURL)
+	if err != nil {
+		return fmt.Errorf("read current configuration before restore: %w", err)
+	}
+	if keys := startupConfigChanges(current, config); len(keys) > 0 {
+		return fmt.Errorf("restore requires a configuration file update and restart for: %s; no runtime edits applied", strings.Join(keys, ", "))
 	}
 
 	var failures []error
@@ -310,4 +321,34 @@ func (e *Eupf) GetConfig(ctx context.Context, tempBaseURL string) (*domain.UpfCo
 	}
 
 	return e.eupfRepo.GetUpfConfig(ctx, tempBaseURL)
+}
+
+// startupConfigChanges lists settings without a REST runtime setter. Keep the
+// mutable list aligned with the sections actually restored by BackupRestore.
+func startupConfigChanges(current, saved *domain.UpfConfig) []string {
+	mutable := map[string]bool{
+		"logging_level": true, "logging_caller": true,
+		"interface_name": true, "xdp_attach_mode": true, "n3_address": true, "n9_address": true,
+		"pfcp_address": true, "pfcp_node_id": true, "pfcp_node": true,
+		"sxa_address": true, "sxa_node_id": true, "sxa_node": true,
+		"sxb_address": true, "sxb_node_id": true, "sxb_node": true,
+		"association_setup_timeout": true, "heartbeat_timeout": true,
+		"gtp_peer": true, "gtp_echo_interval": true,
+	}
+	a, b := reflect.ValueOf(*current), reflect.ValueOf(*saved)
+	var keys []string
+	for i := 0; i < a.NumField(); i++ {
+		key := a.Type().Field(i).Tag.Get("json")
+		if mutable[key] {
+			continue
+		}
+		left, right := a.Field(i), b.Field(i)
+		if (left.Kind() == reflect.Slice || left.Kind() == reflect.Map) && left.Len() == 0 && right.Len() == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(left.Interface(), right.Interface()) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }

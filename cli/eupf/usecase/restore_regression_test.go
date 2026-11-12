@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -17,7 +18,7 @@ func TestBackupRestoreReportsHTTPFailures(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{BackupPath: t.TempDir()}
 	storage := file.NewFileRepository(cfg)
-	if err := storage.SaveUpfConfig(ctx, &domain.UpfConfig{LoggingLevel: "info"}); err != nil {
+	if err := storage.SaveUpfConfig(ctx, &domain.UpfConfig{LoggingLevel: "info", GtpEchoInterval: 60}); err != nil {
 		t.Fatal(err)
 	}
 	backups, err := storage.BackupList(ctx)
@@ -25,15 +26,20 @@ func TestBackupRestoreReportsHTTPFailures(t *testing.T) {
 		t.Fatalf("backups = %v, err = %v", backups, err)
 	}
 	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(domain.UpfConfig{LoggingLevel: "info", GtpEchoInterval: 60})
+			return
+		}
 		requests.Add(1)
 		http.Error(w, "configuration rejected", http.StatusBadRequest)
 	}))
 	defer srv.Close()
 	u := NewEupf(repository.NewEupfHttpRepository(srv.URL, cfg), storage, cfg)
 	err = u.BackupRestore(ctx, "", backups[0].Name)
-	if requests.Load() == 0 {
-		t.Fatal("restore did not reach HTTP server")
+	if requests.Load() != 9 {
+		t.Fatalf("restore reached %d sections, want 9", requests.Load())
 	}
 	if err == nil {
 		t.Fatal("restore reported success after HTTP server rejected every update")
