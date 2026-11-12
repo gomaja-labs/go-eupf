@@ -27,7 +27,6 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			conn := newProtocolConnection(t)
 			association := NewNodeAssociation("synthetic.example", "127.0.0.2")
-			t.Cleanup(association.Close)
 			conn.NodeAssociations[association.Addr] = association
 			request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("synthetic.example"), ie.NewFSEID(100, net.ParseIP("127.0.0.2"), nil), tt.rule)
 			reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, association.Addr)
@@ -69,7 +68,6 @@ func TestInvalidRulesPreserveModification(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			conn := newProtocolConnection(t)
 			association := NewNodeAssociation("synthetic.example", "127.0.0.2")
-			t.Cleanup(association.Close)
 			conn.NodeAssociations[association.Addr] = association
 			session := NewSession(2, 100, "", "", false)
 			session.PutPDR(7, SPDRInfo{PdrID: 7, Teid: 10})

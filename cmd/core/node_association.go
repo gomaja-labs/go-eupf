@@ -4,116 +4,30 @@
 
 package core
 
-import (
-	"context"
-	"sync"
-	"time"
+import "time"
 
-	"github.com/rs/zerolog/log"
-
-	"github.com/gomaja-labs/go-eupf/cmd/config"
-)
-
+// NodeAssociation and all reachable session state belong to PfcpConnection.stateMu.
+// Handlers run under its write lock; external readers use AssociationSnapshots.
+// Heartbeat scheduling uses the connection loop, with no per-peer goroutine.
 type NodeAssociation struct {
-	ID               string
-	Addr             string
-	NextSessionID    uint64
-	NextSequenceID   uint32
-	Sessions         map[uint64]*Session
-	HeartbeatChannel chan uint32 `json:"-"`
-	HeartbeatsActive bool
-	sync.Mutex       `json:"-"`
-	HeartbeatTimeout *time.Timer
-	ctx              context.Context
-	ctxCancel        context.CancelFunc
-	// AssociationStart time.Time // Held until propper failure detection is implemented
+	ID                string
+	Addr              string
+	NextSessionID     uint64
+	Sessions          map[uint64]*Session
+	RecoveryTimestamp time.Time
+	HeartbeatTimeout  *time.Timer `json:"-"`
+	CPFeatures        []byte
+	endpoint          string
+	sessionEntities   map[uint64]string
+	nextHeartbeat     time.Time
+	heartbeatInFlight bool
+	failedAt          time.Time
 }
 
-func NewNodeAssociation(remoteNodeID string, addr string) *NodeAssociation {
-	UpfPfcpAssociations.WithLabelValues(remoteNodeID).Set(1)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	return &NodeAssociation{
-		ID:               remoteNodeID,
-		Addr:             addr,
-		NextSessionID:    1,
-		NextSequenceID:   1,
-		Sessions:         make(map[uint64]*Session),
-		HeartbeatChannel: make(chan uint32, 1),
-		ctx:              ctx,
-		ctxCancel:        cancel,
-		// AssociationStart: time.Now(),
-	}
+func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {
+	return &NodeAssociation{ID: remoteNodeID, Addr: addr, NextSessionID: 1, Sessions: make(map[uint64]*Session), sessionEntities: make(map[uint64]string)}
 }
-
 func (association *NodeAssociation) NewLocalSEID() uint64 {
-	association.NextSessionID += 1
+	association.NextSessionID++
 	return association.NextSessionID
-}
-
-func (association *NodeAssociation) NewSequenceID() uint32 {
-	association.Lock()
-	defer association.Unlock()
-
-	association.NextSequenceID += 1
-	return association.NextSequenceID
-}
-
-func (association *NodeAssociation) ScheduleHeartbeat(conn *PfcpConnection) {
-	var (
-		failedHeartbeats uint32
-		sequence         uint32
-	)
-
-	heartbeatTicker := time.NewTicker(time.Duration(config.Conf.HeartbeatInterval) * time.Second)
-	defer heartbeatTicker.Stop()
-
-	association.HeartbeatTimeout = time.NewTimer(0)
-	defer association.HeartbeatTimeout.Stop()
-
-	for {
-		select {
-		case <-heartbeatTicker.C:
-			sequence = association.NewSequenceID()
-			SendHeartbeatRequest(conn, sequence, association.Addr)
-
-			association.HeartbeatTimeout.Reset(time.Duration(config.Conf.HeartbeatTimeout) * time.Second)
-
-			select {
-			case <-association.HeartbeatTimeout.C:
-				failedHeartbeats++
-				if failedHeartbeats >= config.Conf.HeartbeatRetries {
-					log.Warn().Msgf("the number of unanswered heartbeats has reached the limit, association deleted: %s", association.Addr)
-					UpfPfcpAssociations.WithLabelValues(association.ID).Set(0)
-					conn.heartbeatFailedC <- association.Addr
-					return
-				}
-
-			case seq := <-association.HeartbeatChannel:
-				if sequence == seq {
-					association.HeartbeatTimeout.Stop()
-					failedHeartbeats = 0
-				}
-			case <-association.ctx.Done():
-				return
-			}
-
-		case <-association.ctx.Done():
-			log.Info().Msgf("schedule heartbeat context done, association address: %s", association.Addr)
-			return
-		}
-	}
-}
-
-func (association *NodeAssociation) HandleHeartbeat(sequence uint32) {
-	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: a late or duplicate
-	// response must never stall dispatch while the heartbeat task is idle.
-	select {
-	case association.HeartbeatChannel <- sequence:
-	default:
-	}
-}
-
-func (association *NodeAssociation) Close() {
-	association.ctxCancel()
 }

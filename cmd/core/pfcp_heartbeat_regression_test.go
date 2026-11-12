@@ -28,11 +28,6 @@ func TestHeartbeatUnexpectedResponseDoesNotBlock(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
-		// Unblock the pre-fix implementation so the regression leaves no goroutine.
-		select {
-		case <-assoc.HeartbeatChannel:
-		case <-time.After(time.Second):
-		}
 		t.Fatal("unexpected heartbeat response blocked the receive handler")
 	}
 }

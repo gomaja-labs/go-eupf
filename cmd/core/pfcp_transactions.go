@@ -179,5 +179,3 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	state.responses[key] = cachedResponse{digest: digest, wire: wire, expires: time.Now().Add(ttl)}
 	state.bytes += len(wire)
 }
-
-func (conn *PfcpConnection) heartbeatFailed(addr string) { conn.DeleteAssociation(addr) }

@@ -56,6 +56,9 @@ type PfcpConnection struct {
 	heartbeatRetries  uint32
 	responseRetention time.Duration
 	maxTransactions   uint32
+	maxAssociations   uint32
+	heartbeatEvery    time.Duration
+	heartbeatGrace    time.Duration
 
 	udpConn                *net.UDPConn
 	pfcpHandlerMap         PfcpHandlerMap
@@ -159,6 +162,7 @@ func NewPfcpConnection(
 		profile:               profile,
 		requestTimeout:        5 * time.Second, requestRetries: 3,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
+		heartbeatEvery: time.Duration(config.Conf.HeartbeatInterval) * time.Second,
 	}, nil
 }
 
@@ -197,7 +201,9 @@ func (connection *PfcpConnection) Update(
 
 	}
 
+	connection.stateMu.Lock()
 	connection.nodeId = pfcpNodeId
+	connection.stateMu.Unlock()
 
 	return nil
 }
@@ -207,18 +213,26 @@ func (connection *PfcpConnection) GetLocalAddr() string {
 }
 
 func (connection *PfcpConnection) UpdateN3Address(n3addr net.IP) {
-	connection.n3Address = n3addr
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	connection.n3Address = append(net.IP(nil), n3addr...)
 }
 
 func (connection *PfcpConnection) UpdateN9Address(n9addr net.IP) {
-	connection.n9Address = n9addr
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	connection.n9Address = append(net.IP(nil), n9addr...)
 }
 
 func (connection *PfcpConnection) GetN3Addr() string {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return connection.n3Address.String()
 }
 
 func (connection *PfcpConnection) GetN9Addr() string {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return connection.n9Address.String()
 }
 
@@ -291,13 +305,15 @@ func buildPCCRuleMap() (map[string]PCCInfo, map[uint32][]string) {
 }
 
 func (connection *PfcpConnection) SetRemoteNodes(nodes []AssociationConnector) {
-	connection.nodes = nodes
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	connection.nodes = append([]AssociationConnector(nil), nodes...)
 }
 
 func (connection *PfcpConnection) SendAssociationReleaseRequest() {
-	log.Info().Msgf("Send AssociationUpdate with release request for node: %s", connection.nodeId)
+	log.Info().Msgf("Send AssociationUpdate with release request for node: %s", connection.localNodeID())
 
-	for _, assoc := range connection.NodeAssociations {
+	for _, assoc := range connection.AssociationSnapshots() {
 		err := SendAssociationUpdate(connection, assoc, false, true)
 		if err != nil {
 			log.Warn().Msg(err.Error())
@@ -338,6 +354,7 @@ func (connection *PfcpConnection) Run() {
 		default:
 		}
 		connection.serviceTransactions(time.Now())
+		connection.serviceHeartbeats(time.Now())
 		socket := connection.socket()
 		_ = socket.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		n, addr, err := socket.ReadFromUDP(buf)
@@ -452,15 +469,8 @@ func (connection *PfcpConnection) sendEncoded(wire []byte, typ uint8, addr *net.
 		return err
 	}
 	// Message names come from the finite codec type catalogue, never peer values.
-	PfcpMessageTx.WithLabelValues(messageTypeName(typ)).Inc()
+	PfcpMessageTx.WithLabelValues(message.MessageTypeName(typ)).Inc()
 	return nil
-}
-func messageTypeName(typ uint8) string {
-	msg := message.NewHeartbeatResponse(0)
-	if typ == message.MsgTypeHeartbeatResponse {
-		return msg.MessageTypeName()
-	}
-	return message.NewGeneric(typ, 0, 0).MessageTypeName()
 }
 
 func (connection *PfcpConnection) TraceMessage(b []byte, addr *net.UDPAddr, rx bool) {
@@ -475,52 +485,46 @@ func (connection *PfcpConnection) TraceMessage(b []byte, addr *net.UDPAddr, rx b
 }
 
 func (connection *PfcpConnection) RefreshAssociations() {
-	for _, node := range connection.nodes {
-		if connection.GetAssociation(node.getAddress()) == nil {
+	connection.stateMu.RLock()
+	nodes := append([]AssociationConnector(nil), connection.nodes...)
+	connection.stateMu.RUnlock()
+	for _, node := range nodes {
+		connection.stateMu.RLock()
+		exists := connection.GetAssociation(node.getAddress()) != nil
+		connection.stateMu.RUnlock()
+		if !exists && !connection.hasOutstanding(message.MsgTypeAssociationSetupRequest, node.getAddress()) {
 			node.sendAssociationSetupRequest(connection)
 		}
 	}
 }
 
 func (connection *PfcpConnection) DeleteAllAssociations() {
-	connection.associationMutex.Lock()
-	defer connection.associationMutex.Unlock()
-
-	for assocAddr, assoc := range connection.NodeAssociations {
-		if assoc == nil {
-			log.Warn().Msgf("Skip empty association %s during deletion", assocAddr)
-			continue
-		}
-
-		log.Info().Msgf("Pruning node association: %s", assocAddr)
-		for sessionId, session := range assoc.Sessions {
-			log.Info().Msgf("Deleting session: %d", sessionId)
-			connection.DeleteSession(session)
-		}
-
-		assoc.Close()
-
-		delete(connection.NodeAssociations, assocAddr)
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	for addr := range connection.NodeAssociations {
+		connection.deleteAssociation(addr)
 	}
 }
 
-// DeleteAssociation deletes an association and all sessions associated with it.
-func (connection *PfcpConnection) DeleteAssociation(assocAddr string) {
-	assoc := connection.GetAssociation(assocAddr)
+// DeleteAssociation removes an association and its session resources atomically
+// with respect to PFCP processing and external snapshots.
+func (connection *PfcpConnection) DeleteAssociation(addr string) {
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	connection.deleteAssociation(addr)
+}
+func (connection *PfcpConnection) deleteAssociation(addr string) {
+	assoc := connection.NodeAssociations[addr]
 	if assoc == nil {
-		log.Warn().Msgf("Association %s not found", assocAddr)
 		return
 	}
-
-	log.Info().Msgf("Pruning expired node association: %s", assocAddr)
-	for sessionId, session := range assoc.Sessions {
-		log.Info().Msgf("Deleting session: %d", sessionId)
+	for id, session := range assoc.Sessions {
 		connection.DeleteSession(session)
+		connection.ReleaseResources(session.LocalSEID)
+		delete(assoc.Sessions, id)
 	}
-
-	assoc.Close()
-
-	delete(connection.NodeAssociations, assocAddr)
+	delete(connection.NodeAssociations, addr)
+	connection.forgetPeer(addr)
 }
 
 // DeleteSession deletes a session and all PDRs, FARs and QERs associated with it.
@@ -538,6 +542,8 @@ func (connection *PfcpConnection) DeleteSession(session *Session) {
 }
 
 func (connection *PfcpConnection) GetSessionCount() int {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	count := 0
 	for _, assoc := range connection.NodeAssociations {
 		count += len(assoc.Sessions)
@@ -546,6 +552,8 @@ func (connection *PfcpConnection) GetSessionCount() int {
 }
 
 func (connection *PfcpConnection) GetAssiciationCount() int {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	return len(connection.NodeAssociations)
 }
 
@@ -564,6 +572,10 @@ func (connection *PfcpConnection) ReleaseResources(seID uint64) {
 }
 
 func (connection *PfcpConnection) SendReports() {
+	connection.stateMu.Lock()
+	var outgoing []queuedMessage
+	defer func() { connection.stateMu.Unlock(); connection.sendQueued(outgoing) }()
+
 	for _, assocaition := range connection.NodeAssociations {
 		for _, session := range assocaition.Sessions {
 			for urrid, urr := range session.URRs {
@@ -580,14 +592,7 @@ func (connection *PfcpConnection) SendReports() {
 					if urr.UrrInfo.VolumeThreshold > 0 && urr.UrrInfo.VolumeThreshold <= uplink+downlink {
 						urr.ReportSeqNumber += 1
 						session.URRSequence += 1
-						SendSessionReportUsage(connection, session.RemoteSEID, assocaition.NewSequenceID(), assocaition.Addr,
-							urrid,
-							session.URRSequence,
-							urr.ReportSeqNumber,
-							uplink,
-							downlink,
-							session.IsSessionTraced(),
-						)
+						outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, uplink, downlink)...), assocaition.endpoint, session.IsSessionTraced()})
 					}
 
 					urr.UrrInfo.UplinkVolume = newReport.UplinkVolume
@@ -617,13 +622,8 @@ func (connection *PfcpConnection) SendReports() {
 					}
 
 					traced := session.IsSessionTraced()
-					sequence := assocaition.NewSequenceID()
-					session.URRSequence += 1
-
-					SendDownlinkNotificationReport(connection, session.RemoteSEID, sequence, assocaition.Addr,
-						(uint16)(pdrID),
-						traced,
-					)
+					session.URRSequence++
+					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), assocaition.endpoint, traced})
 				}
 			}
 		}
@@ -632,6 +632,9 @@ func (connection *PfcpConnection) SendReports() {
 }
 
 func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter string) {
+	connection.stateMu.Lock()
+	var outgoing []queuedMessage
+	defer func() { connection.stateMu.Unlock(); connection.sendQueued(outgoing) }()
 
 	log.Info().Msgf("SendReportsSDF: ref=%d filter=%s", referenceID, sdfFilter)
 
@@ -655,12 +658,7 @@ func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter s
 
 				urr.ReportSeqNumber += 1
 				session.URRSequence += 1
-				SendSessionReportADC(connection, session.RemoteSEID, assocaition.NewSequenceID(), assocaition.Addr,
-					urrid,
-					session.URRSequence,
-					urr.ReportSeqNumber,
-					sdfFilter,
-					session.IsSessionTraced())
+				outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportADCIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, sdfFilter)...), assocaition.endpoint, session.IsSessionTraced()})
 
 				return
 			}
@@ -669,7 +667,7 @@ func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter s
 }
 
 func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
-	for _, assocaition := range connection.NodeAssociations {
+	for _, assocaition := range connection.AssociationSnapshots() {
 		if session, ok := assocaition.Sessions[seid]; ok {
 			pdrList := []uint16{}
 			for pdrID := range session.PDRs {
@@ -678,7 +676,7 @@ func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
 			SendSessionReportSessionRelease(
 				connection,
 				session.RemoteSEID,
-				assocaition.NewSequenceID(),
+				0,
 				assocaition.Addr,
 				session.IsSessionTraced(),
 				pdrList)
@@ -691,7 +689,7 @@ func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
 }
 
 func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn string) bool {
-	for _, assocaition := range connection.NodeAssociations {
+	for _, assocaition := range connection.AssociationSnapshots() {
 		for _, session := range assocaition.Sessions {
 			if session.IMSI == imsi || session.MSISDN == msisdn {
 				pdrList := []uint16{}
@@ -701,7 +699,7 @@ func (connection *PfcpConnection) ReleaseSessionByUserID(imsi string, msisdn str
 				SendSessionReportSessionRelease(
 					connection,
 					session.RemoteSEID,
-					assocaition.NewSequenceID(),
+					0,
 					assocaition.Addr,
 					session.IsSessionTraced(),
 					pdrList)
@@ -799,7 +797,7 @@ func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -819,7 +817,7 @@ func SendSessionReportADC(conn *PfcpConnection, seid uint64, sequenceID uint32, 
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -835,10 +833,10 @@ func SendAssociationUpdate(
 	traced bool,
 	release bool,
 ) error {
-	sequenceID := assoc.NextSequenceID
+	sequenceID := uint32(0)
 
 	additionalIEs := []*ie.IE{
-		conn.profile.NodeID(conn.nodeId), // its Node ID;
+		conn.profile.NodeID(conn.localNodeID()), // its Node ID;
 	}
 
 	if release {
@@ -847,7 +845,7 @@ func SendAssociationUpdate(
 
 	pfcpMsg := message.NewAssociationUpdateRequest(sequenceID, additionalIEs...)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", assoc.Addr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(assoc.Addr))
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to resolve address for CP node: %s", assoc.ID)
 		return err
@@ -881,7 +879,7 @@ func SendDownlinkNotificationReport(
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent DLDR Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -896,7 +894,7 @@ func SendSessionReportSessionRelease(conn *PfcpConnection, seid uint64, sequence
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
 	if err == nil {
 		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
 			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
@@ -927,11 +925,11 @@ func (connector *DefaultAssociationConnector) getAddress() string {
 
 func (connector *DefaultAssociationConnector) sendAssociationSetupRequest(connection *PfcpConnection) {
 	associationAddr := connector.getAddress()
-	ies := buildDefaultSetupRequestIEs(connection.profile, connection.nodeId, connection.RecoveryTimestamp, connection.featuresOctets[:])
+	ies := buildDefaultSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connection.featuresOctets[:])
 	AssociationSetupRequest := message.NewAssociationSetupRequest(0, ies...)
 	log.Info().Msgf("Sent Default Association Setup Request to: %s", associationAddr)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", connection.peerAddress(associationAddr))
 	if err != nil {
 		log.Error().Msgf("Failed to resolve udp address from PFCP peer address %s. Error: %s\n", associationAddr, err.Error())
 		return
@@ -966,7 +964,7 @@ func (connector *SxaAssociationConnector) getAddress() string {
 
 func (connector *SxaAssociationConnector) sendAssociationSetupRequest(connection *PfcpConnection) {
 	associationAddr := connector.getAddress()
-	ies, err := buildSxaSetupRequestIEs(connection.profile, connection.nodeId, connection.RecoveryTimestamp, connector.s1uAddress, connector.s5s8Address)
+	ies, err := buildSxaSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.s1uAddress, connector.s5s8Address)
 	if err != nil {
 		log.Error().Msgf("failed to build Sxa setup request IEs: %v", err)
 		return
@@ -974,7 +972,7 @@ func (connector *SxaAssociationConnector) sendAssociationSetupRequest(connection
 	AssociationSetupRequest := message.NewAssociationSetupRequest(0, ies...)
 	log.Info().Msgf("Sent Sxa Association Setup Request to: %s", associationAddr)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", connection.peerAddress(associationAddr))
 	if err != nil {
 		log.Error().Msgf("Failed to resolve udp address from PFCP peer address %s. Error: %s\n", associationAddr, err.Error())
 		return
@@ -1007,7 +1005,7 @@ func (connector *SxbAssociationConnector) getAddress() string {
 
 func (connector *SxbAssociationConnector) sendAssociationSetupRequest(connection *PfcpConnection) {
 	associationAddr := connector.getAddress()
-	ies, err := buildSxbSetupRequestIEs(connection.profile, connection.nodeId, connection.RecoveryTimestamp, connector.paAddress)
+	ies, err := buildSxbSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.paAddress)
 	if err != nil {
 		log.Error().Msgf("failed to build Sxb setup request IEs: %v", err)
 		return
@@ -1015,7 +1013,7 @@ func (connector *SxbAssociationConnector) sendAssociationSetupRequest(connection
 	AssociationSetupRequest := message.NewAssociationSetupRequest(0, ies...)
 	log.Info().Msgf("Sent Sxb Association Setup Request to: %s", associationAddr)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", connection.peerAddress(associationAddr))
 	if err != nil {
 		log.Error().Msgf("Failed to resolve udp address from PFCP peer address %s. Error: %s\n", associationAddr, err.Error())
 		return

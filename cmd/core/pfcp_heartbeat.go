@@ -5,6 +5,7 @@ package core
 
 import (
 	"net"
+	"time"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -22,6 +23,9 @@ func HandlePfcpHeartbeatRequest(conn *PfcpConnection, msg message.Message, addr 
 	}
 
 	// TS 29.244 V20.1.0 clause 6.2.2.2: answer even unknown peers.
+	if !conn.observeRecovery(addr, ts) {
+		return nil, true, nil
+	}
 
 	hbres := message.NewHeartbeatResponse(hbreq.SequenceNumber, ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp))
 	log.Debug().Msgf("Sent Heartbeat Response to: %s", addr)
@@ -39,15 +43,17 @@ func HandlePfcpHeartbeatResponse(conn *PfcpConnection, msg message.Message, addr
 	log.Debug().Msgf("Got Heartbeat Response with TS: %s, from: %s", ts, addr)
 
 	if association := conn.GetAssociation(addr); association != nil {
-		association.HandleHeartbeat(msg.Sequence())
+		association.heartbeatInFlight = false
+		association.nextHeartbeat = time.Now().Add(conn.heartbeatInterval())
 	}
+	conn.observeRecovery(addr, ts)
 	return nil, true, nil
 }
 
 func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) {
 	hbreq := message.NewHeartbeatRequest(sequenceID, append([]*ie.IE{ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)}, conn.profile.HeartbeatRequestAdditionalIEs()...)...)
 	log.Debug().Msgf("Sent Heartbeat Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", associationAddr+":8805")
+	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
 	if err == nil {
 		if err := conn.SendMessageWithTrace(hbreq, udpAddr, true); err != nil {
 			log.Warn().Msgf("Failed to send Heartbeat Request: %s\n", err.Error())

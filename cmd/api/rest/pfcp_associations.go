@@ -30,7 +30,7 @@ func (h *ApiHandler) listPfcpAssociations(c *gin.Context) {
 	nodeAssociationsList := []NodeAssociationDescription{}
 
 	for _, c := range h.GetPFCPSrv() {
-		for _, v := range c.NodeAssociations {
+		for _, v := range c.AssociationSnapshots() {
 			nodeAssociationsList = append(nodeAssociationsList, NodeAssociationDescription{
 				ID:   v.ID,
 				Addr: v.Addr})
@@ -51,7 +51,7 @@ func (h *ApiHandler) listPfcpAssociationsFull(c *gin.Context) {
 
 	associations := map[string]*core.NodeAssociation{}
 	for _, c := range h.GetPFCPSrv() {
-		maps.Copy(associations, c.NodeAssociations)
+		maps.Copy(associations, c.AssociationSnapshots())
 	}
 
 	c.IndentedJSON(http.StatusOK, associations)

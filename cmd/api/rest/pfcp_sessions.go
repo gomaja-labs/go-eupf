@@ -80,7 +80,7 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 	if sIp == "" && sTeid == "" {
 		var sessions []core.Session
 		for _, c := range h.GetPFCPSrv() {
-			newSessions := GetAllSessions(&c.NodeAssociations)
+			newSessions := GetAllSessions(c.AssociationSnapshots())
 			sessions = append(sessions, newSessions...)
 		}
 		c.IndentedJSON(http.StatusOK, sessions)
@@ -90,7 +90,7 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 	if sIp != "" {
 		if ip := net.ParseIP(sIp); ip != nil {
 			for _, c := range h.GetPFCPSrv() {
-				if session := FilterSessionsByIP(&c.NodeAssociations, ip); session != nil {
+				if session := FilterSessionsByIP(c.AssociationSnapshots(), ip); session != nil {
 					sessions = append(sessions, *session) // Append session by IP match
 				}
 			}
@@ -103,7 +103,7 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 	if sTeid != "" {
 		if teid, err := strconv.ParseUint(sTeid, 10, 32); err == nil {
 			for _, c := range h.GetPFCPSrv() {
-				if session := FilterSessionsByTeid(&c.NodeAssociations, uint32(teid)); session != nil {
+				if session := FilterSessionsByTeid(c.AssociationSnapshots(), uint32(teid)); session != nil {
 					sessions = append(sessions, *session) // Append session by TEID match
 				}
 			}
@@ -115,8 +115,8 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 	c.IndentedJSON(http.StatusOK, sessions)
 }
 
-func GetAllSessions(nodeMap *map[string]*core.NodeAssociation) (sessions []core.Session) {
-	for _, nodeAssoc := range *nodeMap {
+func GetAllSessions(nodeMap map[string]*core.NodeAssociation) (sessions []core.Session) {
+	for _, nodeAssoc := range nodeMap {
 		for _, session := range nodeAssoc.Sessions {
 			sessions = append(sessions, *session)
 		}
@@ -124,8 +124,8 @@ func GetAllSessions(nodeMap *map[string]*core.NodeAssociation) (sessions []core.
 	return
 }
 
-func FilterSessionsByIP(nodeMap *map[string]*core.NodeAssociation, filterByIP net.IP) *core.Session {
-	for _, nodeAssoc := range *nodeMap {
+func FilterSessionsByIP(nodeMap map[string]*core.NodeAssociation, filterByIP net.IP) *core.Session {
+	for _, nodeAssoc := range nodeMap {
 		for _, session := range nodeAssoc.Sessions {
 			for _, PDR := range session.PDRs {
 				if PDR.Ipv4.Equal(filterByIP) {
@@ -137,8 +137,8 @@ func FilterSessionsByIP(nodeMap *map[string]*core.NodeAssociation, filterByIP ne
 	return nil
 }
 
-func FilterSessionsByTeid(nodeMap *map[string]*core.NodeAssociation, filterByTeid uint32) *core.Session {
-	for _, nodeAssoc := range *nodeMap {
+func FilterSessionsByTeid(nodeMap map[string]*core.NodeAssociation, filterByTeid uint32) *core.Session {
+	for _, nodeAssoc := range nodeMap {
 		for _, session := range nodeAssoc.Sessions {
 			for _, PDR := range session.PDRs {
 				if PDR.Teid == filterByTeid {

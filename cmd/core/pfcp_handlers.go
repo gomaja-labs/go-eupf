@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
@@ -132,6 +131,9 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	}
 	if handlerErr == nil {
 		outgoing, trace, handlerErr = handler(conn, incomingMsg, addr.IP.String())
+		if handlerErr == nil {
+			conn.rememberEndpoint(incomingMsg, addr)
+		}
 	}
 	var wire []byte
 	if outgoing != nil {
@@ -168,344 +170,76 @@ func setBit(n uint8, pos uint) uint8 {
 	return n
 }
 
-func HandlePfcpAssociationUpdateResponse(
-	conn *PfcpConnection,
-	msg message.Message,
-	addr string,
-) (message.Message, bool, error) {
-	asupres := msg.(*message.AssociationUpdateResponse)
-
-	log.Info().Msgf("Got Association Update Response from: %s (Seq: %d)", addr, asupres.SequenceNumber)
-
-	log.Debug().Msgf("Association Update Response content: %+v", asupres)
-
-	if asupres.NodeID != nil {
-		log.Debug().Msgf("Node ID: %+v", asupres.NodeID)
-	}
-
+// Association procedures run under the connection state lock in dispatch.
+// TS 29.244 V20.1.0 clauses 6.2.6, 6.2.7 and 6.2.8.
+func HandlePfcpAssociationUpdateResponse(_ *PfcpConnection, _ message.Message, _ string) (message.Message, bool, error) {
 	return nil, false, nil
 }
-
-func HandlePfcpAssociationReleaseRequest(
-	conn *PfcpConnection,
-	msg message.Message,
-	addr string,
-) (message.Message, bool, error) {
-	asreq := msg.(*message.AssociationReleaseRequest)
-	log.Info().Msgf("Got Association Release Request from: %s (Seq: %d)", addr, asreq.SequenceNumber)
-
-	nodeID := asreq.NodeID
-	if nodeID == nil {
-		log.Warn().Msgf("Got Association Release Request without NodeID from: %s", addr)
-		nodeID = newIeNodeID("0.0.0.0")
-	}
-
-	conn.associationMutex.Lock()
-	defer conn.associationMutex.Unlock()
-
-	assoc, ok := conn.NodeAssociations[addr]
-	if !ok {
-		log.Warn().Msgf("No association found for address: %s", addr)
-
-		return message.NewAssociationReleaseResponse(
-			asreq.SequenceNumber,
-			nodeID,
-			ie.NewCause(ie.CauseRequestRejected),
-		), false, nil
-	}
-
-	if _, err := nodeID.NodeID(); err != nil {
-		log.Warn().Msgf("Error getting node ID: %s", err.Error())
-	} else {
-		conn.DeleteAssociation(addr)
-		log.Info().Msgf("Association with node [%s] released and removed", assoc.ID)
-	}
-
-	return message.NewAssociationReleaseResponse(
-		asreq.SequenceNumber,
-		nodeID,
-		ie.NewCause(ie.CauseRequestAccepted),
-	), false, nil
+func HandlePfcpAssociationReleaseRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
+	request := msg.(*message.AssociationReleaseRequest)
+	// Clause 6.2.8.3: the UP function always accepts Release, including a retry
+	// after the association has already gone. The response identifies this UPF.
+	conn.deleteAssociation(addr)
+	return message.NewAssociationReleaseResponse(request.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRequestAccepted)), true, nil
 }
-
-// TS 29.244 V20.1.0 clause 7.4.4.1.
 func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
-	asreq := msg.(*message.AssociationSetupRequest)
-	log.Info().Msgf("Got Association Setup Request from: %s", addr)
-	if asreq.NodeID == nil {
-		log.Warn().Msgf("Got Association Setup Request without NodeID from: %s", addr)
-		// Reject with cause
-
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		asres := message.NewAssociationSetupResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEMissing),
-		)
-		return asres, true, nil
+	request := msg.(*message.AssociationSetupRequest)
+	if failure := validateIncomingRequest(request); failure != nil {
+		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
-	printAssociationSetupRequest(asreq)
-	// Get NodeID
-	remoteNodeID, err := asreq.NodeID.NodeID()
+	node, _ := request.NodeID.NodeID()
+	retained, err := conn.replaceAssociation(nodeIDText(node), addr, request.PFCPSessionRetentionInformation, request.CPFunctionFeatures)
 	if err != nil {
-		log.Warn().Msgf("Got Association Setup Request with invalid NodeID from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEIncorrect)).Inc()
-		asres := message.NewAssociationSetupResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEIncorrect),
-		)
-		return asres, true, nil
+		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, err
 	}
-
-	// Recovery Time Stamp
-	if asreq.RecoveryTimeStamp == nil {
-		log.Warn().Msgf("Got Association Setup Request without RecoveryTimeStamp from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		asres := message.NewAssociationSetupResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEMissing),
-		)
-		return asres, true, nil
+	ies := []*ie.IE{conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseRequestAccepted), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp), ie.NewUPFunctionFeatures(conn.featuresOctets...)}
+	if retained {
+		ies = append(ies, ie.NewPFCPASRspFlags(1))
 	}
-	_, err = asreq.RecoveryTimeStamp.RecoveryTimeStamp()
-	if err != nil {
-		log.Warn().Msgf("Got Association Setup Request with invalid RecoveryTimeStamp from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEIncorrect)).Inc()
-		asres := message.NewAssociationSetupResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEIncorrect),
-		)
-		return asres, true, nil
+	return message.NewAssociationSetupResponse(request.Sequence(), ies...), true, nil
+}
+func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
+	request := msg.(*message.AssociationUpdateRequest)
+	if failure := validateIncomingRequest(request); failure != nil {
+		return conn.errorResponse(message.MsgTypeAssociationUpdateResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
-
-	// If the PFCP Association Setup Request contains a Node ID for which a PFCP association was already established
-	// proceed with establishing the new PFCP association (regardless of the Recovery AssociationStart received in the request), overwriting the existing association;
-	// if the request is accepted:
-	// shall store the Node ID of the CP function as the identifier of the PFCP association;
-
-	// Check if the PFCP Association Setup Request contains a Node ID for which a PFCP association was already established
-	conn.associationMutex.Lock()
-	defer conn.associationMutex.Unlock()
-	if _, ok := conn.NodeAssociations[addr]; ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", nodeIDText(remoteNodeID), addr)
-		// retain the PFCP sessions that were established with the existing PFCP association and that are requested to be retained, if the PFCP Session Retention Information IE was received in the request; otherwise, delete the PFCP sessions that were established with the existing PFCP association;
-		//log.Warn().Msg("Session retention is not yet implemented")
-	} else {
-		// Create RemoteNode from AssociationSetupRequest
-		remoteNode := NewNodeAssociation(nodeIDText(remoteNodeID), addr)
-		// Add or replace RemoteNode to NodeAssociationMap
-		conn.NodeAssociations[addr] = remoteNode
-
-		log.Info().Msgf("Saving new association: %+v", remoteNode)
-		if config.Conf.HeartbeatTimeout != 0 {
-			go remoteNode.ScheduleHeartbeat(conn)
+	node, _ := request.NodeID.NodeID()
+	assoc := conn.GetAssociation(addr)
+	cause := uint8(ie.CauseRequestAccepted)
+	if assoc == nil || assoc.ID != nodeIDText(node) {
+		cause = ie.CauseNoEstablishedPFCPAssociation
+	} else if request.CPFunctionFeatures != nil {
+		if features, err := request.CPFunctionFeatures.CPFunctionFeatures(); err == nil {
+			assoc.CPFeatures = append([]byte(nil), features...)
 		}
 	}
-
-	// shall send a PFCP Association Setup Response including:
-	asres := message.NewAssociationSetupResponse(asreq.SequenceNumber,
-		ie.NewCause(ie.CauseRequestAccepted), // a successful cause
-		conn.profile.NodeID(conn.nodeId),     // its Node ID;
-		ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp),
-		ie.NewUPFunctionFeatures(conn.featuresOctets[:]...),
-	)
-
-	// Send AssociationSetupResponse
-	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
-	return asres, true, nil
+	return message.NewAssociationUpdateResponse(request.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(cause)), true, nil
 }
-
-// Huawei association update request
-//         ipHeader
-//            sourceAddressType: ---- ipv4(4)
-//            sourceAddress
-//               ipv4-Address
-//                  uladdr1: ---- 0xa(10)
-//                  uladdr2: ---- 0xa9(169)
-//                  uladdr3: ---- 0x70(112)
-//                  uladdr4: ---- 0x8c(140)
-//            destinationAddressType: ---- ipv4(4)
-//            destinationAddress
-//               ipv4-Address
-//                  uladdr1: ---- 0xa(10)
-//                  uladdr2: ---- 0xa9(169)
-//                  uladdr3: ---- 0x1a(26)
-//                  uladdr4: ---- 0x82(130)
-//            trcUDPHdr
-//               sourcePort: ---- 0x2265(8805)
-//               destinationPort: ---- 0x2265(8805)
-//            pfcpMsg
-//               pfcpMsgV1
-//                  spare-1: ---- 0x0(0)
-//                  spare-2: ---- 0x0(0)
-//                  spare-3: ---- 0x0(0)
-//                  mp-flag: ---- 0x0(0)
-//                  s-flag: ---- 0x0(0)
-//                  message-type: ---- sx-association-update-request(7)
-//                  message-body
-//                     sequence-number: ---- 0x1c(28)
-//                     spare-msgbody2: ---- 0x0(0)
-//                     message-data
-//                        sx-association-update-request
-//                           CHOICE
-//                              nodeid
-//                                 spare: ---- 0x0(0)
-//                                 node-id-type: ---- ipv4-address(0)
-//                                 node-id-value
-//                                    ipv4-address
-//                                       uladdr1: ---- 0xa(10)
-//                                       uladdr2: ---- 0xa9(169)
-//                                       uladdr3: ---- 0x70(112)
-//                                       uladdr4: ---- 0x8c(140)
-//                           CHOICE
-//                              ip-section-msg-code
-//                                 enterprise-id: ---- 0x7db(2011)
-//                                 ip-section-msg-code: ---- 0x0(0)
-//                           CHOICE
-//                              ip-section-vpn-name
-//                                 enterprise-id: ---- 0x7db(2011)
-//                                 ip-section-vpn-name: ---- Gi
-//                           CHOICE
-//                              ip-section-number
-//                                 enterprise-id: ---- 0x7db(2011)
-//                                 ip-section-number: ---- 0x1(1)
-//                           CHOICE
-//                              ip-section
-//                                 enterprise-id: ---- 0x7db(2011)
-//                                 ip-section-list
-//                                    Ip-Section-addr-and-mask-length
-//                                       spare: ---- 0x0(0)
-//                                       ip-section-AddrType: ---- 0x0(0)
-//                                       ipv4-address
-//                                          uladdr1: ---- 0x64(100)
-//                                          uladdr2: ---- 0x59(89)
-//                                          uladdr3: ---- 0x80(128)
-//                                          uladdr4: ---- 0x0(0)
-//                                       mask-length: ---- 0x17(23)
-
-func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
-	asreq := msg.(*message.AssociationUpdateRequest)
-	log.Info().Msgf("Got Association Update Request from: %s", addr)
-	if asreq.NodeID == nil {
-		log.Warn().Msgf("Got Association Update Request without NodeID from: %s", addr)
-		// Reject with cause
-
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		asres := message.NewAssociationUpdateResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEMissing),
-		)
-		return asres, true, nil
-	}
-	printAssociationUpdateRequest(asreq)
-	// Get NodeID
-	remoteNodeID, err := asreq.NodeID.NodeID()
-	if err != nil {
-		log.Warn().Msgf("Got Association Update Request with invalid NodeID from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEIncorrect)).Inc()
-		asres := message.NewAssociationUpdateResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseMandatoryIEIncorrect),
-		)
-		return asres, true, nil
-	}
-
-	conn.associationMutex.Lock()
-	defer conn.associationMutex.Unlock()
-	if _, ok := conn.NodeAssociations[addr]; !ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s doesn't exist", nodeIDText(remoteNodeID), addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
-		asres := message.NewAssociationUpdateResponse(asreq.SequenceNumber,
-			ie.NewCause(ie.CauseNoEstablishedPFCPAssociation),
-		)
-		return asres, true, nil
-	}
-
-	// shall send a PFCP Association Update Response including:
-	asres := message.NewAssociationUpdateResponse(asreq.SequenceNumber,
-		conn.profile.NodeID(conn.nodeId),     // its Node ID;
-		ie.NewCause(ie.CauseRequestAccepted), // a successful cause
-	)
-
-	// Send AssociationUpdateResponse
-	PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRequestAccepted)).Inc()
-	return asres, true, nil
-}
-
 func newIeNodeID(nodeID string) *ie.IE {
 	if address, err := netip.ParseAddr(nodeID); err == nil {
 		return ie.NewNodeIDAddress(address)
 	}
 	return ie.NewNodeIDFQDN(nodeID)
 }
-
 func nodeIDText(value ie.NodeIDValue) string {
 	if value.Address.IsValid() {
 		return value.Address.String()
 	}
 	return value.FQDN
 }
-
 func HandlePfcpAssociationSetupResponse(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
-	asres := msg.(*message.AssociationSetupResponse)
-	log.Info().Msgf("Got Association Setup Response from: %s", addr)
-
-	// Node ID
-	if asres.NodeID == nil {
-		log.Warn().Msgf("Got Association Setup Response without NodeID from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		return nil, true, nil
-	}
-	remoteNodeID, err := asres.NodeID.NodeID()
-	if err != nil {
-		log.Warn().Msgf("Got Association Setup Response with invalid NodeID from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEIncorrect)).Inc()
+	response := msg.(*message.AssociationSetupResponse)
+	cause, err := response.Cause.Cause()
+	if err != nil || cause != ie.CauseRequestAccepted {
 		return nil, true, err
 	}
-
-	// Cause
-	if asres.Cause == nil {
-		log.Warn().Msgf("Got Association Setup Response without Cause from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEMissing)).Inc()
-		return nil, true, nil
+	if failure := requireIEs(requiredIE{ie.NodeID, response.NodeID}, requiredIE{ie.RecoveryTimeStamp, response.RecoveryTimeStamp}); failure != nil {
+		return nil, true, failure
 	}
-	cause, err := asres.Cause.Cause()
-	if err != nil {
-		log.Warn().Msgf("Got Association Setup Response with invalid Cause from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseMandatoryIEIncorrect)).Inc()
-		return nil, true, err
-	}
-	if cause != ie.CauseRequestAccepted {
-		log.Warn().Msgf("Got Association Setup Response with rejection in cause from: %s. Cause value: %s", addr, causeToString(cause))
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(cause)).Inc()
-		return nil, true, nil
-	}
-
-	// CP Function Features
-	if asres.CPFunctionFeatures == nil {
-		log.Warn().Msgf("Got Association Setup Response without CPFunctionFeatures from: %s", addr)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseConditionalIEMissing)).Inc()
-		return nil, true, nil
-	}
-	cpFunctionFeatures, err := asres.CPFunctionFeatures.CPFunctionFeatures()
-	if err != nil {
-		log.Warn().Msgf("Got Association Setup Response with invalid CPFunctionFeatures from: %s. CPFunctionFeatures: %b", addr, cpFunctionFeatures)
-		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseConditionalIEMissing)).Inc()
-		return nil, true, err
-	}
-	log.Info().Msgf("Got Association Setup Response with CPFunctionFeatures from: %s. CPFunctionFeatures: %b", addr, cpFunctionFeatures)
-
-	// Check if the PFCP Association Setup Request contains a Node ID for which a PFCP association was already established
-	conn.associationMutex.Lock()
-	defer conn.associationMutex.Unlock()
-	if _, ok := conn.NodeAssociations[addr]; ok {
-		log.Warn().Msgf("Association with NodeID: %s and address: %s already exists", nodeIDText(remoteNodeID), addr)
-		// retain the PFCP sessions that were established with the existing PFCP association and that are requested to be retained, if the PFCP Session Retention Information IE was received in the request; otherwise, delete the PFCP sessions that were established with the existing PFCP association;
-		//log.Warn().Msg("Session retention is not yet implemented")
-	} else {
-		// Create RemoteNode from AssociationSetupResponse
-		remoteNode := NewNodeAssociation(nodeIDText(remoteNodeID), addr)
-		// Add or replace RemoteNode to NodeAssociationMap
-		conn.NodeAssociations[addr] = remoteNode
-		log.Info().Msgf("Saving new association: %+v", remoteNode)
-
-		if config.Conf.HeartbeatTimeout != 0 {
-			go remoteNode.ScheduleHeartbeat(conn)
-		}
-	}
-
-	return nil, true, nil
+	node, _ := response.NodeID.NodeID()
+	// CP Function Features is conditional only if optional features are supported
+	// (Table 7.4.4.2-1); its absence is valid. Setup timestamps are ignored for
+	// restart detection: TS 23.527 V20.0.0 clause 4.2.
+	_, err = conn.replaceAssociation(nodeIDText(node), addr, nil, response.CPFunctionFeatures)
+	return nil, true, err
 }
