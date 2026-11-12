@@ -7,8 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
@@ -25,6 +30,7 @@ var (
 	pccConfigPathName    = "./pcc.yaml"
 	validate             *validator.Validate
 	commonConfigV        = viper.New()
+	configMu             sync.Mutex
 	pccConfigV           = viper.New()
 	SDFFilterRegex       = regexp.MustCompile(`^permit (out|in) (icmp|ip|tcp|udp|\d+) from (any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))? to (assigned|any|[\d.]+|[\da-fA-F:]+)(?:/(\d+))?(?: (\d+|\d+-\d+))?$`)
 )
@@ -66,6 +72,8 @@ type Qer struct {
 type UpfConfig struct {
 	InterfaceName           []string       `mapstructure:"interface_name" json:"interface_name"`
 	XDPAttachMode           string         `mapstructure:"xdp_attach_mode" validate:"oneof=generic native offload" json:"xdp_attach_mode"`
+	ApiToken                string         `mapstructure:"api_token" json:"-"`
+	ApiAllowedOrigins       []string       `mapstructure:"api_allowed_origins" json:"api_allowed_origins"`
 	ApiAddress              string         `mapstructure:"api_address" validate:"hostname_port" json:"api_address"`
 	PfcpAddress             string         `mapstructure:"pfcp_address" validate:"hostname_port" json:"pfcp_address"`
 	PfcpNodeId              string         `mapstructure:"pfcp_node_id" validate:"hostname|ip" json:"pfcp_node_id"`
@@ -136,7 +144,9 @@ func defineFlags() {
 	// pflags defaults are ignored in this setup
 	pflag.StringArray("iface", []string{}, "Interface list to bind XDP program to")
 	pflag.String("attach", "generic", "XDP attach mode")
-	pflag.String("aaddr", ":8080", "Address to bind api server to")
+	pflag.String("api-token", "", "Bearer token required for administration API access")
+	pflag.StringSlice("api-allowed-origins", nil, "Explicit CORS origins for the administration API")
+	pflag.String("aaddr", "127.0.0.1:8080", "Address to bind api server to")
 	pflag.String("paddr", "127.0.0.1:8805", "Address to bind PFCP server to")
 	pflag.String("nodeid", "127.0.0.1", "PFCP Server Node ID")
 	pflag.String("maddr", ":9090", "Address to bind metrics server to")
@@ -217,6 +227,8 @@ func initCommonConfig() {
 	// Bind flag errors only when flag is nil, and we ignore empty cli args
 	_ = commonConfigV.BindPFlag("interface_name", pflag.Lookup("iface"))
 	_ = commonConfigV.BindPFlag("xdp_attach_mode", pflag.Lookup("attach"))
+	_ = commonConfigV.BindPFlag("api_token", pflag.Lookup("api-token"))
+	_ = commonConfigV.BindPFlag("api_allowed_origins", pflag.Lookup("api-allowed-origins"))
 	_ = commonConfigV.BindPFlag("api_address", pflag.Lookup("aaddr"))
 	_ = commonConfigV.BindPFlag("pfcp_address", pflag.Lookup("paddr"))
 	_ = commonConfigV.BindPFlag("pfcp_node_id", pflag.Lookup("nodeid"))
@@ -268,11 +280,6 @@ func initCommonConfig() {
 	_ = commonConfigV.BindPFlag("ip6_ra_support", pflag.Lookup("ip6ra"))
 	_ = commonConfigV.BindPFlag("ip6_ra_prefix", pflag.Lookup("ip6rapref"))
 
-	commonConfigV.SetDefault("n9_address", commonConfigV.GetString("n3_address"))
-	commonConfigV.SetDefault("n3_adv_address", commonConfigV.GetString("n3_address"))
-	commonConfigV.SetDefault("n3_adv_address_5g", commonConfigV.GetString("n3_address"))
-	commonConfigV.SetDefault("n9_adv_address", commonConfigV.GetString("n9_address"))
-
 	commonConfigV.SetConfigFile(configPath)
 
 	commonConfigV.SetEnvPrefix("upf")
@@ -288,7 +295,12 @@ func initCommonConfig() {
 		}
 	}
 
-	log.Printf("Startup config: %+v", commonConfigV.AllSettings())
+	commonConfigV.SetDefault("n9_address", commonConfigV.GetString("n3_address"))
+	commonConfigV.SetDefault("n3_adv_address", commonConfigV.GetString("n3_address"))
+	commonConfigV.SetDefault("n3_adv_address_5g", commonConfigV.GetString("n3_address"))
+	commonConfigV.SetDefault("n9_adv_address", commonConfigV.GetString("n9_address"))
+
+	log.Print("Loaded startup configuration")
 }
 
 func (c *UpfConfig) GetDscpMarkByQci(qci uint8) uint8 {
@@ -301,8 +313,54 @@ func (c *UpfConfig) GetN3AdvertisedAddress5G() net.IP {
 }
 
 func (c *UpfConfig) Validate() error {
-	if err := validator.New().Struct(c); err != nil {
+	v := validator.New()
+	v.RegisterTagNameFunc(func(f reflect.StructField) string { return f.Tag.Get("mapstructure") })
+	if err := v.Struct(c); err != nil {
 		return err
+	}
+	if _, err := zerolog.ParseLevel(c.LoggingLevel); err != nil {
+		return fmt.Errorf("logging_level: %w", err)
+	}
+	if err := c.ValidateAPIExposure(); err != nil {
+		return err
+	}
+	// Bound eagerly allocated maps and pools before multiplying or enumerating them.
+	for key, value := range map[string]uint32{"max_sessions": c.MaxSessions, "association_setup_timeout": c.AssociationSetupTimeout, "gtp_echo_interval": c.GtpEchoInterval} {
+		if value == 0 || value > 1<<20 {
+			return fmt.Errorf("%s must be between 1 and 1048576", key)
+		}
+	}
+	for key, value := range map[string]uint32{"heartbeat_interval": c.HeartbeatInterval, "heartbeat_timeout": c.HeartbeatTimeout, "heartbeat_retries": c.HeartbeatRetries} {
+		if value > 86400 || (key != "heartbeat_retries" && value == 0) {
+			return fmt.Errorf("%s must be positive and must not exceed 86400 (zero heartbeat_retries is allowed)", key)
+		}
+	}
+	for key, value := range map[string]uint32{"pdr_map_size": c.PdrMapSize, "far_map_size": c.FarMapSize, "qer_map_size": c.QerMapSize, "urr_map_size": c.UrrMapSize} {
+		if value > 2<<20 {
+			return fmt.Errorf("%s must not exceed 2097152", key)
+		}
+	}
+	for key, value := range map[string]int{"trace_files": c.TraceMaxDumpFiles, "trace_max_size": c.TraceMaxDumpSize, "trace_max_packets": c.TraceMaxDumpPackets} {
+		minimum := 1
+		if key == "trace_files" {
+			minimum = 0
+		}
+		if value < minimum || value > 1<<30 {
+			return fmt.Errorf("%s must be between %d and 1073741824", key, minimum)
+		}
+	}
+	if c.FeatureUEIP {
+		ip, subnet, err := net.ParseCIDR(c.UEIPPool)
+		if err != nil || ip.To4() == nil {
+			return fmt.Errorf("ueip_pool must be an IPv4 CIDR")
+		}
+		ones, bits := subnet.Mask.Size()
+		if bits != 32 || ones < 12 {
+			return fmt.Errorf("ueip_pool must contain at most 1048576 addresses (/12 or narrower)")
+		}
+	}
+	if c.FeatureFTUP && (c.FTEIDPool == 0 || c.FTEIDPool > 1<<20) {
+		return fmt.Errorf("teid_pool must be between 1 and 1048576")
 	}
 
 	if !c.FeatureFTUP {
@@ -337,7 +395,13 @@ func (c *UpfConfig) Validate() error {
 
 // Unmarshal data from config file
 func (c *UpfConfig) Unmarshal() error {
-	return commonConfigV.UnmarshalExact(c)
+	configMu.Lock()
+	defer configMu.Unlock()
+	if err := commonConfigV.UnmarshalExact(c); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func validateSdfFilter(fl validator.FieldLevel) bool {
@@ -371,14 +435,44 @@ func (pcr *PCCRulesConfig) Unmarshal() error {
 }
 
 func (c *UpfConfig) UpdateFile(params map[string]interface{}) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	path := commonConfigV.ConfigFileUsed()
+	if path == "" {
+		path = commonConfigPathName
+	}
+	saved := viper.New()
+	saved.SetConfigFile(path)
+	if err := saved.ReadInConfig(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read selected config: %w", err)
+	}
 	for key, value := range params {
-		commonConfigV.Set(key, value)
+		saved.Set(key, value)
 	}
-
-	if err := commonConfigV.WriteConfigAs(commonConfigPathName); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	if err := saved.WriteConfigAs(path); err != nil {
+		return fmt.Errorf("write selected config: %w", err)
 	}
+	return nil
+}
 
-	log.Info().Msgf("Config file updated successfully: %s", commonConfigPathName)
+// ValidateAPIExposure permits unauthenticated management only on loopback.
+func (c *UpfConfig) ValidateAPIExposure() error {
+	host, _, err := net.SplitHostPort(c.ApiAddress)
+	if err != nil {
+		return fmt.Errorf("api_address: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if c.ApiToken == "" && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("api_token is required when api_address binds outside loopback")
+	}
+	if strings.ContainsAny(c.ApiToken, " \t\r\n") {
+		return fmt.Errorf("api_token must not contain whitespace")
+	}
+	for _, origin := range c.ApiAllowedOrigins {
+		parsed, err := url.Parse(origin)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Contains(origin, "*") || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+			return fmt.Errorf("api_allowed_origins requires explicit http or https origins")
+		}
+	}
 	return nil
 }

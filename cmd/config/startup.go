@@ -30,5 +30,5 @@ func Init() {
 		log.Fatalf("PCC config is invalid: %v", err)
 	}
 
-	log.Printf("Apply eUPF config: %+v", Conf)
+	log.Print("Validated eUPF configuration")
 }

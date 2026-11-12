@@ -8,25 +8,25 @@ Parameters can be configured through command line interface, config files (YAML,
 
 Parameter                                     | Description                                                                                                                                                                                                                                 | yaml                        | env                             | cli arg               | Defaults
 --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------- | --------------------- | -----------------------
-Interface name `Mandatory`                    | List of network interfaces handling N3 (GTP) & N6 (SGi) traffic. eUPF attaches XDP hook to every interface in this list. Format: `[ifnameA, ifnameB, ...]`.                                                                                 | `interface_name`            | `UPF_INTERFACE_NAME`            | `--iface`             | `lo`
+Interface name `Optional`                    | List of network interfaces handling N3 (GTP) & N6 (SGi) traffic. eUPF attaches XDP hook to every interface in this list. Format: `[ifnameA, ifnameB, ...]`.                                                                                 | `interface_name`            | `UPF_INTERFACE_NAME`            | `--iface`             | `[]`
 N3 address `Mandatory`                        | IPv4 address for N3 interface                                                                                                                                                                                                               | `n3_address`                | `UPF_N3_ADDRESS`                | `--n3addr`            | `127.0.0.1`
 N9 address `Optional`                         | IPv4 address for N9 interface                                                                                                                                                                                                               | `n9_address`                | `UPF_N9_ADDRESS`                | `--n9addr`            | `n3_address`
 N3 advertised address `Optional`             | Advertised IPv4 address for N3 interface. Falls back to `n3_address` when unset.                                                                                                                                                            | `n3_adv_address`            | `UPF_N3_ADV_ADDRESS`            | `--n3advaddr`         | `n3_address`
 N3 advertised address (5G) `Optional`        | Advertised IPv4 address for N3 interface used for 5G sessions. Falls back to `n3_address` when unset.                                                                                                                                       | `n3_adv_address_5g`         | `UPF_N3_ADV_ADDRESS_5G`         | `--n3advaddr5g`       | `n3_address`
 N9 advertised address `Optional`             | Advertised IPv4 address for N9 interface. Falls back to `n9_address` when unset.                                                                                                                                                            | `n9_adv_address`            | `UPF_N9_ADV_ADDRESS`            | `--n9advaddr`         | `n9_address`
 XDP mode `Optional`                           | XDP attach mode: ∘ **generic** – kernel-level (evaluation) ∘ **native** – driver-level ∘ **offload** – NIC-level (direct NIC execution). Refer to [How XDP Works](https://www.tigera.io/learn/guides/ebpf/ebpf-xdp/#How-XDP-Works)          | `xdp_attach_mode`           | `UPF_XDP_ATTACH_MODE`           | `--attach`            | `generic`
-API address `Optional`                        | Local address for serving [REST API](api.md) server                                                                                                                                                                                         | `api_address`               | `UPF_API_ADDRESS`               | `--aaddr`             | `:8080`
-PFCP address `Optional`                       | Local address that PFCP server will listen to                                                                                                                                                                                               | `pfcp_address`              | `UPF_PFCP_ADDRESS`              | `--paddr`             | `:8805`
-PFCP NodeID `Optional`                        | Local NodeID for PFCP protocol. Format is IPv4 address.                                                                                                                                                                                     | `pfcp_node_id`              | `UPF_PFCP_NODE_ID`              | `--nodeid`            | `127.0.0.1`
+API address `Optional`                        | Local address for serving [REST API](api.md) server                                                                                                                                                                                         | `api_address`               | `UPF_API_ADDRESS`               | `--aaddr`             | `127.0.0.1:8080`
+PFCP address `Optional`                       | Local address that PFCP server will listen to                                                                                                                                                                                               | `pfcp_address`              | `UPF_PFCP_ADDRESS`              | `--paddr`             | `127.0.0.1:8805`
+PFCP NodeID `Optional`                        | Local NodeID for PFCP protocol. Format is a hostname or IP address.                                                                                                                                                                                     | `pfcp_node_id`              | `UPF_PFCP_NODE_ID`              | `--nodeid`            | `127.0.0.1`
 GTP peer `Optional`                           | List of gtp peer's address to send echo requests to. Format is `[hostnameA:portA, hostnameB:portB, ...]`.                                                                                                                                   | `gtp_peer`                  | `UPF_GTP_PEER`                  | `--peer`              | `-`
 Echo request iterval `Optional`               | Echo request sending interval. Format is seconds.                                                                                                                                                                                           | `gtp_echo_interval`         | `UPF_GTP_ECHO_INTERVAL`         | `--echo`              | `10`
 Metrics address `Optional`                    | Local address for serving Prometheus metrics endpoint.                                                                                                                                                                                      | `metrics_address`           | `UPF_METRICS_ADDRESS`           | `--maddr`             | `:9090`
-QER map size `Optional`                       | Size of the QER eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `qer_map_size`              | `UPF_QER_MAP_SIZE`              | `--qersize`           | `1024`
-FAR map size `Optional`                       | Size of the FAR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `far_map_size`              | `UPF_FAR_MAP_SIZE`              | `--farsize`           | `1024`
-PDR map size `Optional`                       | Size of the PDR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `pdr_map_size`              | `UPF_PDR_MAP_SIZE`              | `--pdrsize`           | `1024`
-URR map size `Optional`                       | Size of the URR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `urr_map_size`              | `UPF_URR_MAP_SIZE`              | `--urrsize`           | `1024`
+QER map size `Optional`                       | Size of the QER eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `qer_map_size`              | `UPF_QER_MAP_SIZE`              | `--qersize`           | `0` (derived from max_sessions)
+FAR map size `Optional`                       | Size of the FAR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `far_map_size`              | `UPF_FAR_MAP_SIZE`              | `--farsize`           | `0` (derived from max_sessions)
+PDR map size `Optional`                       | Size of the PDR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `pdr_map_size`              | `UPF_PDR_MAP_SIZE`              | `--pdrsize`           | `0` (derived from max_sessions)
+URR map size `Optional`                       | Size of the URR eBPF map. Overrides value derived from `max_sessions` when set (non-zero).                                                                                                   | `urr_map_size`              | `UPF_URR_MAP_SIZE`              | `--urrsize`           | `0` (derived from max_sessions)
 Max Sessions `Optional`                       | Maximum number of sessions. Automatically calculates map sizes (PDR = 2×max_sessions, FAR = PDR, QER = max_sessions, URR = 2×max_sessions) when no individual (`qer_map_size`, etc.) is set. | `max_sessions`              | `UPF_MAX_SESSIONS`              | `--maxsessions`       | `65535`
-Logging level `Optional`                      | Logs having level <= selected level will be written to stdout                                                                                                                                                                               | `logging_level`             | `UPF_LOGGING_LEVEL`             | `--loglvl`            | `info`
+Logging level `Optional`                      | Logs at or above the selected severity are written to stdout                                                                                                                                                                               | `logging_level`             | `UPF_LOGGING_LEVEL`             | `--loglvl`            | `info`
 Logging caller `Optional`                    | Add the caller info (file:line) to every log line                                                                                                                                                                                           | `logging_caller`            | `UPF_LOGGING_CALLER`            | `--logcaller`         | `false`
 Heartbeat retries `Optional`                 | Number of heartbeat retries before the association is considered lost                                                                                                                                                                       | `heartbeat_retries`         | `UPF_HEARTBEAT_RETRIES`         | `--hbretries`         | `3`
 Heartbeat interval `Optional`                | Heartbeat sending interval. Format is seconds.                                                                                                                                                                                              | `heartbeat_interval`        | `UPF_HEARTBEAT_INTERVAL`        | `--hbinterval`        | `5`
@@ -44,10 +44,10 @@ PFCP profile `Optional` | PFCP dialect: "default" (standard 3GPP) or "huawei" (H
 S1-U address `Optional`                       | Address for communication over S1-U interface                                                                                                                                                                                               | `s1u_address`               | `UPF_S1U_ADDRESS`               | `--s1uaddr`           | `127.0.0.1`
 S5/S8 address `Optional`                      | Address for communication over S5/S8 interface                                                                                                                                                                                              | `s5s8_address`              | `UPF_S5S8_ADDRESS`              | `--s5s8addr`          | `127.0.0.1`
 PA address `Optional`                         | Address for communication over PA interface                                                                                                                                                                                                 | `pa_address`                | `UPF_PA_ADDRESS`                | `--paaddr`            | `127.0.0.1`
-Sxa address `Optional`                        | Sxa Address to bind PFCP server to                                                                                                                                                                                                          | `sxa_address`               | `UPF_SXA_ADDRESS`               | `--sxaaddr`           | `127.0.0.2:8805`
+Sxa address `Optional`                        | Sxa Address to bind PFCP server to                                                                                                                                                                                                          | `sxa_address`               | `UPF_SXA_ADDRESS`               | `--sxaaddr`           | `""` (disabled)
 List of Sxa peers `Optional`                  | Address of remote Sxa node                                                                                                                                                                                                                  | `sxa_remote_node`           | `UPF_SXA_REMOTE_NODE`           | `--sxanode`           | `-`
 Sxa node id `Optional`                        | Sxa PFCP Server Node ID                                                                                                                                                                                                                     | `sxa_node_id`               | `UPF_SXA_NODE_ID`               | `--sxanodeid`         | `127.0.0.2`
-Sxb address `Optional`                        | Sxb Address to bind PFCP server to                                                                                                                                                                                                          | `sxb_address`               | `UPF_SXB_ADDRESS`               | `--sxbaddr`           | `127.0.0.3:8805`
+Sxb address `Optional`                        | Sxb Address to bind PFCP server to                                                                                                                                                                                                          | `sxb_address`               | `UPF_SXB_ADDRESS`               | `--sxbaddr`           | `""` (disabled)
 List of Sxb peers `Optional`                  | Address of remote Sxb node                                                                                                                                                                                                                  | `sxb_remote_node`           | `UPF_SXB_REMOTE_NODE`           | `--sxbnode`           | `-`
 Sxb node id `Optional`                        | Sxb PFCP Server Node ID                                                                                                                                                                                                                     | `sxb_node_id`               | `UPF_SXB_NODE_ID`               | `--sxbnodeid`         | `127.0.0.3`
 Trace association `Optional`                  | Trace PFCP Association messages (Establish/Modify/Release)                                                                                                                                                                                  | `trace_association`         | `UPF_TRACE_ASSOCIATION`         | `--traceassoc`        | `true`
@@ -63,7 +63,7 @@ IPv6 subscriber prefix `Optional`             | Subscriber IPv6 prefix          
 
 ## PCC (predefined) rules
 
-Predefined PCC rules are configured in a separate config file (default `./pcc.yaml`, override with `--pcc-config`). The path to the file is set with the `--pcc-config` flag; settings inside the file are read from YAML only. The file defines a list of rules under the `pcc_rules` key:
+Predefined PCC rules are configured in a separate config file (default `./pcc.yaml`, override with `--pcc-config`). The path to the file is set with the `--pcc-config` flag; the loader accepts YAML or JSON and the PCC_ environment prefix. The file defines a list of rules under the `pcc_rules` key:
 
 ```yaml
 pcc_rules:
@@ -101,7 +101,7 @@ Max bitrate UL    | Maximum uplink bitrate in bit/s (0 = unlimited)             
 Max bitrate DL    | Maximum downlink bitrate in bit/s (0 = unlimited)                                               | `qer.max_bitrate_dl`    | `0`
 URR id            | URR id whose usage is reported for traffic matching the rule                                    | `urr.urrid`             | `0`
 
-A rule is activated for a PDR when the SMF (or the local API) sends an Activate Predefined Rules IE referencing its `pcc_name`; Deactivate Predefined Rules removes it again.
+A rule is activated for a PDR when the SMF sends an Activate Predefined Rules IE referencing its `pcc_name`; Deactivate Predefined Rules removes it again.
 
 We are using [Viper](https://github.com/spf13/viper) for configuration handling, [Viper](https://github.com/spf13/viper) uses the following precedence order. Each item takes precedence over the item below it:
 
@@ -110,46 +110,59 @@ We are using [Viper](https://github.com/spf13/viper) for configuration handling,
 - configuration file value
 - default value
 
-_NOTE:_ we are currently only support IPv4 NodeID.
+Node IDs accept hostnames or IP addresses.
 
 ## Example configuration
 
 ### Default values YAML
 
 ```yaml
-interface_name: [lo]
+interface_name: []
 xdp_attach_mode: generic
-api_address: :8080
-pfcp_address: :8805
+api_address: 127.0.0.1:8080
+api_token: ""
+api_allowed_origins: []
+pfcp_address: 127.0.0.1:8805
 pfcp_node_id: 127.0.0.1
 metrics_address: :9090
 n3_address: 127.0.0.1
-n9_address: 127.0.0.1
-qer_map_size: 1024
-far_map_size: 1024
-pdr_map_size: 1024
-feature_ueip: true
-feature_ftup: true
-ip_pool: 10.60.0.0/16
+# n9_address and advertised addresses default to the configured N3/N9 addresses.
+qer_map_size: 0
+far_map_size: 0
+pdr_map_size: 0
+urr_map_size: 0
+max_sessions: 65535
+feature_ueip: false
+feature_ftup: false
+ueip_pool: 10.60.0.0/24
 teid_pool: 65535
-pfcp_node: 
+pfcp_remote_node: []
 association_setup_timeout: 5
+heartbeat_retries: 3
+heartbeat_interval: 5
+heartbeat_timeout: 5
+gtp_peer: []
+gtp_echo_interval: 10
+logging_level: info
+logging_caller: false
 pfcp_profile: default
 s1u_address: 127.0.0.1
 s5s8_address: 127.0.0.1
-sxa_address: 127.0.0.2:8805
-sxa_node: 
+sxa_address: ""
+sxa_remote_node: []
 sxa_node_id: 127.0.0.2
-sxb_address: 127.0.0.3:8805
-sxb_node: 
+sxb_address: ""
+sxb_remote_node: []
 sxb_node_id: 127.0.0.3
 pa_address: 127.0.0.1
 trace_association: true
-trace_blocked: true
+trace_blocked: false
 trace_files: 10
 trace_max_packets: 100000
 trace_max_size: 10485760
 trace_heartbeat: false
+trace_in: true
+trace_out: true
 ip6_ra_support: false
 ip6_ra_prefix: 2a03:d000:29a0:509::/64
 ```
@@ -157,14 +170,14 @@ ip6_ra_prefix: 2a03:d000:29a0:509::/64
 ### Environment variables
 
 ```env
-UPF_INTERFACE_NAME="[eth0, n6]"
+UPF_INTERFACE_NAME="eth0,n6"
 UPF_XDP_ATTACH_MODE=generic
-UPF_API_ADDRESS=:8081
+UPF_API_ADDRESS=127.0.0.1:8081
 UPF_PFCP_ADDRESS=:8806
 UPF_METRICS_ADDRESS=:9091
-UPF_PFCP_NODE_ID: 10.100.50.241  # address on n4 interface
-UPF_N3_ADDRESS: 10.100.50.233
-UPF_N9_ADDRESS: 10.100.50.233
+UPF_PFCP_NODE_ID=10.100.50.241  # address on n4 interface
+UPF_N3_ADDRESS=10.100.50.233
+UPF_N9_ADDRESS=10.100.50.233
 ```
 
 ### CLI
@@ -174,9 +187,17 @@ eupf \
  --iface n3 \
  --iface n6 \
  --attach generic \
- --aaddr :8081 \
+ --aaddr 127.0.0.1:8081 \
  --paddr :8086 \
  --nodeid 127.0.0.1 \
  --maddr :9090 \
  --n3addr 10.100.50.233
 ```
+
+## Management API and validation limits
+
+`api_token` / `UPF_API_TOKEN` / `--api-token` sets the administration bearer token. A non-loopback `api_address` requires it. `api_allowed_origins` / `UPF_API_ALLOWED_ORIGINS` / `--api-allowed-origins` supplies explicit HTTP(S) browser origins; the default list is empty. The token is omitted from the REST configuration response and startup logs. See [API security](api.md).
+
+`max_sessions` is 1..1048576. Each explicit map size is 0 (derive from max_sessions) or 1..2097152. Association setup and GTP echo timers are 1..1048576 seconds. Heartbeat interval and timeout are 1..86400 seconds; heartbeat retries are 0..86400. Trace file count is 0..1073741824; trace size and packet count are 1..1073741824. Enabled UE-IP pools must be IPv4 /12 or narrower (at most 1048576 addresses); enabled TEID pools contain 1..1048576 entries. These are validation ceilings; provision memory for the actual configured maps and pools.
+
+REST edits write the file selected by `--config`. A read-only ConfigMap cannot persist edits: the API reports HTTP 500 if the runtime edit succeeded but persistence failed. Update the Helm values and restart to make durable changes to a ConfigMap deployment.
