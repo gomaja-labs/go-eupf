@@ -213,7 +213,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
 		conn.TraceMessage(buf, addr, true)
 	}
-	UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(float64(time.Since(startTime).Microseconds()))
+	UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(time.Since(startTime).Seconds())
 	if wire != nil {
 		handlerErr = errors.Join(handlerErr, conn.sendEncoded(wire, outgoing.MessageType(), addr, trace))
 	}

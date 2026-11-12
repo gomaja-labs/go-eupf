@@ -1057,7 +1057,7 @@
               "type": "prometheus",
               "uid": "prometheus"
             },
-            "description": "pfcp_upf_pfcp_rx_latency Duration of the PFCP message processing, Microseconds",
+            "description": "upf_pfcp_rx_duration_seconds Duration of the PFCP message processing, seconds",
             "fieldConfig": {
               "defaults": {
                 "color": {
@@ -1102,11 +1102,11 @@
                     },
                     {
                       "color": "red",
-                      "value": 80
+                      "value": 0.00008
                     }
                   ]
                 },
-                "unit": "µs"
+                "unit": "s"
               },
               "overrides": [
                 {
@@ -1183,7 +1183,7 @@
                   "uid": "prometheus"
                 },
                 "editorMode": "builder",
-                "expr": "sum by(message_type, quantile) (pfcp_upf_pfcp_rx_latency)",
+                "expr": "sum by(message_type, quantile) (upf_pfcp_rx_duration_seconds)",
                 "legendFormat": "__auto",
                 "range": true,
                 "refId": "A"
@@ -1194,7 +1194,7 @@
                   "uid": "prometheus"
                 },
                 "editorMode": "builder",
-                "expr": "sum by(message_type) (rate(pfcp_upf_pfcp_rx_latency_sum[$__rate_interval]))",
+                "expr": "sum by(message_type) (rate(upf_pfcp_rx_duration_seconds_sum[$__rate_interval]))",
                 "hide": false,
                 "legendFormat": "{{message_type}} latency_sum rate",
                 "range": true,
@@ -1206,7 +1206,7 @@
                   "uid": "prometheus"
                 },
                 "editorMode": "builder",
-                "expr": "sum by(message_type) (rate(pfcp_upf_pfcp_rx_latency_count[$__rate_interval]))",
+                "expr": "sum by(message_type) (rate(upf_pfcp_rx_duration_seconds_count[$__rate_interval]))",
                 "hide": false,
                 "legendFormat": "{{message_type}} latency_count rate",
                 "range": true,

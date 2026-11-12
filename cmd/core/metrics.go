@@ -54,9 +54,8 @@ var (
 	}, []string{"packet_type"})
 
 	UpfMessageRxLatency = promauto.NewSummaryVec(prometheus.SummaryOpts{
-		Name:       "upf_pfcp_rx_latency",
-		Subsystem:  "pfcp",
-		Help:       "Duration of the PFCP message processing",
+		Name:       "upf_pfcp_rx_duration_seconds",
+		Help:       "Duration of PFCP message processing in seconds",
 		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 	}, []string{"message_type"})
 )
