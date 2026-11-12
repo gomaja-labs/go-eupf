@@ -28,24 +28,45 @@ enum outer_header_removal_values {
 
 struct pdr {
     __u32 far_id;
-    __u32 qer_id;
+    __u32 qer_id[4];
+    __u8 qer_count;
     __u32 urr_id[URR_LIST_SIZE];
     __u8 outer_header_removal;
+ __u8 outer_header_removal_present;
 };
 
-struct sdf_rule {
-    __u8 active;
-    struct sdf_filter sdf_filter;
+// TS 29.244 V20.1.0 clauses 5.2.1 and 8.2.11: one independently
+// replaceable entry per PDR, ordered by increasing numeric Precedence.
+#define PDR_LIST_SIZE 4
+#define QFI_LIST_SIZE 8
+struct pdr_entry {
     struct pdr pdr;
-    __u8 notify;
+    struct pdr return_pdr;
+    __u8 return_nr_flag;
+    __u32 pdr_id;
+    __u32 precedence;
+    __u64 notify;
+    __u32 ue_ip4;
+    __u32 ue_mask4;
+    __u8 ue_ip6[16];
+    __u8 ue_mask6[16];
+    __u8 ue_ip4_present;
+    __u8 ue_ip6_present;
+    __u8 ue_destination;
+    __u8 source_interface_present;
+    __u8 source_interface;
+    __u8 trace_flag;
+    __u8 nr_flag;
+    __u8 sdf_count;
+    __u8 qfi_count;
+    __u8 qfis[QFI_LIST_SIZE];
+    struct sdf_filter sdf_filters[SDF_LIST_SIZE];
 };
 
 struct pdr_info {
-    __u8 trace_flag;
-    __u8 sdf_mode; // 0 - no sdf, 1 - sdf only, 2 - sdf + default
-    __u8 nr_flag;
-    struct pdr default_pdr;
-    struct sdf_rule dedicated_pdrs[SDF_LIST_SIZE];
+    __u64 session_id;
+    __u32 count;
+    struct pdr_entry entries[PDR_LIST_SIZE];
 };
 
 /* ipv4 -> PDR */
@@ -57,11 +78,17 @@ struct
     __uint(max_entries, PDR_MAP_SIZE);
 } pdr_map_downlink_ip4 SEC(".maps");
 
-/* ipv6 -> PDR */
+struct ipv6_pdr_key {
+    __u32 prefix_length;
+    __u8 address[16];
+};
+
+/* IPv6 address/prefix -> session PDRs */
 struct
 {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key, struct in6_addr);
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct ipv6_pdr_key);
     __type(value, struct pdr_info);
     __uint(max_entries, PDR_MAP_SIZE);
 } pdr_map_downlink_ip6 SEC(".maps");

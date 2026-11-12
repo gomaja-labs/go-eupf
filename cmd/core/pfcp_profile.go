@@ -57,10 +57,8 @@ type PfcpProfile interface {
 	// (Association Setup/Update, Session Establishment Response, etc.).
 	NodeID(nodeID string) *ie.IE
 
-	// URSEQN builds a URSEQN IE for usage reports. The profile decides whether
-	// to use the session-level sequence (Huawei) or the per-URR report sequence
-	// (standard 3GPP).
-	URSEQN(sessionSeq, reportSeq uint32) *ie.IE
+	// URSEQN builds the per-URR sequence mandated by TS 29.244 clause 5.2.2.3.1.
+	URSEQN(reportSeq uint32) *ie.IE
 
 	// HeartbeatRequestAdditionalIEs returns extra IEs to append to PFCP
 	// Heartbeat Request messages, or nil if none. HuaweiProfile adds
@@ -156,7 +154,7 @@ func (DefaultProfile) NodeID(nodeID string) *ie.IE {
 	return newIeNodeID(nodeID)
 }
 
-func (DefaultProfile) URSEQN(sessionSeq, reportSeq uint32) *ie.IE {
+func (DefaultProfile) URSEQN(reportSeq uint32) *ie.IE {
 	return ie.NewURSEQN(reportSeq)
 }
 
@@ -275,8 +273,8 @@ func (h HuaweiProfile) NodeID(nodeID string) *ie.IE {
 	return newIeNodeIDHuawei(nodeID)
 }
 
-func (h HuaweiProfile) URSEQN(sessionSeq, reportSeq uint32) *ie.IE {
-	return ie.NewURSEQN(sessionSeq)
+func (h HuaweiProfile) URSEQN(reportSeq uint32) *ie.IE {
+	return ie.NewURSEQN(reportSeq)
 }
 
 func (h HuaweiProfile) HeartbeatRequestAdditionalIEs() []*ie.IE {

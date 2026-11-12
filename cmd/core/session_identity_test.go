@@ -4,6 +4,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -66,5 +68,23 @@ func TestLocalSEIDWrapSkipsLiveSessions(t *testing.T) {
 	conn.NodeAssociations[peer].Sessions[2] = NewSession(2, 20, "", "", false)
 	if got := conn.newLocalSEID(); got != 3 {
 		t.Fatalf("wrapped SEID=%d, want first unused nonzero SEID 3", got)
+	}
+}
+
+func TestLocalSEIDUniqueAcrossPFCPInterfaces(t *testing.T) {
+	shared, _ := service.NewResourceManager("", 0)
+	seen := map[uint64]bool{}
+	for range 3 {
+		conn, peer := PreparePfcpConnection(t)
+		conn.ResourceManager = shared
+		reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN(peer), ie.NewFSEID(42, net.ParseIP(peer), nil)), peer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, _ := reply.(*message.SessionEstablishmentResponse).UPFSEID.FSEID()
+		if f == nil || seen[f.SEID] {
+			t.Fatal("shared forwarding plane reused a local SEID across PFCP interfaces")
+		}
+		seen[f.SEID] = true
 	}
 }

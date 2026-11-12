@@ -20,6 +20,7 @@ type MapOperationsMock struct {
 	downlinkPDR ebpf.PdrInfo
 	urr         ebpf.UrrInfo
 	far         ebpf.FarInfo
+	nextID      uint32
 }
 
 func (mapOps *MapOperationsMock) PutPdrUplink(teid uint32, pdrInfo ebpf.PdrInfo) error {
@@ -36,10 +37,10 @@ func (mapOps *MapOperationsMock) UpdatePdrUplink(teid uint32, pdrInfo ebpf.PdrIn
 func (mapOps *MapOperationsMock) UpdatePdrDownlink(ipv4 net.IP, pdrInfo ebpf.PdrInfo) error {
 	return nil
 }
-func (mapOps *MapOperationsMock) DeletePdrUplink(teid uint32) error {
+func (mapOps *MapOperationsMock) DeletePdrUplink(teid uint32, sessionID uint64, pdrID uint32) error {
 	return nil
 }
-func (mapOps *MapOperationsMock) DeletePdrDownlink(ipv4 net.IP) error {
+func (mapOps *MapOperationsMock) DeletePdrDownlink(ipv4 net.IP, sessionID uint64, pdrID uint32) error {
 	return nil
 }
 func (mapOps *MapOperationsMock) PutDownlinkPdrIp6(ipv6 net.IP, pdrInfo ebpf.PdrInfo) error {
@@ -48,11 +49,12 @@ func (mapOps *MapOperationsMock) PutDownlinkPdrIp6(ipv6 net.IP, pdrInfo ebpf.Pdr
 func (mapOps *MapOperationsMock) UpdateDownlinkPdrIp6(ipv6 net.IP, pdrInfo ebpf.PdrInfo) error {
 	return nil
 }
-func (mapOps *MapOperationsMock) DeleteDownlinkPdrIp6(ipv6 net.IP) error {
+func (mapOps *MapOperationsMock) DeleteDownlinkPdrIp6(ipv6 net.IP, sessionID uint64, pdrID uint32, prefixLength uint32) error {
 	return nil
 }
 func (mapOps *MapOperationsMock) NewFar(farInfo ebpf.FarInfo) (uint32, error) {
-	return 0, nil
+	mapOps.nextID++
+	return mapOps.nextID, nil
 }
 func (mapOps *MapOperationsMock) UpdateFar(internalId uint32, farInfo ebpf.FarInfo) error {
 	return nil
@@ -61,7 +63,8 @@ func (mapOps *MapOperationsMock) DeleteFar(internalId uint32) error {
 	return nil
 }
 func (mapOps *MapOperationsMock) NewQer(qerInfo ebpf.QerInfo) (uint32, error) {
-	return 0, nil
+	mapOps.nextID++
+	return mapOps.nextID, nil
 }
 func (mapOps *MapOperationsMock) UpdateQer(internalId uint32, qerInfo ebpf.QerInfo) error {
 	return nil
@@ -71,7 +74,8 @@ func (mapOps *MapOperationsMock) DeleteQer(internalId uint32) error {
 }
 
 func (mapOps *MapOperationsMock) NewUrr(urrInfo ebpf.UrrInfo) (uint32, error) {
-	return 0, nil
+	mapOps.nextID++
+	return mapOps.nextID, nil
 }
 
 func (mapOps *MapOperationsMock) UpdateUrr(internalId uint32, urrInfo ebpf.UrrInfo) error {
@@ -152,7 +156,7 @@ func TestSessionOverwrite(t *testing.T) {
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
 				//ie.NewFTEID(1, 0, ip1.IP, nil, 0),
-				ie.NewUEIPAddress(2, "1.1.1.1", "", 0, 0),
+				ie.NewUEIPAddress(6, "1.1.1.1", "", 0, 0),
 			),
 		),
 	)
@@ -165,7 +169,7 @@ func TestSessionOverwrite(t *testing.T) {
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
 				//ie.NewFTEID(1, 0, ip2.IP, nil, 0),
-				ie.NewUEIPAddress(2, "2.2.2.2", "", 0, 0),
+				ie.NewUEIPAddress(6, "2.2.2.2", "", 0, 0),
 			),
 		),
 	)
@@ -218,3 +222,25 @@ func TestSessionOverwrite(t *testing.T) {
 		t.Errorf("Session 2, got broken")
 	}
 }
+
+type mapTransactionMock struct {
+	ebpf.ForwardingPlaneController
+	rollback func()
+}
+
+func (mock *mapTransactionMock) Commit() error { mock.rollback = nil; return nil }
+func (mock *mapTransactionMock) Rollback() error {
+	if mock.rollback != nil {
+		mock.rollback()
+		mock.rollback = nil
+	}
+	return nil
+}
+func (maps *MapOperationsMock) BeginRuleTransaction(_ uint64) (ebpf.RuleTransaction, error) {
+	before := *maps
+	return &mapTransactionMock{ForwardingPlaneController: maps, rollback: func() { *maps = before }}, nil
+}
+
+func (m *MapOperationsMock) GetNextFAR() (uint32, error) { m.nextID++; return m.nextID, nil }
+func (m *MapOperationsMock) GetNextQER() (uint32, error) { m.nextID++; return m.nextID, nil }
+func (m *MapOperationsMock) GetNextURR() (uint32, error) { m.nextID++; return m.nextID, nil }

@@ -65,7 +65,7 @@ static __noinline int parse_gtp(struct packet_context *ctx) {
         if (after > ctx->data_end || after > end) return -1;
         if (next == GTPU_EXT_TYPE_PDU_SESSION_CONTAINER) {
             // TS 38.415 V19.1.0 figure 5.5.2.2-1: QFI is the low six bits.
-            ctx->qfi = cursor[2] & 0x3f;
+            ctx->qfi = cursor[2] & 0x3f;ctx->qfi_present=1;
         } else if (next & 0x80) {
             // TS 29.281 V19.2.0 figure 5.2.1-2: bits 10 require
             // comprehension only at an endpoint; bits 11 at every node.
@@ -265,8 +265,8 @@ static __always_inline void fill_gtp_ext_header_psc(struct gtp_hdr_ext_pdu_sessi
     gtp_ext->pdu_type = pdu_type;
     gtp_ext->spare1 = 0;
     gtp_ext->spare2 = 0;
-    gtp_ext->rqi = 0;
-    gtp_ext->qfi = qfi;
+    gtp_ext->rqi = (qfi >> 6) & 1;
+    gtp_ext->qfi = qfi & 0x3f;
     gtp_ext->next_ext = 0;
 }
 

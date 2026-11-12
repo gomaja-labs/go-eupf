@@ -34,6 +34,8 @@ type FarMapElement struct {
 //	@Failure 404 {object} map[string]string
 //	@Router /far_map/{id} [get]
 func (h *ApiHandler) getFarValue(c *gin.Context) {
+	unlock := h.BpfObjects.LockRuleSnapshot()
+	defer unlock()
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		log.Info().Msgf("Error converting id to uint32: %s", err.Error())
@@ -60,45 +62,18 @@ func (h *ApiHandler) getFarValue(c *gin.Context) {
 
 // SetFarValue godoc
 //
-//	@Summary Set FAR map element
+//	@Summary Reject direct FAR writes; use PFCP
 //	@Description Create or update FAR map element
 //	@Tags FAR
 //	@Accept json
 //	@Produce json
 //	@Param id path int true "FAR ID"
 //	@Param far body FarMapElement true "FAR element data"
-//	@Success 201 {object} FarMapElement
+//	@Failure 405 {object} map[string]string
 //	@Failure 400 {object} map[string]string
 //	@Failure 500 {object} map[string]string
 //	@Router /far_map/{id} [put]
 func (h *ApiHandler) setFarValue(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		log.Info().Msgf("Error converting id to uint32: %s", err.Error())
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var farElement FarMapElement
-	if err := c.BindJSON(&farElement); err != nil {
-		log.Printf("Parsing request body error: %s", err.Error())
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var value = ebpf.IpEntrypointFarInfo{
-		Action:                farElement.Action,
-		OuterHeaderCreation:   farElement.OuterHeaderCreation,
-		Teid:                  farElement.Teid,
-		Remoteip:              farElement.RemoteIP,
-		TransportLevelMarking: farElement.TransportLevelMarking,
-	}
-
-	if err := h.BpfObjects.FarMap.Put(uint32(id), &value); err != nil {
-		log.Printf("Error writing map: %s", err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.IndentedJSON(http.StatusCreated, farElement)
+	c.Header("Allow", "GET")
+	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "forwarding rules are managed through PFCP"})
 }

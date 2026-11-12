@@ -11,7 +11,10 @@
 #include "xdp/utils/gtpu.h"
 
 /* Header cursor to keep track of current parsing position */
+struct pdr;
 struct packet_context {
+    const struct pdr *return_pdr;
+    __u8 return_nr_flag;
     char *data;
     const char *data_end;
     struct upf_counters *counters;
@@ -27,7 +30,11 @@ struct packet_context {
     __u32 gtp_header_length;
     __u32 tpdu_length;
     __u8 qfi;
+    __u8 qfi_present;
     __u8 unknown_extensions;
     __u8 trace;
     __u8 locally_generated;
+    __u8 rules_blocked;
+    __u8 source_interface;
+    __u8 nr_flag;
 };

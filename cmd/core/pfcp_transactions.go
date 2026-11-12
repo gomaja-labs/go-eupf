@@ -69,6 +69,12 @@ func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
 }
 func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn) ([]byte, error) {
 	entity, association := conn.outgoingContext(msg, peer.IP.String())
+	return conn.prepareRequestContext(msg, peer, trace, socket, entity, association)
+}
+
+// prepareRequestContext admits reliable delivery using an already resolved
+// session context. Report producers may call it while holding stateMu.
+func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn, entity string, association *NodeAssociation) ([]byte, error) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()

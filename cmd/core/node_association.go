@@ -31,6 +31,24 @@ func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {
 // TS 29.244 V20.1.0 clause 5.6.2: a SEID identifies a session at the UPF's
 // address, independently of the CP peer that owns the session.
 func (conn *PfcpConnection) newLocalSEID() uint64 {
+	if conn.ResourceManager != nil {
+		for {
+			id := conn.ResourceManager.NextSessionID()
+			if id == 0 {
+				return 0
+			}
+			occupied := false
+			for _, assoc := range conn.NodeAssociations {
+				if assoc.Sessions[id] != nil {
+					occupied = true
+					break
+				}
+			}
+			if !occupied {
+				return id
+			}
+		}
+	}
 	if conn.nextSessionID == 0 {
 		conn.nextSessionID = 1
 	}

@@ -46,7 +46,11 @@ func ParseSdfFilter(flowDescription string) (ebpf.SdfFilter, error) {
 			return ebpf.SdfFilter{}, err
 		}
 	}
-	if match[6] == "assigned" || match[6] == "any" {
+	// An unresolved UE token must not widen a rule to an arbitrary destination.
+	if match[6] == "assigned" {
+		return ebpf.SdfFilter{}, fmt.Errorf("SDF assigned address: %w", ebpf.ErrUnsupportedRuleContent)
+	}
+	if match[6] == "any" {
 		sdfInfo.DstAddress = ebpf.IpWMask{Type: 0}
 	} else {
 		if sdfInfo.DstAddress, err = ParseCidrIp(match[6], match[7]); err != nil {
@@ -86,7 +90,7 @@ func ParseProtocol(protocol string) (uint8, error) {
 	if ok {
 		return number, nil
 	} else {
-		return 0, fmt.Errorf("SDF filter: unsupported protocol %s", protocol)
+		return 0, fmt.Errorf("SDF filter protocol %s: %w", protocol, ebpf.ErrUnsupportedRuleContent)
 	}
 }
 

@@ -41,9 +41,22 @@ URR counters and QER rates use the validated IP PDU length, including its IP
 header and excluding GTP optional headers, outer IP/UDP headers, Ethernet and
 padding. Volume is counted after gate and bitrate enforcement (TS 29.244
 V20.1.0 clause 5.2.2.2.1). Kernel increments are atomic across CPUs. Updating a
-URR configuration preserves live counters. Callers must remove references and
-quiesce traffic before deleting/reusing a URR; deletion is not an atomic
-snapshot of an active counter.
+URR configuration preserves live counters. Session transactions close a shared
+admission gate and wait for admitted XDP invocations to finish. They detach all
+references before reading final URR counters, clear the slot, then release its
+ID after commit. Tail calls release admission before the next invocation.
+A closed gate drops known user-plane traffic during the transaction; it does
+not buffer it. Control traffic and unowned N6 destinations retain their ordinary
+paths. This is a whole-UPF pause, bounded to a one-second drain wait, rather
+than a per-session concurrency guarantee. A failed rollback leaves admission
+closed and rejects further transactions until restart.
+
+Every bound QER applies in received binding order, up to four per PDR
+(TS 29.244 V20.1.0 clause 5.4.4). Each gate and bitrate is enforced; a later
+rejection may already have consumed an earlier QER's reservation. The first
+QER with a QFI IE supplies QFI/RQI marking, including QFI zero. The first
+nonzero QER DSCP in binding order applies, otherwise the FAR marking applies. QFI/RQI is emitted in a PDU Session Container only
+for a 5GS session. RQI without QFI is rejected.
 
 The QER policer uses ceiling transmission time in nanoseconds, a shared atomic
 reservation and a 5 ms burst window. A PDU larger than that window is admitted
@@ -64,15 +77,77 @@ validity (RFC 4861 section 6.1.1). The bounded responder handles ICMP payloads u
 to 256 bytes; larger solicitations go to the kernel. Advertisements use the
 solicitor's address, or ff02::1 for an unspecified source, with link-local source
 and Hop Limit 255 (sections 4.2 and 6.2.6). Router Lifetime 64800 is permitted by
-RFC 8319 section 4. A production return-tunnel binding to the originating session
-is still needed: the current downlink lookup uses the response destination and
-cannot infer the session from a link-local or multicast destination.
+RFC 8319 section 4. The control plane binds each uplink PDR to the session's
+highest-precedence IPv6 downlink PDR, using the lowest PDR ID to break ties.
+Generated replies use that FAR and QER list, including link-local and multicast
+destinations. Without a downlink binding the reply is dropped. Generated router
+control traffic does not increment user-plane URRs.
 
-PDR identity, precedence and conjunctive PDI matching remain incomplete. The
-current map representation cannot maintain independently replaceable/deletable
-ordered PDRs sharing a key (TS 29.244 V20.1.0 clauses 5.2.1 and 8.2.11). UE IP,
-Source Interface and QFI constraints need coordinated control-plane and map
-changes. Do not treat successful SDF tuple matching as full PDI compliance.
+Each local TEID or N6 UE IPv4/IPv6 prefix maps to one session and an ordered list
+of independently replaceable PDRs (TS 29.244 V20.1.0 clauses 5.2.1, 5.2.1A and
+8.2.11). Lower numeric Precedence wins; PDR ID breaks equal precedence. Source
+Interface, UE address constraint, QFI and SDF tuple constraints are conjunctive.
+Repeated SDF filters and repeated QFIs are alternatives within their own field.
+Access PDRs reverse the CP description's addresses and ports (clause 5.2.1A.2A).
+The unresolved `assigned` address token and unsupported protocol numbers return
+Service not supported, rather than widening a match.
+A known key with no matching PDR drops. Unowned N6 destinations, non-IP traffic,
+and explicitly documented kernel slow paths retain XDP_PASS; an unknown GTP
+TEID follows the Error Indication procedure above. IPv6 prefixes use an LPM
+trie. Overlapping prefixes owned by different sessions are rejected. Distinct
+overlapping prefixes within one session are currently rejected as unsupported,
+since a longest-prefix lookup cannot preserve precedence across both lists.
+Identical prefixes can hold the ordinary independent PDR list.
+
+Fixed bounds are four PDRs per key, two SDF filters, eight QFIs, four QERs and
+three URRs per PDR, and 64 rules of each type per session. Map capacities are
+configured separately and array slot zero is reserved. Capacity failures return
+No resources available; unsupported standard rule fields return Service not
+supported, with Failed Rule ID and Offending IE where applicable. No list is
+silently truncated. Diagnostic PDR GETs return a session ID and ordered rules;
+direct REST map PUTs return 405. Session displays show logical per-session
+rule IDs, keeping internal array slots separate.
+
+The URR subset measures volume after QoS, supports a positive total-volume
+threshold, and sends final reports on URR removal/session deletion. Duration,
+event, packet, quota, periodic, linked, application and other unimplemented
+measurement controls are rejected. Below-threshold octets remain unreported
+until a report is triggered; the threshold is disarmed after a report until
+updated. Sequence numbers start at zero independently for each URR. Reports
+include total, uplink and downlink octets; packet timestamps are omitted because
+they are not measured. No end-marker emission, buffering, application detection,
+IPv6 outer tunnel or IPv6 UE address allocation capability is advertised.
+Explicit IPv6 prefix ownership includes uplink-only PDIs. Both concurrently
+chosen resources appear in Created PDR; allocations through Update PDR use
+Updated PDR.
+
+PFCP mutations validate into a private session and resource view, reserve every
+new slot, then journal exact previous map values while admission is closed.
+Rollback restores QER policer runtime and URR counters as well as bindings and
+allocator bitmaps. The existing PFCP state lock serializes session mutations,
+association cleanup and snapshots; diagnostic map readers also exclude the
+journal. Local SEIDs are allocated by the shared resource manager across N4/Sxa/Sxb
+and never wrap. A shared reservation lock serializes private pool snapshots
+across these endpoints, after the connection state lock and before the map
+journal lock. Local SEIDs are UPF-wide. TEIDs and UE IP leases use that same local
+identity, including explicit reservations, shared CHOOSE IDs and last-reference
+release. Pools are limited to 1,048,576 entries; UE allocation is IPv4 only.
+The private resource view currently copies the bounded pools on each request.
+
+Session Establishment Recovery Time Stamps are associated with CP F-SEID IP,
+compared with previous values, and stale requests are discarded (TS 23.007
+V19.2.0 clause 19A). A newer timestamp removes that entity's existing sessions
+through the same journal. Cleanup failure retains ownership for retry. Setup
+timestamps remain ignored. Recovery history is bounded to 1024 entities per
+association; a new entity beyond the bound is rejected. RESTI accepts available
+explicit resources and occupied resources return restoration failure Cause 86
+(TS 29.244 V20.1.0 Table 7.5.2.1-1 note 4). Other unimplemented restoration or
+charging flags are rejected. Native N6 PDIs support Core ingress and destination UE-IP lookup. Native
+source-address lookup, Access ingress without F-TEID, and forwarding without a
+return tunnel are rejected. GTP forwarding requires an Outer Header Removal IE.
+
+EPC/5GS deployments must enable FTUP; CP allocation
+mode remains available in configuration and does not satisfy clause 5.5.1.
 
 Map capacities are configured before Load. Live resizing returns an error
 without changing handles, instructions or data. All map buffers use bpf2go

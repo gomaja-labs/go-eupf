@@ -81,19 +81,23 @@ If no parameters are provided, all sessions are listed.`,
 				t = table.NewWriter()
 				t.SetOutputMirror(os.Stdout)
 
-				t.AppendHeader(table.Row{"SEID", "PDR ID", "TEID", "IPv4", "IPv6", "FAR ID", "QER ID", "URR1 ID", "URR2 ID"})
+				t.AppendHeader(table.Row{"SEID", "PDR ID", "TEID", "IPv4", "IPv6", "FAR ID", "QER IDs", "URR IDs", "Precedence"})
 				for _, s := range sessions {
 					for _, pdr := range s.PDRs {
+						var far any = "-"
+						if pdr.FARID != nil {
+							far = *pdr.FARID
+						}
 						t.AppendRow([]any{
 							s.LocalSEID,
 							pdr.PdrID,
 							pdr.Teid,
 							pdr.Ipv4,
 							pdr.Ipv6,
-							pdr.PdrInfo.FarId,
-							pdr.PdrInfo.QerId,
-							pdr.PdrInfo.Urr1Id,
-							pdr.PdrInfo.Urr2Id,
+							far,
+							pdr.QERIDs,
+							pdr.URRIDs,
+							pdr.PdrInfo.Precedence,
 						})
 					}
 				}

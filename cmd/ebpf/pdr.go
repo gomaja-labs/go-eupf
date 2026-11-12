@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"syscall"
 
 	"github.com/cilium/ebpf"
@@ -25,16 +26,42 @@ func isKeyAbsent(err error) bool {
 	return err != nil && (errors.Is(err, ebpf.ErrKeyNotExist) || errors.Is(err, syscall.ENOENT))
 }
 
+// Fixed bounds are rejected before map writes, never silently truncated.
+const (
+	MaxQERsPerPDR       = 4
+	MaxURRsPerPDR       = 3
+	MaxPDRsPerKey       = 4
+	MaxSDFFiltersPerPDR = 2
+	MaxQFIsPerPDR       = 8
+)
+
+var ErrRuleCapacity = errors.New("rule capacity exceeded")
+var ErrKeyOwned = errors.New("lookup key belongs to another session")
+var ErrUnsupportedRuleContent = errors.New("rule content is not supported")
+
 type PdrInfo struct {
-	OuterHeaderRemoval uint8
-	FarId              uint32
-	QerId              uint32
-	Urr1Id             uint32
-	Urr2Id             uint32
-	SdfFilter          []SdfFilter
-	TraceFlag          bool
-	NotifyFlag         bool
-	NRFlag             bool
+	ReturnFarID               uint32      `json:"return_far_id"`
+	ReturnQerIDs              []uint32    `json:"return_qer_ids"`
+	ReturnNR                  bool        `json:"return_nr"`
+	SessionID                 uint64      `json:"session_id"`
+	PdrID                     uint32      `json:"pdr_id"`
+	Precedence                uint32      `json:"precedence"`
+	OuterHeaderRemovalPresent bool        `json:"outer_header_removal_present"`
+	OuterHeaderRemoval        uint8       `json:"outer_header_removal"`
+	FarId                     uint32      `json:"far_id"`
+	QerIDs                    []uint32    `json:"qer_ids"`
+	UrrIDs                    []uint32    `json:"urr_ids"`
+	SdfFilter                 []SdfFilter `json:"sdf_filters"`
+	QFIs                      []uint8     `json:"qfis"`
+	UEIPv4                    net.IP      `json:"ue_ipv4"`
+	UEIPv6                    net.IP      `json:"ue_ipv6"`
+	UEIPv6Mask                net.IPMask  `json:"ue_ipv6_mask"`
+	UEDestination             bool        `json:"ue_destination"`
+	SourceInterface           uint8       `json:"source_interface"`
+	SourceInterfacePresent    bool        `json:"source_interface_present"`
+	TraceFlag                 bool        `json:"trace"`
+	NotifyFlag                bool        `json:"notify"`
+	NRFlag                    bool        `json:"nr"`
 }
 
 type SdfFilter struct {
@@ -56,120 +83,126 @@ type PortRange struct {
 	UpperBound uint16
 }
 
-func PreprocessPdrWithSdf(lookup func(interface{}, interface{}) error, key interface{}, pdrInfo PdrInfo) (IpEntrypointPdrInfo, error) {
-	var defaultPdr IpEntrypointPdrInfo
-	if err := lookup(key, &defaultPdr); err != nil {
-		if !isKeyAbsent(err) {
-			return IpEntrypointPdrInfo{}, fmt.Errorf("lookup PDR: %w", err)
-		}
-		return CombinePdrWithSdf(nil, pdrInfo), nil
+func preparePDR(lookup func(interface{}, interface{}) error, key interface{}, info PdrInfo) (IpEntrypointPdrInfo, error) {
+	var bucket IpEntrypointPdrInfo
+	if err := lookup(key, &bucket); err != nil && !isKeyAbsent(err) {
+		return bucket, fmt.Errorf("lookup PDR: %w", err)
 	}
-
-	return CombinePdrWithSdf(&defaultPdr, pdrInfo), nil
+	if bucket.Count > MaxPDRsPerKey {
+		return bucket, fmt.Errorf("invalid PDR count %d", bucket.Count)
+	}
+	if bucket.Count != 0 && bucket.SessionId != info.SessionID {
+		return bucket, ErrKeyOwned
+	}
+	entry, err := encodePDR(info)
+	if err != nil {
+		return bucket, err
+	}
+	bucket.SessionId = info.SessionID
+	index := int(bucket.Count)
+	for i := 0; i < int(bucket.Count); i++ {
+		if bucket.Entries[i].PdrId == info.PdrID {
+			index = i
+			break
+		}
+	}
+	if index == MaxPDRsPerKey {
+		return bucket, ErrRuleCapacity
+	}
+	bucket.Entries[index] = entry
+	if index == int(bucket.Count) {
+		bucket.Count++
+	}
+	sort.Slice(bucket.Entries[:bucket.Count], func(i, j int) bool {
+		a, b := bucket.Entries[i], bucket.Entries[j]
+		if a.Precedence != b.Precedence {
+			return a.Precedence < b.Precedence
+		}
+		return a.PdrId < b.PdrId
+	})
+	return bucket, nil
 }
 
-func (bpfObjects *BpfObjects) PutPdrUplink(teid uint32, pdrInfo PdrInfo) error {
-	log.Debug().Msgf("EBPF: Put PDR Uplink: teid=%d, pdrInfo=%+v", teid, pdrInfo)
-	var pdrToStore IpEntrypointPdrInfo
-	var err error
-	if pdrInfo.SdfFilter != nil {
-		if pdrToStore, err = PreprocessPdrWithSdf(bpfObjects.PdrMapTeidIp4.Lookup, teid, pdrInfo); err != nil {
-			return err
-		}
-	} else {
-		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
-	}
-	return bpfObjects.PdrMapTeidIp4.Put(teid, &pdrToStore)
-}
-
-func (bpfObjects *BpfObjects) PutPdrDownlink(ip net.IP, pdrInfo PdrInfo) error {
-	log.Debug().Msgf("EBPF: Put PDR Downlink: ip=%s, pdrInfo=%+v", ip, pdrInfo)
-	var pdrToStore IpEntrypointPdrInfo
-	var err error
-	lookupFunc := bpfObjects.PdrMapDownlinkIp4.Lookup
-	putFunc := bpfObjects.PdrMapDownlinkIp4.Put
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	} else if ip6 := ip.To16(); ip6 != nil {
-		ip = ip6
-		lookupFunc = bpfObjects.PdrMapDownlinkIp6.Lookup
-		putFunc = bpfObjects.PdrMapDownlinkIp6.Put
-	} else {
-		return fmt.Errorf("invalid PDR address")
-	}
-	if pdrInfo.SdfFilter != nil {
-
-		if pdrToStore, err = PreprocessPdrWithSdf(lookupFunc, ip, pdrInfo); err != nil {
-			return err
-		}
-	} else {
-		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
-	}
-
-	return putFunc(ip, &pdrToStore)
-}
-
-func (bpfObjects *BpfObjects) UpdatePdrUplink(teid uint32, pdrInfo PdrInfo) error {
-	log.Debug().Msgf("EBPF: Update PDR Uplink: teid=%d, pdrInfo=%+v", teid, pdrInfo)
-	var pdrToStore IpEntrypointPdrInfo
-	var err error
-	if pdrInfo.SdfFilter != nil {
-		if pdrToStore, err = PreprocessPdrWithSdf(bpfObjects.PdrMapTeidIp4.Lookup, teid, pdrInfo); err != nil {
-			return err
-		}
-	} else {
-		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
-	}
-	return bpfObjects.PdrMapTeidIp4.Update(teid, &pdrToStore, ebpf.UpdateExist)
-}
-
-func (bpfObjects *BpfObjects) UpdatePdrDownlink(ipv4 net.IP, pdrInfo PdrInfo) error {
-	m, key, err := bpfObjects.downlinkMap(ipv4)
+func (b *BpfObjects) PutPdrUplink(teid uint32, info PdrInfo) error {
+	bucket, err := preparePDR(b.PdrMapTeidIp4.Lookup, teid, info)
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("EBPF: Update PDR Downlink: ipv4=%s, pdrInfo=%+v", ipv4, pdrInfo)
-	var pdrToStore IpEntrypointPdrInfo
-	if pdrInfo.SdfFilter != nil {
-		if pdrToStore, err = PreprocessPdrWithSdf(m.Lookup, key, pdrInfo); err != nil {
-			return err
-		}
-	} else {
-		pdrToStore = ToIpEntrypointPdrInfo(pdrInfo)
-	}
-	return m.Update(key, &pdrToStore, ebpf.UpdateExist)
+	return b.PdrMapTeidIp4.Put(teid, &bucket)
 }
-
-func (bpfObjects *BpfObjects) DeletePdrUplink(teid uint32) error {
-	log.Debug().Msgf("EBPF: Delete PDR Uplink: teid=%d", teid)
-	if err := bpfObjects.PdrMapTeidIp4.Delete(teid); err != nil && !isKeyAbsent(err) {
-		return err
-	}
-	return nil
-}
-
-func (bpfObjects *BpfObjects) DeletePdrDownlink(ipv4 net.IP) error {
-	m, key, err := bpfObjects.downlinkMap(ipv4)
+func (b *BpfObjects) PutPdrDownlink(ip net.IP, info PdrInfo) error {
+	m, key, err := b.downlinkRuleMap(ip, info.UEIPv6Mask)
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("EBPF: Delete PDR Downlink: ipv4=%s", ipv4)
-	if err := m.Delete(key); err != nil && !isKeyAbsent(err) {
+	if ip.To4() == nil {
+		if err := b.checkIPv6Overlap(key.(IpEntrypointIpv6PdrKey), info.SessionID); err != nil {
+			return err
+		}
+	}
+	bucket, err := preparePDR(m.Lookup, key, info)
+	if err != nil {
 		return err
+	}
+	return m.Put(key, &bucket)
+}
+func (b *BpfObjects) UpdatePdrUplink(teid uint32, info PdrInfo) error {
+	return b.PutPdrUplink(teid, info)
+}
+func (b *BpfObjects) UpdatePdrDownlink(ip net.IP, info PdrInfo) error {
+	return b.PutPdrDownlink(ip, info)
+}
+
+func deletePDR(m *ebpf.Map, key interface{}, sessionID uint64, pdrID uint32) error {
+	var bucket IpEntrypointPdrInfo
+	if err := m.Lookup(key, &bucket); err != nil {
+		if isKeyAbsent(err) {
+			return nil
+		}
+		return err
+	}
+	if bucket.SessionId != sessionID {
+		return ErrKeyOwned
+	}
+	if bucket.Count > MaxPDRsPerKey {
+		return fmt.Errorf("invalid PDR count %d", bucket.Count)
+	}
+	for i := 0; i < int(bucket.Count); i++ {
+		if bucket.Entries[i].PdrId != pdrID {
+			continue
+		}
+		copy(bucket.Entries[i:], bucket.Entries[i+1:bucket.Count])
+		bucket.Count--
+		bucket.Entries[bucket.Count] = IpEntrypointPdrEntry{}
+		if bucket.Count == 0 {
+			return m.Delete(key)
+		}
+		return m.Put(key, &bucket)
 	}
 	return nil
 }
-
-func (bpfObjects *BpfObjects) PutDownlinkPdrIp6(ipv6 net.IP, pdrInfo PdrInfo) error {
-	return bpfObjects.PutPdrDownlink(ipv6, pdrInfo)
+func (b *BpfObjects) DeletePdrUplink(teid uint32, sessionID uint64, pdrID uint32) error {
+	return deletePDR(b.PdrMapTeidIp4, teid, sessionID, pdrID)
 }
-
-func (bpfObjects *BpfObjects) UpdateDownlinkPdrIp6(ipv6 net.IP, pdrInfo PdrInfo) error {
-	return bpfObjects.UpdatePdrDownlink(ipv6, pdrInfo)
+func (b *BpfObjects) DeletePdrDownlink(ip net.IP, sessionID uint64, pdrID uint32) error {
+	m, key, err := b.downlinkMap(ip)
+	if err != nil {
+		return err
+	}
+	return deletePDR(m, key, sessionID, pdrID)
 }
-
-func (bpfObjects *BpfObjects) DeleteDownlinkPdrIp6(ipv6 net.IP) error {
-	return bpfObjects.DeletePdrDownlink(ipv6)
+func (b *BpfObjects) PutDownlinkPdrIp6(ip net.IP, info PdrInfo) error {
+	return b.PutPdrDownlink(ip, info)
+}
+func (b *BpfObjects) UpdateDownlinkPdrIp6(ip net.IP, info PdrInfo) error {
+	return b.PutPdrDownlink(ip, info)
+}
+func (b *BpfObjects) DeleteDownlinkPdrIp6(ip net.IP, sessionID uint64, pdrID uint32, prefixLength uint32) error {
+	m, key, err := b.downlinkRuleMap(ip, net.CIDRMask(int(prefixLength), 128))
+	if err != nil {
+		return err
+	}
+	return deletePDR(m, key, sessionID, pdrID)
 }
 
 type FarInfo struct {
@@ -238,6 +271,9 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 }
 
 func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) error {
+	if internalId == 0 {
+		return fmt.Errorf("cannot update reserved FAR 0")
+	}
 	log.Debug().Msgf("EBPF: Update FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
 	farToStore := IpEntrypointFarInfo{
@@ -265,6 +301,8 @@ func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
 type QerInfo struct {
 	GateStatusUL uint8
 	GateStatusDL uint8
+	QFIPresent   bool
+	RQI          uint8
 	Qfi          uint8
 	Dscp         uint8
 	MaxBitrateUL uint64
@@ -278,16 +316,7 @@ func (bpfObjects *BpfObjects) NewQer(qerInfo QerInfo) (uint32, error) {
 	}
 	log.Debug().Msgf("EBPF: Put QER: internalId=%d, qerInfo=%+v", internalId, qerInfo)
 
-	qerToStore := IpEntrypointQerInfo{
-		UlGateStatus:     qerInfo.GateStatusUL,
-		DlGateStatus:     qerInfo.GateStatusDL,
-		Qfi:              qerInfo.Qfi,
-		Dscp:             qerInfo.Dscp,
-		UlMaximumBitrate: qerInfo.MaxBitrateUL,
-		DlMaximumBitrate: qerInfo.MaxBitrateDL,
-		UlStart:          0,
-		DlStart:          0,
-	}
+	qerToStore := qerMapValue(qerInfo)
 	if err := bpfObjects.QerMap.Put(internalId, &qerToStore); err != nil {
 		bpfObjects.ReleaseQER(internalId)
 		return 0, fmt.Errorf("create QER: %w", err)
@@ -296,18 +325,17 @@ func (bpfObjects *BpfObjects) NewQer(qerInfo QerInfo) (uint32, error) {
 }
 
 func (bpfObjects *BpfObjects) UpdateQer(internalId uint32, qerInfo QerInfo) error {
+	if internalId == 0 {
+		return fmt.Errorf("cannot update reserved QER 0")
+	}
+	var previous IpEntrypointQerInfo
+	if err := bpfObjects.QerMap.Lookup(internalId, &previous); err != nil {
+		return err
+	}
 	log.Debug().Msgf("EBPF: Update QER: internalId=%d, qerInfo=%+v", internalId, qerInfo)
 
-	qerToStore := IpEntrypointQerInfo{
-		UlGateStatus:     qerInfo.GateStatusUL,
-		DlGateStatus:     qerInfo.GateStatusDL,
-		Qfi:              qerInfo.Qfi,
-		Dscp:             qerInfo.Dscp,
-		UlMaximumBitrate: qerInfo.MaxBitrateUL,
-		DlMaximumBitrate: qerInfo.MaxBitrateDL,
-		UlStart:          0,
-		DlStart:          0,
-	}
+	qerToStore := qerMapValue(qerInfo)
+	qerToStore.UlStart, qerToStore.DlStart = previous.UlStart, previous.DlStart
 	return bpfObjects.QerMap.Update(internalId, &qerToStore, ebpf.UpdateExist)
 }
 
@@ -328,7 +356,8 @@ type UrrInfo struct {
 	UplinkVolume    uint64
 	DownlinkVolume  uint64
 	VolumeThreshold uint64
-	TimeThreshold   float64
+	VolumeTrigger   bool
+	VolumeReported  bool
 }
 
 func (bpfObjects *BpfObjects) NewUrr(urrInfo UrrInfo) (uint32, error) {
@@ -404,15 +433,19 @@ func (bpfObjects *BpfObjects) DeleteUrr(internalId uint32) (UrrInfo, error) {
 }
 
 type ForwardingPlaneController interface {
+	BeginRuleTransaction(sessionID uint64) (RuleTransaction, error)
+	GetNextFAR() (uint32, error)
+	GetNextQER() (uint32, error)
+	GetNextURR() (uint32, error)
 	PutPdrUplink(teid uint32, pdrInfo PdrInfo) error
 	PutPdrDownlink(ipv4 net.IP, pdrInfo PdrInfo) error
 	PutDownlinkPdrIp6(ipv6 net.IP, pdrInfo PdrInfo) error
 	UpdatePdrUplink(teid uint32, pdrInfo PdrInfo) error
 	UpdatePdrDownlink(ipv4 net.IP, pdrInfo PdrInfo) error
-	DeletePdrUplink(teid uint32) error
-	DeletePdrDownlink(ipv4 net.IP) error
+	DeletePdrUplink(teid uint32, sessionID uint64, pdrID uint32) error
+	DeletePdrDownlink(ipv4 net.IP, sessionID uint64, pdrID uint32) error
 	UpdateDownlinkPdrIp6(ipv6 net.IP, pdrInfo PdrInfo) error
-	DeleteDownlinkPdrIp6(ipv6 net.IP) error
+	DeleteDownlinkPdrIp6(ipv6 net.IP, sessionID uint64, pdrID uint32, prefixLength uint32) error
 	NewFar(farInfo FarInfo) (uint32, error)
 	GetFar(internalId uint32) (FarInfo, error)
 	UpdateFar(internalId uint32, farInfo FarInfo) error
@@ -426,96 +459,138 @@ type ForwardingPlaneController interface {
 	DeleteUrr(internalId uint32) (UrrInfo, error)
 }
 
-func CombinePdrWithSdf(defaultPdr *IpEntrypointPdrInfo, sdfPdr PdrInfo) IpEntrypointPdrInfo {
-	var pdrToStore IpEntrypointPdrInfo
-	// Default mapping options.
-	if defaultPdr != nil {
-		pdrToStore.DefaultPdr.OuterHeaderRemoval = defaultPdr.DefaultPdr.OuterHeaderRemoval
-		pdrToStore.DefaultPdr.FarId = defaultPdr.DefaultPdr.FarId
-		pdrToStore.DefaultPdr.QerId = defaultPdr.DefaultPdr.QerId
-		pdrToStore.DefaultPdr.UrrId = defaultPdr.DefaultPdr.UrrId
-		pdrToStore.TraceFlag = defaultPdr.TraceFlag
-		pdrToStore.NrFlag = defaultPdr.NrFlag
-		pdrToStore.SdfMode = 2
-
-	} else {
-		if sdfPdr.TraceFlag {
-			pdrToStore.TraceFlag = 1
-		} else {
-			pdrToStore.TraceFlag = 0
-		}
-
-		if sdfPdr.NRFlag {
-			pdrToStore.NrFlag = 1
-		} else {
-			pdrToStore.NrFlag = 0
-		}
-
-		pdrToStore.SdfMode = 1
+func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
+	var entry IpEntrypointPdrEntry
+	if len(info.SdfFilter) > MaxSDFFiltersPerPDR || len(info.QFIs) > MaxQFIsPerPDR || len(info.ReturnQerIDs) > MaxQERsPerPDR || len(info.QerIDs) > MaxQERsPerPDR || len(info.UrrIDs) > MaxURRsPerPDR {
+		return entry, ErrRuleCapacity
 	}
-
-	for sdfIdx := 0; sdfIdx < len(sdfPdr.SdfFilter) && sdfIdx < len(pdrToStore.DedicatedPdrs); sdfIdx++ {
-
-		sdfFilterSource := &sdfPdr.SdfFilter[sdfIdx]
-		sdfFilterTarget := &pdrToStore.DedicatedPdrs[sdfIdx]
-
-		sdfFilterTarget.Active = 1
-		sdfFilterTarget.Pdr.OuterHeaderRemoval = sdfPdr.OuterHeaderRemoval
-		sdfFilterTarget.Pdr.FarId = sdfPdr.FarId
-		sdfFilterTarget.Pdr.QerId = sdfPdr.QerId
-		sdfFilterTarget.Pdr.UrrId[0] = sdfPdr.Urr1Id
-		sdfFilterTarget.Pdr.UrrId[1] = sdfPdr.Urr2Id
-
-		sdfFilterTarget.SdfFilter.Protocol = sdfFilterSource.Protocol
-		sdfFilterTarget.SdfFilter.SrcAddr.Type = sdfFilterSource.SrcAddress.Type
-		sdfFilterTarget.SdfFilter.SrcAddr.Ip = Copy16Ip(sdfFilterSource.SrcAddress.Ip)
-		sdfFilterTarget.SdfFilter.SrcAddr.Mask = Copy16Ip(sdfFilterSource.SrcAddress.Mask)
-		sdfFilterTarget.SdfFilter.SrcPort.LowerBound = sdfFilterSource.SrcPortRange.LowerBound
-		sdfFilterTarget.SdfFilter.SrcPort.UpperBound = sdfFilterSource.SrcPortRange.UpperBound
-		sdfFilterTarget.SdfFilter.DstAddr.Type = sdfFilterSource.DstAddress.Type
-		sdfFilterTarget.SdfFilter.DstAddr.Ip = Copy16Ip(sdfFilterSource.DstAddress.Ip)
-		sdfFilterTarget.SdfFilter.DstAddr.Mask = Copy16Ip(sdfFilterSource.DstAddress.Mask)
-		sdfFilterTarget.SdfFilter.DstPort.LowerBound = sdfFilterSource.DstPortRange.LowerBound
-		sdfFilterTarget.SdfFilter.DstPort.UpperBound = sdfFilterSource.DstPortRange.UpperBound
-
-		if sdfPdr.NotifyFlag {
-			sdfFilterTarget.Notify = 1
-		} else {
-			sdfFilterTarget.Notify = 0
+	entry.PdrId, entry.Precedence = info.PdrID, info.Precedence
+	entry.ReturnPdr.FarId = info.ReturnFarID
+	entry.ReturnPdr.QerCount = uint8(len(info.ReturnQerIDs))
+	copy(entry.ReturnPdr.QerId[:], info.ReturnQerIDs)
+	if info.ReturnNR {
+		entry.ReturnNrFlag = 1
+	}
+	if info.OuterHeaderRemovalPresent {
+		entry.Pdr.OuterHeaderRemovalPresent = 1
+	}
+	entry.Pdr.OuterHeaderRemoval, entry.Pdr.FarId = info.OuterHeaderRemoval, info.FarId
+	entry.Pdr.QerCount = uint8(len(info.QerIDs))
+	copy(entry.Pdr.QerId[:], info.QerIDs)
+	for _, id := range info.QerIDs {
+		if id == 0 {
+			return entry, fmt.Errorf("reserved QER slot 0")
 		}
 	}
-	return pdrToStore
+	for _, id := range info.UrrIDs {
+		if id == 0 {
+			return entry, fmt.Errorf("reserved URR slot 0")
+		}
+	}
+	copy(entry.Pdr.UrrId[:], info.UrrIDs)
+	if info.TraceFlag {
+		entry.TraceFlag = 1
+	}
+	if info.NRFlag {
+		entry.NrFlag = 1
+	}
+	if info.NotifyFlag {
+		entry.Notify = 1
+	}
+	if info.UEDestination {
+		entry.UeDestination = 1
+	}
+	if info.SourceInterfacePresent {
+		entry.SourceInterfacePresent = 1
+		entry.SourceInterface = info.SourceInterface
+	}
+	if info.UEIPv4 != nil {
+		ip := info.UEIPv4.To4()
+		if ip == nil {
+			return entry, fmt.Errorf("invalid PDI IPv4 address")
+		}
+		entry.UeIp4Present = 1
+		entry.UeIp4 = binary.LittleEndian.Uint32(ip)
+		entry.UeMask4 = ^uint32(0)
+	}
+	if info.UEIPv6 != nil {
+		ip := info.UEIPv6.To16()
+		if ip == nil {
+			return entry, fmt.Errorf("invalid PDI IPv6 address")
+		}
+		entry.UeIp6Present = 1
+		copy(entry.UeIp6[:], ip)
+		mask := info.UEIPv6Mask
+		if mask == nil {
+			mask = net.CIDRMask(128, 128)
+		}
+		if len(mask) != 16 {
+			return entry, fmt.Errorf("invalid PDI IPv6 mask")
+		}
+		copy(entry.UeMask6[:], mask)
+	}
+	entry.QfiCount = uint8(len(info.QFIs))
+	copy(entry.Qfis[:], info.QFIs)
+	entry.SdfCount = uint8(len(info.SdfFilter))
+	for i, source := range info.SdfFilter {
+		target := &entry.SdfFilters[i]
+		target.Protocol = source.Protocol
+		target.SrcAddr.Type = source.SrcAddress.Type
+		target.SrcAddr.Ip = Copy16Ip(source.SrcAddress.Ip)
+		target.SrcAddr.Mask = Copy16Ip(source.SrcAddress.Mask)
+		target.DstAddr.Type = source.DstAddress.Type
+		target.DstAddr.Ip = Copy16Ip(source.DstAddress.Ip)
+		target.DstAddr.Mask = Copy16Ip(source.DstAddress.Mask)
+		target.SrcPort.LowerBound = source.SrcPortRange.LowerBound
+		target.SrcPort.UpperBound = source.SrcPortRange.UpperBound
+		target.DstPort.LowerBound = source.DstPortRange.LowerBound
+		target.DstPort.UpperBound = source.DstPortRange.UpperBound
+	}
+	return entry, nil
 }
 
-func ToIpEntrypointPdrInfo(defaultPdr PdrInfo) IpEntrypointPdrInfo {
-	var pdrToStore IpEntrypointPdrInfo
-	pdrToStore.DefaultPdr.OuterHeaderRemoval = defaultPdr.OuterHeaderRemoval
-	pdrToStore.DefaultPdr.FarId = defaultPdr.FarId
-	pdrToStore.DefaultPdr.QerId = defaultPdr.QerId
-	pdrToStore.DefaultPdr.UrrId[0] = defaultPdr.Urr1Id
-	pdrToStore.DefaultPdr.UrrId[1] = defaultPdr.Urr2Id
-	if defaultPdr.TraceFlag {
-		pdrToStore.TraceFlag = 1
-	} else {
-		pdrToStore.TraceFlag = 0
+// DecodePDRBucket returns the ordered, occupied rules for diagnostics.
+func DecodePDRBucket(bucket IpEntrypointPdrInfo) []PdrInfo {
+	count := int(min(bucket.Count, uint32(MaxPDRsPerKey)))
+	result := make([]PdrInfo, 0, count)
+	for _, entry := range bucket.Entries[:count] {
+		info := PdrInfo{ReturnFarID: entry.ReturnPdr.FarId, ReturnQerIDs: append([]uint32(nil), entry.ReturnPdr.QerId[:min(int(entry.ReturnPdr.QerCount), MaxQERsPerPDR)]...), ReturnNR: entry.ReturnNrFlag != 0, SessionID: bucket.SessionId, PdrID: entry.PdrId, Precedence: entry.Precedence, FarId: entry.Pdr.FarId, QerIDs: append([]uint32(nil), entry.Pdr.QerId[:min(int(entry.Pdr.QerCount), MaxQERsPerPDR)]...), OuterHeaderRemoval: entry.Pdr.OuterHeaderRemoval, OuterHeaderRemovalPresent: entry.Pdr.OuterHeaderRemovalPresent != 0, TraceFlag: entry.TraceFlag != 0, NRFlag: entry.NrFlag != 0, NotifyFlag: entry.Notify != 0, SourceInterfacePresent: entry.SourceInterfacePresent != 0, SourceInterface: entry.SourceInterface, UEDestination: entry.UeDestination != 0}
+		for _, id := range entry.Pdr.UrrId {
+			if id != 0 {
+				info.UrrIDs = append(info.UrrIDs, id)
+			}
+		}
+		info.QFIs = append([]uint8(nil), entry.Qfis[:min(int(entry.QfiCount), MaxQFIsPerPDR)]...)
+		if entry.UeIp4Present != 0 {
+			info.UEIPv4 = make(net.IP, 4)
+			binary.LittleEndian.PutUint32(info.UEIPv4, entry.UeIp4)
+		}
+		if entry.UeIp6Present != 0 {
+			info.UEIPv6 = append(net.IP(nil), entry.UeIp6[:]...)
+			info.UEIPv6Mask = append(net.IPMask(nil), entry.UeMask6[:]...)
+		}
+		for _, filter := range entry.SdfFilters[:min(int(entry.SdfCount), MaxSDFFiltersPerPDR)] {
+			info.SdfFilter = append(info.SdfFilter, SdfFilter{Protocol: filter.Protocol, SrcAddress: decodeSubnet(filter.SrcAddr.Type, filter.SrcAddr.Ip, filter.SrcAddr.Mask), DstAddress: decodeSubnet(filter.DstAddr.Type, filter.DstAddr.Ip, filter.DstAddr.Mask), SrcPortRange: PortRange{filter.SrcPort.LowerBound, filter.SrcPort.UpperBound}, DstPortRange: PortRange{filter.DstPort.LowerBound, filter.DstPort.UpperBound}})
+		}
+		result = append(result, info)
 	}
-
-	if defaultPdr.NRFlag {
-		pdrToStore.NrFlag = 1
-	} else {
-		pdrToStore.NrFlag = 0
-	}
-
-	return pdrToStore
+	return result
 }
-
-//func FromIpEntrypointPdrInfo(storedPdr IpEntrypointPdrInfo) PdrInfo {
-//	var pdrInfo PdrInfo
-//	pdrInfo.OuterHeaderRemoval = storedPdr.OuterHeaderRemoval
-//	pdrInfo.FarId = storedPdr.FarId
-//	pdrInfo.QerId = storedPdr.QerId
-//	return pdrInfo
-//}
+func decodeSubnet(kind uint8, ip, mask [16]byte) IpWMask {
+	if kind == 0 {
+		return IpWMask{}
+	}
+	size := 16
+	if kind == 1 {
+		size = 4
+	}
+	result := IpWMask{Type: kind, Ip: make(net.IP, size), Mask: make(net.IPMask, size)}
+	for i := 0; i < size; i++ {
+		result.Ip[i] = ip[size-1-i]
+		result.Mask[i] = mask[size-1-i]
+	}
+	return result
+}
 
 func Copy16Ip[T ~[]byte](arr T) [16]byte {
 	const Ipv4len = 4
@@ -539,12 +614,67 @@ func (sdfFilter *SdfFilter) String() string {
 	return fmt.Sprintf("%+v", *sdfFilter)
 }
 
-func (bpfObjects *BpfObjects) downlinkMap(ip net.IP) (*ebpf.Map, net.IP, error) {
+func (b *BpfObjects) downlinkMap(ip net.IP) (*ebpf.Map, interface{}, error) {
+	return b.downlinkRuleMap(ip, nil)
+}
+func (b *BpfObjects) downlinkRuleMap(ip net.IP, mask net.IPMask) (*ebpf.Map, interface{}, error) {
 	if key := ip.To4(); key != nil {
-		return bpfObjects.PdrMapDownlinkIp4, key, nil
+		return b.PdrMapDownlinkIp4, key, nil
 	}
-	if key := ip.To16(); key != nil {
-		return bpfObjects.PdrMapDownlinkIp6, key, nil
+	if ip = ip.To16(); ip == nil {
+		return nil, nil, fmt.Errorf("invalid PDR address")
 	}
-	return nil, nil, fmt.Errorf("invalid PDR address")
+	prefix := 128
+	if mask != nil {
+		ones, bits := mask.Size()
+		if bits != 128 {
+			return nil, nil, fmt.Errorf("invalid IPv6 prefix mask")
+		}
+		prefix = ones
+		ip = ip.Mask(mask)
+	}
+	key := IpEntrypointIpv6PdrKey{PrefixLength: uint32(prefix)}
+	copy(key.Address[:], ip)
+	return b.PdrMapDownlinkIp6, key, nil
+}
+
+// LookupDownlinkPDR selects the longest matching IPv6 prefix or an exact IPv4 key.
+func (b *BpfObjects) LookupDownlinkPDR(ip net.IP) (IpEntrypointPdrInfo, error) {
+	var bucket IpEntrypointPdrInfo
+	m, key, err := b.downlinkMap(ip)
+	if err != nil {
+		return bucket, err
+	}
+	err = m.Lookup(key, &bucket)
+	return bucket, err
+}
+func (b *BpfObjects) checkIPv6Overlap(key IpEntrypointIpv6PdrKey, owner uint64) error {
+	var existing IpEntrypointIpv6PdrKey
+	var value IpEntrypointPdrInfo
+	iter := b.PdrMapDownlinkIp6.Iterate()
+	for iter.Next(&existing, &value) {
+		if existing == key {
+			continue
+		}
+		bits := min(int(existing.PrefixLength), int(key.PrefixLength))
+		mask := net.CIDRMask(bits, 128)
+		if net.IP(existing.Address[:]).Mask(mask).Equal(net.IP(key.Address[:]).Mask(mask)) {
+			if value.SessionId != owner {
+				return ErrKeyOwned
+			}
+			return fmt.Errorf("overlapping distinct IPv6 prefixes: %w", ErrUnsupportedRuleContent)
+		}
+	}
+	return iter.Err()
+}
+
+func boolByte(value bool) uint8 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func qerMapValue(info QerInfo) IpEntrypointQerInfo {
+	return IpEntrypointQerInfo{UlGateStatus: info.GateStatusUL, DlGateStatus: info.GateStatusDL, Qfi: info.Qfi, QfiPresent: boolByte(info.QFIPresent), Rqi: info.RQI, Dscp: info.Dscp, UlMaximumBitrate: info.MaxBitrateUL, DlMaximumBitrate: info.MaxBitrateDL}
 }

@@ -166,7 +166,7 @@ func TestQerMapRoundTripAndDelete(t *testing.T) {
 }
 
 func TestPreprocessAbsentKey(t *testing.T) {
-	_, err := PreprocessPdrWithSdf(func(interface{}, interface{}) error { return cilium.ErrKeyNotExist }, uint32(1), PdrInfo{})
+	_, err := preparePDR(func(interface{}, interface{}) error { return cilium.ErrKeyNotExist }, uint32(1), PdrInfo{})
 	if err != nil && !errors.Is(err, cilium.ErrKeyNotExist) {
 		t.Fatal(err)
 	}
@@ -180,13 +180,16 @@ func TestIPv6SdfNotification(t *testing.T) {
 	}
 	defer l.Close()
 	go l.ReadEventLoop()
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 1, QerId: 1, NotifyFlag: true, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}); err != nil {
+	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutPdrUplink(10, PdrInfo{SessionID: (1 << 40) + 9, PdrID: 7, FarId: 1, QerIDs: []uint32{1}, NotifyFlag: true, SdfFilter: []SdfFilter{anyDatapathFilter(3)}}); err != nil {
 		t.Fatal(err)
 	}
 	runDatapath(t, b, gtpDatapath(t, udpDatapath(t, true), nil, 0x30, false))
 	select {
 	case event := <-l.GetNotificationChannel():
-		if event.GetURRID() != 10 || !strings.Contains(event.GetSdfFilter(), "2001:db8::1/128 1234") {
+		if event.SessionID != (1<<40)+9 || event.PDRID != 7 || !strings.Contains(event.SDFFilter, "2001:db8::1/128 1234") {
 			t.Errorf("wrong event: %+v", event)
 		}
 	case <-time.After(time.Second):
@@ -196,9 +199,9 @@ func TestIPv6SdfNotification(t *testing.T) {
 
 func TestMalformedSdfRecord(t *testing.T) {
 	for _, cookie := range []uint16{0x1ea1, 0x2ea2} {
-		minimum := 19
+		minimum := 27
 		if cookie == 0x2ea2 {
-			minimum = 43
+			minimum = 51
 		}
 		for n := 0; n < minimum; n++ {
 			raw := make([]byte, n)

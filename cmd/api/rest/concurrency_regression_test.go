@@ -9,11 +9,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gomaja-labs/go-eupf/cmd/core"
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 )
 
 func TestAssociationAPIDuringAssociationDeletion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "192.0.2.1", "192.0.2.1", nil, nil, nil, nil, core.DefaultProfile{})
+	resources, err := service.NewResourceManager("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := core.NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "192.0.2.1", "192.0.2.1", nil, resources, nil, nil, core.DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

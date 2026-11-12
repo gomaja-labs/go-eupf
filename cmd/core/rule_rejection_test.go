@@ -18,9 +18,9 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 		id   uint32
 	}{
 		{"invalid-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(2, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("invalid", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("invalid", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
 		{"unknown-predefined-rule", ie.NewCreatePDR(ie.NewPDRID(8), ie.NewPrecedence(10),
-			ie.NewActivatePredefinedRules("unconfigured"), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(2, "192.0.2.11", "", 0, 0))), ie.RuleIDTypePDR, 8},
+			ie.NewActivatePredefinedRules("unconfigured"), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.11", "", 0, 0))), ie.RuleIDTypePDR, 8},
 		{"truncated-outer-header", ie.NewCreateFAR(ie.NewFARID(9), ie.NewApplyAction(2),
 			ie.NewForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceAccess), ie.New(ie.OuterHeaderCreation, []byte{1, 0, 1}))), ie.RuleIDTypeFAR, 9},
 	} {
@@ -61,7 +61,7 @@ func TestInvalidRulesPreserveModification(t *testing.T) {
 		id   uint32
 	}{
 		{"invalid-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(2, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("invalid", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("invalid", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
 		{"truncated-outer-header", ie.NewUpdateFAR(ie.NewFARID(9),
 			ie.NewUpdateForwardingParameters(ie.New(ie.OuterHeaderCreation, []byte{1, 0, 1}))), ie.RuleIDTypeFAR, 9},
 	} {

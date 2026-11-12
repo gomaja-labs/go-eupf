@@ -112,7 +112,9 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 	}
 
 	featuresOctets := []uint8{0, 0, 0}
-	featuresOctets[0] = setBit(featuresOctets[0], 4)
+	if config.FeatureFTUP {
+		featuresOctets[0] = setBit(featuresOctets[0], 4)
+	}
 	featuresOctets[2] = setBit(featuresOctets[2], 2)
 
 	smfIP := "127.0.0.1"
@@ -186,7 +188,7 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 			ie.NewPDRID(1),
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
-				ie.NewUEIPAddress(2, ip1.IP.String(), "", 0, 0),
+				ie.NewUEIPAddress(6, ip1.IP.String(), "", 0, 0),
 			),
 		),
 	)
@@ -261,7 +263,7 @@ func TestSdfFilterStoreValid(t *testing.T) {
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
 				//ie.NewFTEID(1, 0, ip1.IP, nil, 0),
-				ie.NewUEIPAddress(2, ip1.IP.String(), "", 0, 0),
+				ie.NewUEIPAddress(6, ip1.IP.String(), "", 0, 0),
 				ie.NewSDFFilter(fd.FlowDescription, nil, nil, nil, 0),
 			),
 		),
@@ -276,7 +278,7 @@ func TestSdfFilterStoreValid(t *testing.T) {
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
 				ie.NewFTEID(1, 10, ip2.IP, nil, 0),
-				// ie.NewUEIPAddress(2, ip2.IP.String(), "", 0, 0),
+				// ie.NewUEIPAddress(6, ip2.IP.String(), "", 0, 0),
 				ie.NewSDFFilter(fd.FlowDescription, nil, nil, nil, 0),
 			),
 		),
@@ -436,7 +438,7 @@ func TestFTUPInAssociationSetupResponse(t *testing.T) {
 		FeatureFTUP: true,
 	}
 
-	pfcpConn, smfIP := PreparePfcpConnection(t)
+	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config.Conf)
 
 	// Creating an Association Setup Request
 	asReq := message.NewAssociationSetupRequest(1,
@@ -471,7 +473,7 @@ func TestFTUPInAssociationSetupResponse(t *testing.T) {
 }
 
 func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
-	pfcpConn, smfIP := PreparePfcpConnection(t)
+	pfcpConn, smfIP := PreparePfcpConnectionWithConfig(t, config.UpfConfig{FeatureFTUP: true})
 
 	resourceManager, err := service.NewResourceManager("10.61.0.0/16", 65536)
 	if err != nil {
@@ -510,6 +512,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	seReq := message.NewSessionEstablishmentRequest(2, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(1, net.ParseIP(smfIP), nil),
+		ie.NewPFCPSEReqFlags(1),
 		createPDR1,
 		createPDR2,
 		createPDR3,
@@ -888,7 +891,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 				ie.NewPDI(
 					ie.NewSourceInterface(ie.SrcInterfaceCore),
 					ie.NewNetworkInstance("internet"),
-					ie.NewUEIPAddress(2, "1.2.3.4", "", 0, 0),
+					ie.NewUEIPAddress(6, "1.2.3.4", "", 0, 0),
 				),
 			),
 		)
@@ -916,7 +919,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithNotAllowedAPN(t *testing.T) {
 				ie.NewPDI(
 					ie.NewSourceInterface(ie.SrcInterfaceCore),
 					ie.NewNetworkInstance("internet1"),
-					ie.NewUEIPAddress(2, "1.2.3.4", "", 0, 0),
+					ie.NewUEIPAddress(6, "1.2.3.4", "", 0, 0),
 				),
 			),
 		)
@@ -958,7 +961,7 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 			ie.NewPDI(
 				ie.NewSourceInterface(ie.SrcInterfaceCore),
 				ie.NewNetworkInstance("internet1"),
-				ie.NewUEIPAddress(2, "1.2.3.4", "", 0, 0),
+				ie.NewUEIPAddress(6, "1.2.3.4", "", 0, 0),
 			),
 		),
 		ie.NewVendorSpecificIE(32769, 2011, []byte{0x52, 0x50, 0x03, 0x00, 0x00, 0x00, 0x20, 0xf3}),
@@ -979,6 +982,13 @@ func TestHandlePfcpSessionEstablishmentRequestWithTrace(t *testing.T) {
 	if err := estReq.SetSEID(estReq.SEID() + 1); err != nil {
 		t.Fatal(err)
 	}
+	// The second session needs its own UE address (TS 29.244 clause 5.2.1).
+	fields, parseErr := estReq.CreatePDR[0].CreatePDR()
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	fields.PDI = ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewNetworkInstance("internet1"), ie.NewUEIPAddress(6, "1.2.3.5", "", 0, 0))
+	estReq.CreatePDR[0] = fields.IE()
 	_, _, err = HandlePfcpSessionEstablishmentRequest(pfcpConn, estReq, smfIP)
 	if err != nil {
 		t.Errorf("Error handling session establishment request: %s", err.Error())

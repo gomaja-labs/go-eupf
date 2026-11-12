@@ -66,6 +66,37 @@ struct dataplane_config {
     __u16  ip6_ra_prefix_length;
 } global_config;
 
+// TS 29.244 V20.1.0 clauses 6.3.2-6.3.4 and 5.2.2.3. A closed
+// gate admits no new rule users; transactions wait for every admitted program
+// to finish before touching runtime state or reusing slots.
+struct rule_gate {
+    struct bpf_spin_lock lock;
+    __u32 active;
+    __u32 closed;
+};
+struct {
+    __uint(type,BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries,1);
+    __type(key,__u32);
+    __type(value,struct rule_gate);
+} rule_gate SEC(".maps");
+
+SEC("xdp/upf_rule_control")
+int upf_rule_control(struct xdp_md *ctx) {
+    __u8 *data=(void *)(long)ctx->data;
+    if ((void *)(data+1)>(void *)(long)ctx->data_end) return XDP_ABORTED;
+    __u32 key=0;struct rule_gate *gate=bpf_map_lookup_elem(&rule_gate,&key);
+    if (!gate) return XDP_ABORTED;
+    __u32 closed=*data?1:0;
+    bpf_spin_lock(&gate->lock);
+    gate->closed=closed;
+    bpf_spin_unlock(&gate->lock);
+    return XDP_PASS;
+}
+static __always_inline void leave_rules(struct rule_gate *gate) {
+    bpf_spin_lock(&gate->lock);gate->active--;bpf_spin_unlock(&gate->lock);
+}
+
 static __always_inline int is_local_ip(__u32 ip)
 {
     return (ip == global_config.n3_ipv4_address || ip == global_config.n9_ipv4_address);
@@ -88,38 +119,103 @@ static __always_inline enum xdp_action send_to_gtp_tunnel(struct packet_context 
     return route_ipv4(ctx->xdp_ctx, ctx->eth, ctx->ip4);
 }
 
-static __always_inline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx, /*const*/ struct pdr_info* session, __u32 ref)
-{
-    const int sdf_filters_num = sizeof(session->dedicated_pdrs)/sizeof(session->dedicated_pdrs[0]);
-    for (int i = 0; i < sdf_filters_num; i++) {
-        /*const*/ struct sdf_filter *sdf = &session->dedicated_pdrs[i].sdf_filter;
-        if(session->dedicated_pdrs[i].active && match_sdf_filter_ipv4(ctx, sdf)) {
-            /*const*/ struct sdf_rule* rule = &session->dedicated_pdrs[i];
-            if(rule->notify == 1) { //FIXME: need more appropriate way to make notifications
-                rule->notify += 1;
-                send_sdf_notify_ip4(ctx, ref);
-            }
-            return &rule->pdr;
+struct pdi_packet {
+    __u128 source;
+    __u128 destination;
+    __u16 source_port;
+    __u16 destination_port;
+    __u8 family;
+    __u8 protocol;
+    __u8 qfi;
+    __u8 qfi_present;
+    __u8 source_interface;
+};
+
+// This scalar metadata helper does not re-parse packet headers for each PDR.
+int output_sdf_event(struct xdp_md *ctx,__u64 session_id,__u32 pdr_id,const struct pdi_packet *packet) {
+    if (!packet) return 0;
+    if (packet->family==1) {
+        struct sdf_notify_ip4 meta={.cookie=0x1ea1,.session_id=session_id,.pdr_id=pdr_id};
+        meta.tuple5.src_ip=(__u32)packet->source;meta.tuple5.dst_ip=(__u32)packet->destination;
+        meta.tuple5.src_port=bpf_htons(packet->source_port);meta.tuple5.dst_port=bpf_htons(packet->destination_port);meta.tuple5.protocol=packet->protocol;
+        return bpf_perf_event_output(ctx,&sdf_notify_map,BPF_F_CURRENT_CPU,&meta,sizeof(meta));
+    }
+    struct sdf_notify_ip6 meta={.cookie=0x2ea2,.session_id=session_id,.pdr_id=pdr_id};
+    __builtin_memcpy(&meta.tuple5.src_ip,&packet->source,16);__builtin_memcpy(&meta.tuple5.dst_ip,&packet->destination,16);
+    meta.tuple5.src_port=bpf_htons(packet->source_port);meta.tuple5.dst_port=bpf_htons(packet->destination_port);meta.tuple5.protocol=packet->protocol;
+    return bpf_perf_event_output(ctx,&sdf_notify_map,BPF_F_CURRENT_CPU,&meta,sizeof(meta));
+}
+
+// TS 29.244 V20.1.0 clause 5.2.1. This memory-only subprogram is
+// verified independently: packet parsing is complete before PDR selection.
+int match_pdr_entry(const struct pdr_entry *entry, const struct pdi_packet *packet) {
+    if (!entry || !packet) return 0;
+    if (entry->source_interface_present && entry->source_interface != packet->source_interface) return 0;
+    if (entry->qfi_count > QFI_LIST_SIZE || entry->sdf_count > SDF_LIST_SIZE) return 0;
+    if (entry->qfi_count) {
+        if (!packet->qfi_present) return 0;
+        int found=0;
+        for (int i=0;i<QFI_LIST_SIZE;i++) {
+            if (i<entry->qfi_count && entry->qfis[i]==packet->qfi) {found=1;break;}
+        }
+        if (!found) return 0;
+    }
+    if (entry->ue_ip4_present || entry->ue_ip6_present) {
+        __u128 address=entry->ue_destination?packet->destination:packet->source;
+        if (packet->family==1) {
+            if (!entry->ue_ip4_present || (((__u32)address ^ entry->ue_ip4) & entry->ue_mask4)) return 0;
+        } else {
+            if (!entry->ue_ip6_present) return 0;
+            __u128 value,mask;
+            __builtin_memcpy(&value,entry->ue_ip6,16);__builtin_memcpy(&mask,entry->ue_mask6,16);
+            if ((address^value)&mask) return 0;
         }
     }
-
+    if (!entry->sdf_count) return 1;
+    for (int i=0;i<SDF_LIST_SIZE;i++) {
+        if (i>=entry->sdf_count) break;
+        const struct sdf_filter *filter=&entry->sdf_filters[i];
+        if (filter->protocol!=1 && filter->protocol!=get_sdf_protocol(packet->protocol)) continue;
+        if ((filter->src_addr.type && filter->src_addr.type!=packet->family) || (filter->dst_addr.type && filter->dst_addr.type!=packet->family)) continue;
+        __u128 src=packet->family==1?bpf_htonl((__u32)filter->src_addr.ip):bpf_htonlll(filter->src_addr.ip);
+        __u128 dst=packet->family==1?bpf_htonl((__u32)filter->dst_addr.ip):bpf_htonlll(filter->dst_addr.ip);
+        __u128 src_mask=packet->family==1?bpf_htonl((__u32)filter->src_addr.mask):bpf_htonlll(filter->src_addr.mask);
+        __u128 dst_mask=packet->family==1?bpf_htonl((__u32)filter->dst_addr.mask):bpf_htonlll(filter->dst_addr.mask);
+        if (filter->src_addr.type && ((packet->source^src)&src_mask)) continue;
+        if (filter->dst_addr.type && ((packet->destination^dst)&dst_mask)) continue;
+        if (packet->source_port<filter->src_port.lower_bound || packet->source_port>filter->src_port.upper_bound || packet->destination_port<filter->dst_port.lower_bound || packet->destination_port>filter->dst_port.upper_bound) continue;
+        return 1;
+    }
     return 0;
 }
 
-static __always_inline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx, const struct pdr_info* session, __u32 ref)
-{
-    const int sdf_filters_num = sizeof(session->dedicated_pdrs)/sizeof(session->dedicated_pdrs[0]);
-    for (int i = 0; i < sdf_filters_num; i++) {
-        const struct sdf_filter *sdf = &session->dedicated_pdrs[i].sdf_filter;
-        if(session->dedicated_pdrs[i].active && match_sdf_filter_ipv6(ctx, sdf)){
-             const struct sdf_rule* rule = &session->dedicated_pdrs[i];
-            if(rule->notify)
-                send_sdf_notify_ip6(ctx, ref);
-            return &rule->pdr;
-        }
+static __noinline const struct pdr *select_pdr(struct packet_context *ctx,struct pdr_info *session,const struct pdi_packet *packet,__u32 ref) {
+    for (int i=0;i<PDR_LIST_SIZE;i++) {
+        if (i>=session->count) break;
+        struct pdr_entry *entry=&session->entries[i];
+        if (!match_pdr_entry(entry,packet)) continue;
+        ctx->trace=entry->trace_flag;ctx->nr_flag=entry->nr_flag;
+        ctx->return_pdr=&entry->return_pdr;ctx->return_nr_flag=entry->return_nr_flag;
+        if (entry->notify==1 && __sync_val_compare_and_swap(&entry->notify,1,2)==1)
+            output_sdf_event(ctx->xdp_ctx,session->session_id,entry->pdr_id,packet);
+        return &entry->pdr;
     }
-
     return 0;
+}
+static __always_inline void pdi_ports(struct packet_context *ctx,struct pdi_packet *tuple) {
+    if (ctx->udp) {tuple->source_port=bpf_ntohs(ctx->udp->source);tuple->destination_port=bpf_ntohs(ctx->udp->dest);}
+    else if (ctx->tcp) {tuple->source_port=bpf_ntohs(ctx->tcp->source);tuple->destination_port=bpf_ntohs(ctx->tcp->dest);}
+}
+static __noinline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+    struct pdi_packet packet={.source=ctx->ip4->saddr,.destination=ctx->ip4->daddr,.family=1,.protocol=ctx->ip4->protocol,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
+    pdi_ports(ctx,&packet);
+    return select_pdr(ctx,session,&packet,ref);
+}
+static __noinline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+    struct pdi_packet packet={.family=2,.protocol=ctx->ip6->nexthdr,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
+    __builtin_memcpy(&packet.source,&ctx->ip6->saddr,16);__builtin_memcpy(&packet.destination,&ctx->ip6->daddr,16);
+    pdi_ports(ctx,&packet);
+    return select_pdr(ctx,session,&packet,ref);
 }
 
 static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_context *ctx, struct pdr_info *session, __u32 ref) {
@@ -153,6 +249,24 @@ static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_con
     return found;
 }
 
+// TS 29.244 V20.1.0 clause 5.4.4: apply every QER in CP binding
+// order. The first QER carrying QFI supplies QFI/RQI and DSCP marking.
+int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
+    if (!pdr || pdr->qer_count>4) return -1;
+    __u32 marking=0;
+    for (int i=0;i<4;i++) {
+        if (i>=pdr->qer_count) break;
+        __u32 id=pdr->qer_id[i];if (!id) return -1;
+        struct qer_info *qer=bpf_map_lookup_elem(&qer_map,&id);
+        if (!qer) return -1;
+        if (uplink?qer->ul_gate_status!=GATE_STATUS_OPEN:qer->dl_gate_status!=GATE_STATUS_OPEN) return -1;
+        if (XDP_DROP==limit_rate_sliding_window(packet_size,uplink?&qer->ul_start:&qer->dl_start,uplink?qer->ul_maximum_bitrate:qer->dl_maximum_bitrate)) return -1;
+        if (!(marking>>8) && qer->dscp) marking |= (__u32)qer->dscp<<8;
+        if (!(marking&0x80) && qer->qfi_present) marking=(marking&0xff00)|0x80|(qer->qfi&0x3f)|((qer->rqi&1)<<6);
+    }
+    return marking;
+}
+
 static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *ctx) {
     if (!ctx->ip4 || (const char *)(ctx->ip4+1) > ctx->data_end) return XDP_ABORTED;
     struct iphdr *ip4 = ctx->ip4;
@@ -162,21 +276,11 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
         return DEFAULT_XDP_ACTION;
     }
 
-    upf_printk("upf: [n6] downlink session for ip:%pI4 trace:%d", &ip4->daddr, session->trace_flag);
-    ctx->trace = session->trace_flag;
-    if(ctx->trace && global_config.trace_in) {
-        trace_packet(ctx, PACKET_DIRECTION_IN);
-    }
-
-    // Set defaults
-    const struct pdr *pdr = &session->default_pdr;
-    if (session->sdf_mode) {
-        const struct pdr *pdr_sdf = check_sdf_filters_ipv4(ctx, session, ip4->daddr);
-        if(pdr_sdf) {
-            upf_printk(" [n6] Packet with source ip:%pI4 and destination ip:%pI4 matches SDF filter1", &ip4->saddr, &ip4->daddr);
-            pdr = pdr_sdf;
-        }
-    }
+    if (ctx->rules_blocked) return XDP_DROP;
+    ctx->source_interface=1;
+    const struct pdr *pdr = check_sdf_filters_ipv4(ctx,session,ip4->daddr);
+    if (!pdr || !pdr->far_id) return XDP_DROP;
+    if (ctx->trace && global_config.trace_in) trace_packet(ctx,PACKET_DIRECTION_IN);
 
     struct far_info *far = bpf_map_lookup_elem(&far_map, &pdr->far_id);
     if (!far) {
@@ -198,22 +302,9 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
     if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
-    struct qer_info *qer = bpf_map_lookup_elem(&qer_map, &pdr->qer_id);
-    if (!qer) {
-        upf_printk("upf: [n6] no downlink session qer for ip:%pI4 qer:%d", &ip4->daddr, pdr->qer_id);
-        return XDP_DROP;
-    }
-
-    upf_printk("upf: [n6] qer:%d gate_status:%d mbr:%u", pdr->qer_id, qer->dl_gate_status, qer->dl_maximum_bitrate);
-
-    if (qer->dl_gate_status != GATE_STATUS_OPEN)
-        return XDP_DROP;
-
-    const __u64 packet_size = bpf_ntohs(ip4->tot_len);
-    if (packet_size < ip4->ihl * 4 || (const char *)ip4 + packet_size > ctx->data_end) return XDP_DROP;
-    enum xdp_action rate_result  = limit_rate_sliding_window(packet_size, &qer->dl_start, qer->dl_maximum_bitrate);
-    if (XDP_DROP == rate_result)
-        return XDP_DROP;
+    const __u64 packet_size=bpf_ntohs(ip4->tot_len);
+    if (packet_size<ip4->ihl*4 || (const char *)ip4+packet_size>ctx->data_end) return XDP_DROP;
+    int marking=enforce_qers(pdr,packet_size,0);if (marking<0) return XDP_DROP;
 
     // RFC 1812 section 5.3.1: decrement the forwarded inner datagram before
     // encapsulation. Leave exhausted packets intact for kernel ICMP handling.
@@ -224,7 +315,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
         ipv4_csum_replace(&ip4->check, old, *(__u16 *)&ip4->ttl);
     }
 
-    __u8 tos = qer->dscp ? qer->dscp : far->transport_level_marking >> 8;
+    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
 
     const int urr_size = sizeof(pdr->urr_id)/sizeof(pdr->urr_id[0]);
     for (int i = 0; i < urr_size; i++) {
@@ -232,32 +323,29 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
     }
 
     upf_printk("upf: [n6] use mapping %pI4 -> teid:%u", &ip4->daddr, far->teid);
-    return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, qer->qfi, far->teid, session->nr_flag);
+    return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
 
 static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *ctx) {
     if (!ctx->ip6 || (const char *)(ctx->ip6+1) > ctx->data_end) return XDP_ABORTED;
     struct ipv6hdr *ip6 = ctx->ip6;
-    struct pdr_info *session = bpf_map_lookup_elem(&pdr_map_downlink_ip6, &ip6->daddr);
-    if (!session) {
-        upf_printk("upf: [n6] no downlink session for ip:%pI6c", &ip6->daddr);
-        return DEFAULT_XDP_ACTION;
+    const struct pdr *pdr=0;
+    if (ctx->locally_generated) {
+        // RFC 4861 sections 4.2 and 6.2.6 choose the IPv6 destination;
+        // TS 29.244 V20.1.0 clause 5.2.1 keeps the return tunnel tied to
+        // the originating PFCP session, including link-local/multicast RAs.
+        pdr=ctx->return_pdr;ctx->nr_flag=ctx->return_nr_flag;
+    } else {
+        struct ipv6_pdr_key key={.prefix_length=128};
+        __builtin_memcpy(key.address,&ip6->daddr,16);
+        struct pdr_info *session=bpf_map_lookup_elem(&pdr_map_downlink_ip6,&key);
+        if (!session) return DEFAULT_XDP_ACTION;
+        if (ctx->rules_blocked) return XDP_DROP;
+        ctx->source_interface=1;
+        pdr=check_sdf_filters_ipv6(ctx,session,0);
     }
-
-    upf_printk("upf: [n6] downlink session for ip:%pI6c trace:%d", &ip6->daddr, session->trace_flag);
-    ctx->trace = session->trace_flag;
-    if(ctx->trace && global_config.trace_in) {
-        trace_packet(ctx, PACKET_DIRECTION_IN);
-    }
-
-    const struct pdr *pdr = &session->default_pdr;
-    if (session->sdf_mode) {
-        const struct pdr *pdr_sdf = check_sdf_filters_ipv6(ctx, session, 0);
-        if(pdr_sdf) {
-            upf_printk(" [n6] Packet with source ip:%pI6c and destination ip:%pI6c matches SDF filter", &ip6->saddr, &ip6->daddr);
-            pdr = pdr_sdf;
-        }
-    }
+    if (!pdr || !pdr->far_id) return XDP_DROP;
+    if (ctx->trace && global_config.trace_in) trace_packet(ctx,PACKET_DIRECTION_IN);
 
     struct far_info *far = bpf_map_lookup_elem(&far_map, &pdr->far_id);
     if (!far) {
@@ -278,22 +366,9 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
     if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
-    struct qer_info *qer = bpf_map_lookup_elem(&qer_map, &pdr->qer_id);
-    if (!qer) {
-        upf_printk("upf: [n6] no downlink session qer for ip:%pI6c qer:%d", &ip6->daddr, pdr->qer_id);
-        return XDP_DROP;
-    }
-
-    upf_printk("upf: [n6] qer:%d gate_status:%d mbr:%u", pdr->qer_id, qer->dl_gate_status, qer->dl_maximum_bitrate);
-
-    if (qer->dl_gate_status != GATE_STATUS_OPEN)
-        return XDP_DROP;
-
-    const __u64 packet_size = bpf_ntohs(ip6->payload_len) + sizeof(*ip6);
-    if ((const char *)ip6 + packet_size > ctx->data_end) return XDP_DROP;
-    enum xdp_action rate_result = limit_rate_sliding_window(packet_size, &qer->dl_start, qer->dl_maximum_bitrate);
-    if (XDP_DROP == rate_result)
-        return XDP_DROP;
+    const __u64 packet_size=bpf_ntohs(ip6->payload_len)+sizeof(*ip6);
+    if ((const char *)ip6+packet_size>ctx->data_end) return XDP_DROP;
+    int marking=enforce_qers(pdr,packet_size,0);if (marking<0) return XDP_DROP;
 
     // RFC 8200 section 3. Locally originated advertisements retain Hop
     // Limit 255 (RFC 4861 section 4.2); their tunnel outer packet is routed.
@@ -302,7 +377,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
         ip6->hop_limit--;
     }
 
-    __u8 tos = qer->dscp ? qer->dscp : far->transport_level_marking >> 8;
+    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
 
     const int urr_size = sizeof(pdr->urr_id) / sizeof(pdr->urr_id[0]);
     for (int i = 0; i < urr_size; i++) {
@@ -310,7 +385,7 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
     }
 
     upf_printk("upf: [n6] use mapping %pI6c -> teid:%u", &ip6->daddr, far->teid);
-    return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, qer->qfi, far->teid, session->nr_flag);
+    return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
 
 
@@ -332,21 +407,11 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
         return UPF_ERROR_INDICATION;
     }
 
-    upf_printk("upf: [n3] teid:%u trace:%d", teid, session->trace_flag);
-    ctx->trace = session->trace_flag;
-    if(ctx->trace && global_config.trace_in) {
-        trace_packet(ctx, PACKET_DIRECTION_IN);
-    }
-
-    // Set defaults
-    const struct pdr *pdr = &session->default_pdr;
-    if (session->sdf_mode) {
-        const struct pdr *pdr_sdf = check_sdf_filters_gtp(ctx, session, teid);
-        if(pdr_sdf) {
-            upf_printk("upf: [n3] sdf filter matches teid:%u", teid);
-            pdr = pdr_sdf;
-        }
-    }
+    if (ctx->rules_blocked) return XDP_DROP;
+    ctx->source_interface = ctx->ip4->daddr == global_config.n9_ipv4_address && global_config.n9_ipv4_address != global_config.n3_ipv4_address ? 1 : 0;
+    const struct pdr *pdr = check_sdf_filters_gtp(ctx,session,teid);
+    if (!pdr || !pdr->far_id) return XDP_DROP;
+    if (ctx->trace && global_config.trace_in) trace_packet(ctx,PACKET_DIRECTION_IN);
 
     /*
      *   Step 2: search for FAR and apply FAR instructions
@@ -379,24 +444,8 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
     /*
      *   Step 3: search for QER and apply QER instructions
      */
-    struct qer_info *qer = bpf_map_lookup_elem(&qer_map, &pdr->qer_id);
-    if (!qer) {
-        upf_printk("upf: [n3] no session qer for teid:%u qer:%d", teid, pdr->qer_id);
-        return XDP_DROP;
-    }
-
-    upf_printk("upf: [n3] qer:%d gate_status:%d mbr:%u", pdr->qer_id, qer->ul_gate_status, qer->ul_maximum_bitrate);
-
-    if (qer->ul_gate_status != GATE_STATUS_OPEN)
-        return XDP_DROP;
-
-    // TS 29.244 V20.1.0 clause 5.2.2.2.1: measure the validated T-PDU
-    // after QoS enforcement, excluding GTP and link-layer overhead.
-    const __u64 packet_size = ctx->tpdu_length;
-    //const __u64 packet_size = ctx->xdp_ctx->data_end - ctx->xdp_ctx->data;
-    enum xdp_action rate_result = limit_rate_sliding_window(packet_size, &qer->ul_start, qer->ul_maximum_bitrate);
-    if (XDP_DROP == rate_result)
-        return XDP_DROP;
+    const __u64 packet_size=ctx->tpdu_length;
+    int marking=enforce_qers(pdr,packet_size,1);if (marking<0) return XDP_DROP;
 
     const int urr_size = sizeof(pdr->urr_id)/sizeof(pdr->urr_id[0]);
     for (int i = 0; i < urr_size; i++) {
@@ -405,7 +454,7 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
 
     upf_printk("upf: [n3] session for teid:%u far:%d outer_header_removal:%d", teid, pdr->far_id, pdr->outer_header_removal);
 
-    __u8 tos = qer->dscp ? qer->dscp : far->transport_level_marking >> 8;
+    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
     // N9: Only outer header GTP/UDP/IPv4 is supported at the moment
     if (far->outer_header_creation & OHC_GTP_U_UDP_IPv4)
     {
@@ -417,7 +466,7 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
             return UPF_LOCAL_TUNNEL;
             //return handle_gtp_packet(ctx);
         }
-    } else if (pdr->outer_header_removal == OHR_GTP_U_UDP_IPv4 || pdr->outer_header_removal == OHR_GTP_U_UDP_IP) {
+    } else if (pdr->outer_header_removal_present && (pdr->outer_header_removal == OHR_GTP_U_UDP_IPv4 || pdr->outer_header_removal == OHR_GTP_U_UDP_IP)) {
         long result = remove_gtp_header(ctx);
         if (result) {
             upf_printk("upf: [n3] handle_gtp_packet: can't remove gtp header: %d", result);
@@ -499,8 +548,8 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
             increment_counter(ctx->counters, rx_gtp_other);
             __u32 teid=bpf_ntohl(ctx->gtp->teid);
             struct pdr_info *pdr=bpf_map_lookup_elem(&pdr_map_teid_ip4,&teid);
-            if (!pdr) return XDP_DROP;
-            struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->default_pdr.far_id);
+            if (!pdr || ctx->rules_blocked || !pdr->entries[0].pdr.far_id) return XDP_DROP;
+            struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->entries[0].pdr.far_id);
             if (!far || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
             update_gtp_tunnel(ctx,global_config.n9_ipv4_address,far->remoteip,0,far->teid);
             if (is_local_ip(ctx->ip4->daddr)) return UPF_LOCAL_TUNNEL;
@@ -563,7 +612,8 @@ static __always_inline enum xdp_action handle_ip4(struct packet_context *ctx) {
             break;
         default:
             increment_counter(ctx->counters, rx_other);
-            return DEFAULT_XDP_ACTION;
+            if (l4_protocol < 0) return DEFAULT_XDP_ACTION;
+            break;
     }
 
     increment_counter(ctx->n3_n6_counter, rx_n6);
@@ -592,7 +642,8 @@ static __always_inline enum xdp_action handle_ip6(struct packet_context *ctx) {
             break;
         default:
             increment_counter(ctx->counters, rx_other);
-            return DEFAULT_XDP_ACTION;
+            if (l4_protocol < 0) return DEFAULT_XDP_ACTION;
+            break;
     }
     increment_counter(ctx->n3_n6_counter, rx_n6);
     return handle_n6_packet_ipv6(ctx);
@@ -625,6 +676,12 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     const __u32 key = 0;
     struct upf_statistic *statistic = bpf_map_lookup_elem(&upf_ext_stat, &key);
     if (!statistic) return XDP_ABORTED;
+    struct rule_gate *gate=bpf_map_lookup_elem(&rule_gate,&key);
+    if (!gate) return XDP_ABORTED;
+    bpf_spin_lock(&gate->lock);
+    int blocked=gate->closed;
+    gate->active++;
+    bpf_spin_unlock(&gate->lock);
 
     // Calculate how short the packet is compared to a physical 64-byte frame
     __u32 current_len = (void *)(long)ctx->data_end - (void *)(long)ctx->data;
@@ -641,7 +698,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
         .xdp_ctx = ctx,
         .counters = &statistic->upf_counters,
         .n3_n6_counter = &statistic->upf_n3_n6_counter,
-        .trace = 0};
+        .trace = 0, .rules_blocked=blocked};
 
     enum xdp_action action = process_packet(&context);
     if (action == UPF_ERROR_INDICATION)
@@ -661,8 +718,9 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     // Dispatch local tunnel recursion only from the entry frame. This keeps
     // bounded kernel tail calls independent of ordinary BPF subprogram stacks.
     if (action == UPF_LOCAL_TUNNEL) {
+        leave_rules(gate);
         bpf_tail_call(ctx, &jmp_table, 0);
-        action = XDP_ABORTED;
+        return XDP_ABORTED;
     }
     statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK] += 1;
 
@@ -672,6 +730,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
         trace_packet(&context, PACKET_DIRECTION_BLOCKED);
     }
 
+    leave_rules(gate);
     return action;
 }
 

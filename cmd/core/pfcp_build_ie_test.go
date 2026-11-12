@@ -15,11 +15,11 @@ func TestBuildSessionReportUsageIEs(t *testing.T) {
 		wantURSEQNVal   uint32
 	}{
 		{"Default", DefaultProfile{}, 0, 7},
-		{"Huawei", testHuaweiProfile, 5, 42},
+		{"Huawei", testHuaweiProfile, 5, 7},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ies := buildSessionReportUsageIEs(tt.profile, 1, 42, 7, 100, 200)
+			ies := buildSessionReportUsageIEs(tt.profile, 1, 7, 100, 200)
 			if len(ies) != 2 {
 				t.Fatalf("expected 2 top-level IEs (ReportType + UsageReport), got %d", len(ies))
 			}
@@ -63,12 +63,12 @@ func TestBuildSessionReportADCIEs(t *testing.T) {
 		wantURSEQNVal   uint32
 	}{
 		{"Default/empty", DefaultProfile{}, "", 0, 7},
-		{"Huawei/empty", testHuaweiProfile, "", 3, 42},
-		{"Huawei/filter", testHuaweiProfile, "permit in 6", 4, 42},
+		{"Huawei/empty", testHuaweiProfile, "", 3, 7},
+		{"Huawei/filter", testHuaweiProfile, "permit in 6", 4, 7},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ies := buildSessionReportADCIEs(tt.profile, 1, 42, 7, tt.sdfFilter)
+			ies := buildSessionReportADCIEs(tt.profile, 1, 7, tt.sdfFilter)
 			if len(ies) != 2 {
 				t.Fatalf("expected 2 top-level IEs, got %d", len(ies))
 			}
@@ -172,7 +172,7 @@ func TestBuildSxaSetupRequestIEs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ies, err := buildSxaSetupRequestIEs(tt.profile, "10.0.0.1", time.Now(), "127.0.0.1", "127.0.0.2")
+			ies, err := buildSxaSetupRequestIEs(tt.profile, "10.0.0.1", time.Now(), "127.0.0.1", "127.0.0.2", []uint8{0x10, 0, 4})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -219,7 +219,7 @@ func TestBuildSxbSetupRequestIEs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ies, err := buildSxbSetupRequestIEs(tt.profile, "10.0.0.1", time.Now(), "127.0.0.3")
+			ies, err := buildSxbSetupRequestIEs(tt.profile, "10.0.0.1", time.Now(), "127.0.0.3", []uint8{0x10, 0, 4})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -243,14 +243,14 @@ func TestBuildSxbSetupRequestIEs(t *testing.T) {
 }
 
 func TestBuildSxaSetupRequestIEsInvalidIP(t *testing.T) {
-	_, err := buildSxaSetupRequestIEs(testHuaweiProfile, "10.0.0.1", time.Now(), "invalid", "127.0.0.2")
+	_, err := buildSxaSetupRequestIEs(testHuaweiProfile, "10.0.0.1", time.Now(), "invalid", "127.0.0.2", nil)
 	if err == nil {
 		t.Error("expected error for invalid s1u address, got nil")
 	}
 }
 
 func TestBuildSxbSetupRequestIEsInvalidIP(t *testing.T) {
-	_, err := buildSxbSetupRequestIEs(testHuaweiProfile, "10.0.0.1", time.Now(), "invalid")
+	_, err := buildSxbSetupRequestIEs(testHuaweiProfile, "10.0.0.1", time.Now(), "invalid", nil)
 	if err == nil {
 		t.Error("expected error for invalid pa address, got nil")
 	}

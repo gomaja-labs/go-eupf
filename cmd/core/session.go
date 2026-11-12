@@ -7,6 +7,7 @@ package core
 import (
 	"errors"
 	"net"
+	"slices"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
@@ -16,17 +17,16 @@ var (
 )
 
 type Session struct {
-	LocalSEID   uint64
-	RemoteSEID  uint64
-	IMSI        string
-	MSISDN      string
-	PDRs        map[uint32]SPDRInfo
-	FARs        map[uint32]SFarInfo
-	QERs        map[uint32]SQerInfo
-	URRs        map[uint32]SUrrInfo
-	URRSequence uint32
-	Traced      bool
-	Is5G        bool
+	LocalSEID  uint64
+	RemoteSEID uint64
+	IMSI       string
+	MSISDN     string
+	PDRs       map[uint32]SPDRInfo
+	FARs       map[uint32]SFarInfo
+	QERs       map[uint32]SQerInfo
+	URRs       map[uint32]SUrrInfo
+	Traced     bool
+	Is5G       bool
 }
 
 func NewSession(localSEID, remoteSEID uint64, IMSI, MSISDN string, traced bool) *Session {
@@ -45,6 +45,9 @@ func NewSession(localSEID, remoteSEID uint64, IMSI, MSISDN string, traced bool) 
 }
 
 type SPDRInfo struct {
+	FARID           *uint32  `json:"far_id,omitempty"`
+	QERIDs          []uint32 `json:"qer_ids,omitempty"`
+	URRIDs          []uint32 `json:"urr_ids,omitempty"`
 	PdrID           uint32
 	PdrInfo         ebpf.PdrInfo
 	Teid            uint32
@@ -52,7 +55,8 @@ type SPDRInfo struct {
 	Ipv6            net.IP
 	NetworkInstance string
 	SourceInterface uint8
-	Allocated       bool
+	AllocatedTEID   bool
+	AllocatedUEIP   bool
 	PCCInfo         *PCCInfo
 }
 
@@ -186,4 +190,26 @@ func (s *Session) GetSessionMsisdn() string {
 
 func (s *Session) IsSessionTraced() bool {
 	return s.Traced
+}
+
+// TS 29.244 V20.1.0 clause 6.3.3.3 removes rule references as well as rules.
+func removeSessionRuleReferences(session *Session, kind string, ruleID, slot uint32) {
+	for id, pdr := range session.PDRs {
+		switch kind {
+		case "far":
+			if pdr.FARID != nil && *pdr.FARID == ruleID {
+				pdr.FARID = nil
+			}
+			if pdr.PdrInfo.FarId == slot {
+				pdr.PdrInfo.FarId = 0
+			}
+		case "qer":
+			pdr.QERIDs = slices.DeleteFunc(pdr.QERIDs, func(ref uint32) bool { return ref == ruleID })
+			pdr.PdrInfo.QerIDs = slices.DeleteFunc(pdr.PdrInfo.QerIDs, func(ref uint32) bool { return ref == slot })
+		case "urr":
+			pdr.URRIDs = slices.DeleteFunc(pdr.URRIDs, func(ref uint32) bool { return ref == ruleID })
+			pdr.PdrInfo.UrrIDs = slices.DeleteFunc(pdr.PdrInfo.UrrIDs, func(ref uint32) bool { return ref == slot })
+		}
+		session.PDRs[id] = pdr
+	}
 }

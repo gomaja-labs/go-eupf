@@ -55,7 +55,8 @@ func loadDatapath(t *testing.T) *BpfObjects {
 	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2})
 	putDatapath(t, b.FarMap.Put, uint32(2), &IpEntrypointFarInfo{Action: 1})
 	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{})
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 1, QerId: 1, Urr1Id: 1}); err != nil {
+	putDatapath(t, b.FarMap.Put, uint32(3), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2})})
+	if err := b.PutPdrUplink(10, PdrInfo{OuterHeaderRemovalPresent: true, PdrID: 1, Precedence: ^uint32(0), ReturnFarID: 3, ReturnQerIDs: []uint32{1}, FarId: 1, QerIDs: []uint32{1}, UrrIDs: []uint32{1}}); err != nil {
 		t.Fatal(err)
 	}
 	return b
@@ -271,7 +272,7 @@ func TestDatapathICMPSdfSelection(t *testing.T) {
 	// TS 29.244 V20.1.0 clauses 5.2.1A and 8.2.5: match the protocol in
 	// the provisioned SDF filter before applying its FAR.
 	b := loadDatapath(t)
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerId: 1, SdfFilter: []SdfFilter{anyDatapathFilter(0)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(0)}}); err != nil {
 		t.Fatal(err)
 	}
 	inner := serializeDatapath(t, &layers.IPv4{Version: 4, TTL: 64, Protocol: layers.IPProtocolICMPv4,
@@ -286,12 +287,12 @@ func TestDatapathIPv6DownlinkUDPSdfSelection(t *testing.T) {
 	b := loadDatapath(t)
 	ip := net.ParseIP("2001:db8::2")
 	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3}), Teid: 20})
-	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{FarId: 1, QerId: 1}); err != nil {
+	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{OuterHeaderRemovalPresent: true, PdrID: 1, Precedence: ^uint32(0), ReturnFarID: 3, ReturnQerIDs: []uint32{1}, FarId: 1, QerIDs: []uint32{1}}); err != nil {
 		t.Fatal(err)
 	}
 	f := anyDatapathFilter(3)
 	f.DstPortRange = PortRange{4321, 4321}
-	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{FarId: 2, QerId: 1, SdfFilter: []SdfFilter{f}}); err != nil {
+	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{f}}); err != nil {
 		t.Fatal(err)
 	}
 	action, _ := runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv6, udpDatapath(t, true)))
@@ -308,7 +309,7 @@ func TestDatapathIPv6SubnetSdfSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.SrcAddress = IpWMask{Type: 2, Ip: ip, Mask: subnet.Mask}
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerId: 1, SdfFilter: []SdfFilter{f}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{f}}); err != nil {
 		t.Fatal(err)
 	}
 	action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, true), nil, 0x30, false))
@@ -391,7 +392,7 @@ func TestDatapathUrrCountsTPDU(t *testing.T) {
 			var packet []byte
 			if tc.downlink {
 				putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3}), Teid: 20})
-				if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{FarId: 1, QerId: 1, Urr1Id: 1}); err != nil {
+				if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{FarId: 1, QerIDs: []uint32{1}, UrrIDs: []uint32{1}}); err != nil {
 					t.Fatal(err)
 				}
 				packet = ethernetDatapath(t, layers.EthernetTypeIPv4, inner)
@@ -415,7 +416,7 @@ func TestDatapathUrrCountsTPDU(t *testing.T) {
 }
 
 func TestDatapathPreprocessPreservesLookupError(t *testing.T) {
-	_, err := PreprocessPdrWithSdf(func(interface{}, interface{}) error { return syscall.EBADF }, uint32(10), PdrInfo{})
+	_, err := preparePDR(func(interface{}, interface{}) error { return syscall.EBADF }, uint32(10), PdrInfo{})
 	if !errors.Is(err, syscall.EBADF) {
 		t.Errorf("lookup EBADF was discarded: %v", err)
 	}
@@ -504,7 +505,7 @@ func TestDatapathRouterAdvertisementRouteFallback(t *testing.T) {
 				remote = net.IP{192, 0, 2, 1}
 			}
 			putDatapath(t, b.FarMap.Put, uint32(3), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(remote), Teid: 10})
-			if err := b.PutDownlinkPdrIp6(net.ParseIP("fe80::1234"), PdrInfo{FarId: 3, QerId: 1}); err != nil {
+			if err := b.PutDownlinkPdrIp6(net.ParseIP("fe80::1234"), PdrInfo{FarId: 3, QerIDs: []uint32{1}}); err != nil {
 				t.Fatal(err)
 			}
 			action, out := runDatapath(t, b, gtpDatapath(t, rsDatapath(t, "fe80::1234", 255, 0), nil, 0x30, false))
@@ -597,7 +598,7 @@ func TestDatapathGateDirections(t *testing.T) {
 			if downlink {
 				q = IpEntrypointQerInfo{DlGateStatus: 1}
 				putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3}), Teid: 20})
-				if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{FarId: 1, QerId: 1, Urr1Id: 1}); err != nil {
+				if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{FarId: 1, QerIDs: []uint32{1}, UrrIDs: []uint32{1}}); err != nil {
 					t.Fatal(err)
 				}
 				packet = ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false))
@@ -872,7 +873,7 @@ func TestDatapathIPv4PdrAddressForms(t *testing.T) {
 			if short {
 				ip = ip.To4()
 			}
-			if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 2, QerId: 1}); err != nil {
+			if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 2, QerIDs: []uint32{1}}); err != nil {
 				t.Fatal(err)
 			}
 			action, _ := runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false)))
@@ -917,7 +918,7 @@ func TestDatapathRouterSolicitationOptions(t *testing.T) {
 
 func TestDatapathICMPv6SdfSelection(t *testing.T) {
 	b := loadDatapath(t)
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerId: 1, SdfFilter: []SdfFilter{anyDatapathFilter(4)}}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{anyDatapathFilter(4)}}); err != nil {
 		t.Fatal(err)
 	}
 	ip := &layers.IPv6{Version: 6, HopLimit: 64, NextHeader: layers.IPProtocolICMPv6, SrcIP: net.ParseIP("2001:db8::1"), DstIP: net.ParseIP("2001:db8::2")}
@@ -953,7 +954,7 @@ func TestDatapathDownlinkHopLimit(t *testing.T) {
 					inner[10], inner[11] = 0, 0
 					binary.BigEndian.PutUint16(inner[10:12], checksumDatapath(inner[:20]))
 				}
-				if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 1, QerId: 1}); err != nil {
+				if err := b.PutPdrDownlink(ip, PdrInfo{FarId: 1, QerIDs: []uint32{1}}); err != nil {
 					t.Fatal(err)
 				}
 				action, out := runDatapath(t, b, ethernetDatapath(t, etherType, inner))

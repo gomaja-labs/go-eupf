@@ -40,20 +40,17 @@ func TestPDRMapRoundTrip(t *testing.T) {
 	bpf.PdrMapTeidIp4 = m
 	h := &ApiHandler{BpfObjects: bpf}
 	r := gin.New()
-	r.PUT("/pdr/:id", h.setUplinkPdrValue)
+	if err := bpf.PutPdrUplink(7, dataplane.PdrInfo{FarId: 11, QerIDs: []uint32{13}, OuterHeaderRemoval: 2, TraceFlag: true}); err != nil {
+		t.Fatal(err)
+	}
 	r.GET("/pdr/:id", h.getUplinkPdrValue)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/pdr/7", strings.NewReader(`{"far_id":11,"qer_id":13,"outer_header_removal":2,"trace":true}`)))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d: %s", w.Code, w.Body)
-	}
-	w = httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pdr/7", nil))
-	var got PdrUplinkElement
+	var got PdrMapElement
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.FarId != 11 || got.QerId != 13 || got.OuterHeaderRemoval != 2 || !got.Trace {
+	if len(got.Rules) != 1 || got.Rules[0].FarId != 11 || len(got.Rules[0].QerIDs) != 1 || got.Rules[0].QerIDs[0] != 13 || got.Rules[0].OuterHeaderRemoval != 2 || !got.Rules[0].TraceFlag {
 		t.Fatalf("PDR read did not preserve the stored fields: %+v", got)
 	}
 }
@@ -74,19 +71,44 @@ func TestDownlinkIPv4PDRUsesIPv4Map(t *testing.T) {
 			bpf.PdrMapDownlinkIp6 = m
 		}
 	}
-	h := &ApiHandler{BpfObjects: bpf}
-	r := gin.New()
-	r.PUT("/pdr/:id", h.setDownlinkPdrValue)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/pdr/192.0.2.1", strings.NewReader(`{"far_id":11}`)))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d: %s", w.Code, w.Body)
+	if err := bpf.PutPdrDownlink(net.ParseIP("192.0.2.1"), dataplane.PdrInfo{FarId: 11}); err != nil {
+		t.Fatal(err)
 	}
 	var got dataplane.IpEntrypointPdrInfo
 	if err := bpf.PdrMapDownlinkIp4.Lookup(net.ParseIP("192.0.2.1").To4(), &got); err != nil {
 		t.Fatalf("IPv4 PDR missing from IPv4 map: %v", err)
 	}
-	if got.DefaultPdr.FarId != 11 {
-		t.Errorf("FAR = %d, want 11", got.DefaultPdr.FarId)
+	if got.Entries[0].Pdr.FarId != 11 {
+		t.Errorf("FAR = %d, want 11", got.Entries[0].Pdr.FarId)
+	}
+}
+
+func TestMapWritesCannotBypassSessionTransactions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	b := dataplane.NewBpfObjects()
+	makeMap := func(typ ebpf.MapType, size uintptr) *ebpf.Map {
+		m, err := ebpf.NewMap(&ebpf.MapSpec{Type: typ, KeySize: 4, ValueSize: uint32(size), MaxEntries: 4})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Close() })
+		return m
+	}
+	b.PdrMapTeidIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{}))
+	b.PdrMapDownlinkIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{}))
+	b.FarMap = makeMap(ebpf.Array, unsafe.Sizeof(dataplane.IpEntrypointFarInfo{}))
+	b.QerMap = makeMap(ebpf.Array, unsafe.Sizeof(dataplane.IpEntrypointQerInfo{}))
+	h := &ApiHandler{BpfObjects: b}
+	r := gin.New()
+	r.PUT("/up/:id", h.setUplinkPdrValue)
+	r.PUT("/down/:id", h.setDownlinkPdrValue)
+	r.PUT("/far/:id", h.setFarValue)
+	r.PUT("/qer/:id", h.setQerValue)
+	for _, path := range []string{"/up/1", "/down/192.0.2.1", "/far/1", "/qer/1"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"far_id":1}`)))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s status=%d permits unmanaged rule writes", path, w.Code)
+		}
 	}
 }

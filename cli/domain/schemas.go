@@ -82,26 +82,29 @@ type UpfConfig struct {
 }
 
 type PfcpSession struct {
-	LocalSEID   uint64
-	RemoteSEID  uint64
-	IMSI        string
-	MSISDN      string
-	PDRs        map[string]SPDRInfo
-	FARs        map[string]SFarInfo
-	QERs        map[string]SQerInfo
-	URRs        map[string]SUrrInfo
-	URRSequence uint32
-	Traced      bool
+	LocalSEID  uint64
+	RemoteSEID uint64
+	IMSI       string
+	MSISDN     string
+	PDRs       map[string]SPDRInfo
+	FARs       map[string]SFarInfo
+	QERs       map[string]SQerInfo
+	URRs       map[string]SUrrInfo
+	Traced     bool
 }
 
 type SPDRInfo struct {
+	FARID           *uint32  `json:"far_id"`
+	QERIDs          []uint32 `json:"qer_ids"`
+	URRIDs          []uint32 `json:"urr_ids"`
 	PdrID           uint32
 	PdrInfo         PdrInfo
 	Teid            uint32
 	Ipv4            string
 	Ipv6            string
 	NetworkInstance string
-	Allocated       bool
+	AllocatedTEID   bool
+	AllocatedUEIP   bool
 	PCCInfo         *PCCInfo
 }
 
@@ -131,14 +134,13 @@ type SUrrInfo struct {
 }
 
 type PdrInfo struct {
-	OuterHeaderRemoval uint8
-	FarId              uint32
-	QerId              uint32
-	Urr1Id             uint32
-	Urr2Id             uint32
-	SdfFilter          []SdfFilter
-	TraceFlag          bool
-	NotifyFlag         bool
+	SessionID          uint64      `json:"session_id"`
+	PdrID              uint32      `json:"pdr_id"`
+	Precedence         uint32      `json:"precedence"`
+	OuterHeaderRemoval uint8       `json:"outer_header_removal"`
+	SdfFilter          []SdfFilter `json:"sdf_filters"`
+	TraceFlag          bool        `json:"trace"`
+	NotifyFlag         bool        `json:"notify"`
 }
 
 type SdfFilter struct {

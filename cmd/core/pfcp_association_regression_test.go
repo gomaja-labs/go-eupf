@@ -211,3 +211,7 @@ func TestDifferentNodeCannotOverwriteOccupiedPeerAddress(t *testing.T) {
 		t.Fatal("a different Node ID replaced another node's association")
 	}
 }
+
+func (maps *associationCleanupMaps) BeginRuleTransaction(uint64) (ebpf.RuleTransaction, error) {
+	return &mapTransactionMock{ForwardingPlaneController: maps}, nil
+}

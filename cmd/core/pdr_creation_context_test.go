@@ -39,7 +39,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDRID(2),
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
-						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
+						ie.NewUEIPAddress(6, "192.168.0.1", "", 0, 0),
 						ie.NewSDFFilter("", []byte("ttc"), nil, nil, 0),
 					),
 				),
@@ -59,7 +59,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDRID(2),
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
-						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
+						ie.NewUEIPAddress(6, "192.168.0.1", "", 0, 0),
 						ie.NewSDFFilter("", nil, nil, nil, 4096),
 					),
 				),
@@ -79,7 +79,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDRID(2),
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
-						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
+						ie.NewUEIPAddress(6, "192.168.0.1", "", 0, 0),
 						ie.NewSDFFilter("123", nil, nil, nil, 4096),
 					),
 				),
@@ -99,7 +99,7 @@ func TestPDRCreationContext_extractPDR(t *testing.T) {
 					ie.NewPDRID(2),
 					ie.NewPDI(
 						ie.NewSourceInterface(ie.SrcInterfaceCore),
-						ie.NewUEIPAddress(2, "192.168.0.1", "", 0, 0),
+						ie.NewUEIPAddress(6, "192.168.0.1", "", 0, 0),
 						ie.NewSDFFilter("permit out ip from 10.62.0.1 to 8.8.8.8/32", nil, nil, nil, 0),
 					),
 				),

@@ -3,6 +3,8 @@ package core
 import (
 	"fmt"
 
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
@@ -82,6 +84,9 @@ func validateSessionRuleIDs(session *Session, lists ...[]*ie.IE) error {
 			if err != nil {
 				return &ruleFailure{change.key.kind, change.key.id, err}
 			}
+			if err := validateRuleCapability(value); err != nil {
+				return &ruleFailure{change.key.kind, change.key.id, err}
+			}
 			key := change.key
 			if seen[key] {
 				return &ruleFailure{key.kind, key.id, fmt.Errorf("multiple operations for one rule")}
@@ -91,6 +96,15 @@ func validateSessionRuleIDs(session *Session, lists ...[]*ie.IE) error {
 				return &ruleFailure{key.kind, key.id, fmt.Errorf("create=%t, rule exists=%t", change.create, known[key])}
 			}
 			known[key] = !change.remove
+			count := 0
+			for rule, present := range known {
+				if rule.kind == key.kind && present {
+					count++
+				}
+			}
+			if count > 64 {
+				return &ruleFailure{key.kind, key.id, ebpf.ErrRuleCapacity}
+			}
 			changes = append(changes, change)
 		}
 	}

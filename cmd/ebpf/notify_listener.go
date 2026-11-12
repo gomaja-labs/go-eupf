@@ -59,17 +59,12 @@ func (e *SdfEvent) String() string {
 	}
 }
 
+// SdfFlowNotification identifies the session and PDR that matched a flow.
+// IDs remain control-plane identities, independently of tunnel/address keys.
 type SdfFlowNotification struct {
-	urrid     uint32
-	sdfFilter string
-}
-
-func (n *SdfFlowNotification) GetURRID() uint32 {
-	return n.urrid
-}
-
-func (n *SdfFlowNotification) GetSdfFilter() string {
-	return n.sdfFilter
+	SessionID uint64
+	PDRID     uint32
+	SDFFilter string
 }
 
 type SdfNotifyListener struct {
@@ -133,31 +128,32 @@ func parseSdfRecord(rec *perf.Record) (*SdfFlowNotification, error) {
 
 	var sdf SdfEvent
 	sampleLength := len(rec.RawSample)
-	if sampleLength < 6 {
+	if sampleLength < 14 {
 		return nil, fmt.Errorf("SDF envelope: %w", io.ErrUnexpectedEOF)
 	}
 	magic := binary.LittleEndian.Uint16(rec.RawSample[:2])
-	reference := binary.LittleEndian.Uint32(rec.RawSample[2:6])
+	sessionID := binary.LittleEndian.Uint64(rec.RawSample[2:10])
+	pdrID := binary.LittleEndian.Uint32(rec.RawSample[10:14])
 	switch magic {
 	case 0x1ea1:
-		if sampleLength < 19 {
+		if sampleLength < 27 {
 			return nil, fmt.Errorf("perf sample for IPv4 SDF too small: %d", sampleLength)
 		}
-		if err := sdf.UnmarshalIPv4(rec.RawSample[6:]); err != nil {
+		if err := sdf.UnmarshalIPv4(rec.RawSample[14:]); err != nil {
 			return nil, err
 		}
 	case 0x2ea2:
-		if sampleLength < 43 {
+		if sampleLength < 51 {
 			return nil, fmt.Errorf("perf sample for IPv6 SDF too small: %d", sampleLength)
 		}
-		if err := sdf.UnmarshalIPv6(rec.RawSample[6:]); err != nil {
+		if err := sdf.UnmarshalIPv6(rec.RawSample[14:]); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unknown event: %d", magic)
 	}
 
-	return &SdfFlowNotification{reference, sdf.String()}, nil
+	return &SdfFlowNotification{SessionID: sessionID, PDRID: pdrID, SDFFilter: sdf.String()}, nil
 }
 
 func (l *SdfNotifyListener) ReadEventOnce() (*SdfFlowNotification, error) {

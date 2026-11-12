@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -19,7 +21,7 @@ func newProtocolConnection(t *testing.T) *PfcpConnection {
 	old := config.Conf
 	config.Conf = config.UpfConfig{}
 	t.Cleanup(func() { config.Conf = old })
-	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, nil, nil, nil, DefaultProfile{})
+	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, emptyResources(t), nil, nil, DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +189,7 @@ func TestProtocolNullRuleReferences(t *testing.T) {
 			conn := newProtocolConnection(t)
 			association := NewNodeAssociation("synthetic.example", "127.0.0.1")
 			session := NewSession(11, 22, "", "", false)
-			session.PutPDR(1, SPDRInfo{PdrID: 1, Teid: 10, PdrInfo: ebpf.PdrInfo{Urr1Id: 21, Urr2Id: 22, QerId: 31}})
+			session.PutPDR(1, SPDRInfo{PdrID: 1, Teid: 10, PdrInfo: ebpf.PdrInfo{UrrIDs: []uint32{21, 22}, QerIDs: []uint32{31}}})
 			session.NewUrr(2, 42, ebpf.UrrInfo{})
 			association.Sessions[11] = session
 			conn.NodeAssociations["127.0.0.1"] = association
@@ -210,17 +212,19 @@ func TestProtocolNullRuleReferences(t *testing.T) {
 			if err != nil || cause != ie.CauseRequestAccepted {
 				t.Fatalf("cause %d: %v", cause, err)
 			}
+			session = association.Sessions[11]
 			got := session.PDRs[1].PdrInfo
-			wantUrr1, wantUrr2, wantQer := uint32(21), uint32(22), uint32(31)
+			wantURRs, wantQERs := []uint32{21, 22}, []uint32{31}
 			if name == "null-urr" || name == "null-removes-entire-list" {
-				wantUrr1, wantUrr2 = 0, 0
+				wantURRs = nil
 			}
 			if name == "null-qer" {
-				wantQer = 0
+				wantQERs = nil
 			}
-			if got.Urr1Id != wantUrr1 || got.Urr2Id != wantUrr2 || got.QerId != wantQer {
-				t.Fatalf("references = (%d,%d,%d), want (%d,%d,%d)", got.Urr1Id, got.Urr2Id, got.QerId, wantUrr1, wantUrr2, wantQer)
+			if !slices.Equal(got.UrrIDs, wantURRs) || !slices.Equal(got.QerIDs, wantQERs) {
+				t.Fatalf("bindings URR=%v QER=%v, want %v %v", got.UrrIDs, got.QerIDs, wantURRs, wantQERs)
 			}
+
 			if session.PDRs[1].Teid != 10 || response.SEID() != 22 {
 				t.Fatalf("session changed or wrong peer SEID %d", response.SEID())
 			}
@@ -458,7 +462,7 @@ func TestProtocolNullOptionalRuleValues(t *testing.T) {
 			association := NewNodeAssociation("synthetic.example", "127.0.0.1")
 			session := NewSession(11, 22, "", "", false)
 			session.NewQer(1, 31, ebpf.QerInfo{GateStatusUL: 1, GateStatusDL: 1, MaxBitrateUL: 1000, MaxBitrateDL: 2000, Qfi: 3})
-			session.NewUrr(1, 41, ebpf.UrrInfo{VolumeThreshold: 1000, TimeThreshold: 10})
+			session.NewUrr(1, 41, ebpf.UrrInfo{VolumeThreshold: 1000})
 			session.NewFar(1, 51, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 10, RemoteIP: 42, TransportLevelMarking: 255})
 			association.Sessions[11] = session
 			conn.NodeAssociations["127.0.0.1"] = association
@@ -480,6 +484,7 @@ func TestProtocolNullOptionalRuleValues(t *testing.T) {
 			if err != nil || cause != ie.CauseRequestAccepted {
 				t.Fatalf("cause %d: %v", cause, err)
 			}
+			session = association.Sessions[11]
 			switch name {
 			case "qer":
 				info := session.QERs[1].QerInfo
@@ -488,7 +493,7 @@ func TestProtocolNullOptionalRuleValues(t *testing.T) {
 				}
 			case "urr":
 				info := session.URRs[1].UrrInfo
-				if info.VolumeThreshold != 0 || info.TimeThreshold != 0 {
+				if info.VolumeThreshold != 0 {
 					t.Fatalf("URR values retained: %+v", info)
 				}
 			case "far":
@@ -594,7 +599,7 @@ func TestProtocolSessionEstablishmentRequirements(t *testing.T) {
 func TestProtocolLocalNodeIDValidation(t *testing.T) {
 	for _, node := range []string{"", "invalid..example", strings.Repeat("a", 64) + ".example"} {
 		t.Run(node, func(t *testing.T) {
-			conn, err := NewPfcpConnection("127.0.0.1:0", node, "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, nil, nil, nil, DefaultProfile{})
+			conn, err := NewPfcpConnection("127.0.0.1:0", node, "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, emptyResources(t), nil, nil, DefaultProfile{})
 			if conn != nil {
 				conn.Close()
 			}
@@ -625,4 +630,13 @@ func TestUnknownPeerSessionResponseUsesPeerSEID(t *testing.T) {
 	if cause != ie.CauseNoEstablishedPFCPAssociation || response.SEID() != 0 {
 		t.Fatalf("unknown-peer cause=%d SEID=%d", cause, response.SEID())
 	}
+}
+
+func emptyResources(t *testing.T) *service.ResourceManager {
+	t.Helper()
+	manager, err := service.NewResourceManager("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
 }

@@ -28,7 +28,7 @@ func policyConnection(t *testing.T, options config.UpfConfig) *PfcpConnection {
 	old := config.Conf
 	config.Conf = options
 	t.Cleanup(func() { config.Conf = old })
-	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, nil, nil, nil, DefaultProfile{})
+	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, emptyResources(t), nil, nil, DefaultProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

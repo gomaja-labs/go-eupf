@@ -119,7 +119,7 @@ func TestProfileNodeID(t *testing.T) {
 }
 
 func TestProfileURSEQN(t *testing.T) {
-	sessionSeq := uint32(42)
+
 	reportSeq := uint32(7)
 	tests := []struct {
 		name    string
@@ -127,11 +127,11 @@ func TestProfileURSEQN(t *testing.T) {
 		wantSeq uint32
 	}{
 		{"Default", DefaultProfile{}, reportSeq},
-		{"Huawei", testHuaweiProfile, sessionSeq},
+		{"Huawei", testHuaweiProfile, reportSeq},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			urseqn := tt.profile.URSEQN(sessionSeq, reportSeq)
+			urseqn := tt.profile.URSEQN(reportSeq)
 			if urseqn == nil {
 				t.Fatal("expected non-nil URSEQN IE")
 			}

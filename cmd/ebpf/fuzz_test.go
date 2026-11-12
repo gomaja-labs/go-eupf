@@ -22,7 +22,7 @@ func FuzzSdfRecord(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		event, err := parseSdfRecord(&perf.Record{RawSample: raw})
-		if err == nil && event.GetSdfFilter() == "" {
+		if err == nil && event.SDFFilter == "" {
 			t.Fatal("accepted an empty tuple")
 		}
 	})
@@ -53,7 +53,7 @@ func FuzzDatapathPacket(f *testing.F) {
 	if err := b.QerMap.Put(uint32(1), &qer); err != nil {
 		f.Fatal(err)
 	}
-	if err := b.PutPdrUplink(10, PdrInfo{FarId: 1, QerId: 1, Urr1Id: 1}); err != nil {
+	if err := b.PutPdrUplink(10, PdrInfo{FarId: 1, QerIDs: []uint32{1}, UrrIDs: []uint32{1}}); err != nil {
 		f.Fatal(err)
 	}
 	// Synthetic Ethernet / IPv4 / UDP / GTP / IPv4 / UDP, with a 32-byte T-PDU.

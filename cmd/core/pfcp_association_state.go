@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -92,12 +93,19 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 				fresh.sessionEntities[seid] = entity
 				retained = true
 			} else {
-				conn.DeleteSession(session)
-				conn.ReleaseResources(session.LocalSEID)
+				if err := conn.DeleteSession(session); err != nil {
+					return false, fmt.Errorf("replace association session %d: %w", seid, err)
+				}
+				delete(old.Sessions, seid)
+				delete(old.sessionEntities, seid)
 			}
 		}
-		delete(conn.NodeAssociations, peer)
-		conn.forgetPeerExceptSetup(peer)
+	}
+	for peer, old := range conn.NodeAssociations {
+		if old.ID == id || peer == addr {
+			delete(conn.NodeAssociations, peer)
+			conn.forgetPeerExceptSetup(peer)
+		}
 	}
 	conn.NodeAssociations[addr] = fresh
 	// PSREI confirms that the requested retention operation succeeded, including
@@ -111,12 +119,13 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 func (conn *PfcpConnection) observeRecovery(addr string, stamp time.Time) bool {
 	return conn.observeEntityRecovery(addr, addr, stamp)
 }
-func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp time.Time) bool {
+func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp time.Time, establishing ...bool) bool {
 	assoc := conn.GetAssociation(addr)
 	if assoc == nil {
 		return true
 	}
-	known := entity == addr
+	_, remembered := assoc.recoveries[entity]
+	known := remembered || entity == addr || len(establishing) > 0 && establishing[0]
 	for _, candidate := range assoc.sessionEntities {
 		if candidate == entity {
 			known = true
@@ -145,8 +154,13 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 			if origin != entity {
 				continue
 			}
-			conn.DeleteSession(session)
-			conn.ReleaseResources(session.LocalSEID)
+			if err := conn.DeleteSession(session); err != nil {
+				log.Error().Err(err).Uint64("session", seid).Msg("Retain restart context after failed cleanup")
+				if assoc.failedAt.IsZero() {
+					assoc.failedAt = time.Now()
+				}
+				return false
+			}
 			delete(assoc.Sessions, seid)
 			delete(assoc.sessionEntities, seid)
 		}
@@ -273,6 +287,19 @@ func cloneSession(session *Session) *Session {
 	for id, pdr := range copy.PDRs {
 		pdr.Ipv4 = append(net.IP(nil), pdr.Ipv4...)
 		pdr.Ipv6 = append(net.IP(nil), pdr.Ipv6...)
+		if pdr.FARID != nil {
+			value := *pdr.FARID
+			pdr.FARID = &value
+		}
+		pdr.QERIDs = slices.Clone(pdr.QERIDs)
+		pdr.URRIDs = slices.Clone(pdr.URRIDs)
+		pdr.PdrInfo.ReturnQerIDs = slices.Clone(pdr.PdrInfo.ReturnQerIDs)
+		pdr.PdrInfo.QerIDs = slices.Clone(pdr.PdrInfo.QerIDs)
+		pdr.PdrInfo.UrrIDs = slices.Clone(pdr.PdrInfo.UrrIDs)
+		pdr.PdrInfo.QFIs = slices.Clone(pdr.PdrInfo.QFIs)
+		pdr.PdrInfo.UEIPv4 = append(net.IP(nil), pdr.PdrInfo.UEIPv4...)
+		pdr.PdrInfo.UEIPv6 = append(net.IP(nil), pdr.PdrInfo.UEIPv6...)
+		pdr.PdrInfo.UEIPv6Mask = append(net.IPMask(nil), pdr.PdrInfo.UEIPv6Mask...)
 		pdr.PdrInfo.SdfFilter = slices.Clone(pdr.PdrInfo.SdfFilter)
 		for i, f := range pdr.PdrInfo.SdfFilter {
 			pdr.PdrInfo.SdfFilter[i] = cloneSdfFilter(f)
@@ -418,17 +445,11 @@ func (conn *PfcpConnection) outgoingContext(msg message.Message, peer string) (s
 }
 
 func (conn *PfcpConnection) pruneEntityMetadata(assoc *NodeAssociation) {
-	active := map[string]bool{assoc.Addr: true}
-	for seid, entity := range assoc.sessionEntities {
+
+	for seid := range assoc.sessionEntities {
 		if assoc.Sessions[seid] == nil {
 			delete(assoc.sessionEntities, seid)
-		} else {
-			active[entity] = true
 		}
 	}
-	for entity := range assoc.recoveries {
-		if !active[entity] {
-			delete(assoc.recoveries, entity)
-		}
-	}
+
 }

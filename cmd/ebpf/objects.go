@@ -22,12 +22,14 @@ import (
 //		- enables debug output to tracepipe (`bpftool prog tracelog`)
 //
 
-//go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
+//go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -type pdr_entry -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
 //go:generate go tool bpf2go -tags linux -target bpf ZeroEntrypoint 	xdp/zero_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N3Entrypoint 	xdp/n3_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
+	ruleMutex  sync.Mutex
+	rulePoison error
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -237,7 +239,7 @@ func (t *IdTracker) GetNext() (next uint32, err error) {
 		return next, nil
 	}
 
-	return 0, errors.New("pool is empty")
+	return 0, ErrRuleCapacity
 }
 
 func (t *IdTracker) Release(id uint32) {

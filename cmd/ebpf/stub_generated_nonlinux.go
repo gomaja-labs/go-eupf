@@ -10,6 +10,8 @@ import (
 
 type IpEntrypointObjects struct {
 	UpfIpEntrypointFunc *ebpf.Program
+	UpfRuleControl      *ebpf.Program
+	RuleGate            *ebpf.Map
 	FarMap              *ebpf.Map
 	QerMap              *ebpf.Map
 	UrrMap              *ebpf.Map
@@ -17,7 +19,6 @@ type IpEntrypointObjects struct {
 	PdrMapDownlinkIp6   *ebpf.Map
 	PdrMapTeidIp4       *ebpf.Map
 	SdfNotifyMap        *ebpf.Map
-	SdfNotifyStorage    *ebpf.Map
 	TraceMap            *ebpf.Map
 	UpfExtStat          *ebpf.Map
 	UpfPipeline         *ebpf.Map
@@ -38,46 +39,95 @@ type IpEntrypointDataplaneConfig struct {
 
 func (o *IpEntrypointObjects) Close() error { return nil }
 
+type IpEntrypointPdrEntry struct {
+	Pdr struct {
+		FarId                     uint32
+		QerId                     [4]uint32
+		QerCount                  uint8
+		_                         [3]byte
+		UrrId                     [3]uint32
+		OuterHeaderRemoval        uint8
+		OuterHeaderRemovalPresent uint8
+		_                         [2]byte
+	}
+	ReturnPdr struct {
+		FarId                     uint32
+		QerId                     [4]uint32
+		QerCount                  uint8
+		_                         [3]byte
+		UrrId                     [3]uint32
+		OuterHeaderRemoval        uint8
+		OuterHeaderRemovalPresent uint8
+		_                         [2]byte
+	}
+	ReturnNrFlag           uint8
+	_                      [3]byte
+	PdrId                  uint32
+	Precedence             uint32
+	_                      [4]byte
+	Notify                 uint64
+	UeIp4                  uint32
+	UeMask4                uint32
+	UeIp6                  [16]uint8
+	UeMask6                [16]uint8
+	UeIp4Present           uint8
+	UeIp6Present           uint8
+	UeDestination          uint8
+	SourceInterfacePresent uint8
+	SourceInterface        uint8
+	TraceFlag              uint8
+	NrFlag                 uint8
+	SdfCount               uint8
+	QfiCount               uint8
+	Qfis                   [8]uint8
+	_                      [15]byte
+	SdfFilters             [2]struct {
+		Protocol uint8
+		_        [15]byte
+		SrcAddr  struct {
+			Type uint8
+			_    [15]byte
+			Ip   [16]byte /* uint128 */
+			Mask [16]byte /* uint128 */
+		}
+		SrcPort struct {
+			LowerBound uint16
+			UpperBound uint16
+		}
+		_       [12]byte
+		DstAddr struct {
+			Type uint8
+			_    [15]byte
+			Ip   [16]byte /* uint128 */
+			Mask [16]byte /* uint128 */
+		}
+		DstPort struct {
+			LowerBound uint16
+			UpperBound uint16
+		}
+		_ [12]byte
+	}
+}
+
 type IpEntrypointPdrInfo struct {
-	DefaultPdr struct {
-		OuterHeaderRemoval uint8
-		FarId              uint32
-		QerId              uint32
-		UrrId              [2]uint32
-	}
-	TraceFlag     uint8
-	NrFlag        uint8
-	SdfMode       uint8
-	DedicatedPdrs [8]struct {
-		Active uint8
-		Pdr    struct {
-			OuterHeaderRemoval uint8
-			FarId              uint32
-			QerId              uint32
-			UrrId              [2]uint32
-		}
-		SdfFilter struct {
-			Protocol      uint8
-			SrcAddr       ipEntrypointIpWMask
-			SrcPort       ipEntrypointPortRange
-			DstAddr       ipEntrypointIpWMask
-			DstPort       ipEntrypointPortRange
-			Bidirectional uint8
-			SpfFlag       uint8
-		}
-		Notify uint8
-	}
+	SessionId uint64
+	Count     uint32
+	_         [4]byte
+	Entries   [4]IpEntrypointPdrEntry
 }
 
-type ipEntrypointIpWMask struct {
-	Type uint8
-	Ip   [16]byte
-	Mask [16]byte
-}
-
-type ipEntrypointPortRange struct {
-	LowerBound uint16
-	UpperBound uint16
+type IpEntrypointQerInfo struct {
+	UlGateStatus     uint8
+	DlGateStatus     uint8
+	Qfi              uint8
+	QfiPresent       uint8
+	Rqi              uint8
+	Dscp             uint8
+	_                [2]byte
+	UlMaximumBitrate uint64
+	DlMaximumBitrate uint64
+	UlStart          uint64
+	DlStart          uint64
 }
 
 type IpEntrypointFarInfo struct {
@@ -87,17 +137,6 @@ type IpEntrypointFarInfo struct {
 	Remoteip              uint32
 	Trigger               uint8
 	TransportLevelMarking uint16
-}
-
-type IpEntrypointQerInfo struct {
-	UlGateStatus     uint8
-	DlGateStatus     uint8
-	Qfi              uint8
-	Dscp             uint8
-	UlMaximumBitrate uint64
-	DlMaximumBitrate uint64
-	UlStart          uint64
-	DlStart          uint64
 }
 
 type IpEntrypointUrrInfo struct {
@@ -121,4 +160,17 @@ type IpEntrypointRouteStat struct {
 
 func LoadIpEntrypoint() (*ebpf.CollectionSpec, error) {
 	return nil, errors.New("ebpf generation requires Linux")
+}
+
+type IpEntrypointRuleGate struct {
+	Lock struct {
+		Val uint32
+	}
+	Active uint32
+	Closed uint32
+}
+
+type IpEntrypointIpv6PdrKey struct {
+	PrefixLength uint32
+	Address      [16]uint8
 }

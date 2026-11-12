@@ -108,6 +108,9 @@ func NewPfcpConnection(
 	if err := validateLocalNodeID(profile, nodeId); err != nil {
 		return nil, err
 	}
+	if resourceManager == nil {
+		return nil, fmt.Errorf("a shared UPF resource manager is required")
+	}
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log.Warn().Msgf("Can't resolve UDP address: %s", err.Error())
@@ -127,7 +130,7 @@ func NewPfcpConnection(
 	log.Info().Msgf("Starting PFCP connection: %v with Node ID: %v, N3 address: %v, N9 address: %v", udpAddr, nodeId, n3Addr, n9Addr)
 
 	featuresOctets := []uint8{0, 0, 0x40} // BUNDL: IE octet 7 (payload byte 2), TS 29.244 V20.1.0 table 8.2.25-1
-	featuresOctets[1] = setBit(featuresOctets[1], 0)
+	// TS 29.244 V20.1.0 clause 8.2.25: EMPU denotes sending End Markers, not receiving them.
 	if config.Conf.FeatureFTUP {
 		featuresOctets[0] = setBit(featuresOctets[0], 4)
 	}
@@ -394,7 +397,7 @@ func (connection *PfcpConnection) Run() {
 			connection.SendReports()
 		case notification, ok := <-connection.sdfNotifyC:
 			if ok {
-				connection.SendReportsSDF(notification.GetURRID(), notification.GetSdfFilter())
+				connection.handleSDFNotification(notification)
 			} else {
 				connection.sdfNotifyC = nil
 			}
@@ -600,38 +603,40 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 		return
 	}
 	for id, session := range assoc.Sessions {
-		connection.DeleteSession(session)
-		connection.ReleaseResources(session.LocalSEID)
+		if err := connection.DeleteSession(session); err != nil {
+			log.Error().Err(err).Uint64("session", id).Msg("Retain association ownership after failed rule cleanup")
+			if assoc.failedAt.IsZero() {
+				assoc.failedAt = time.Now()
+			}
+			continue
+		}
 		delete(assoc.Sessions, id)
 	}
-	delete(connection.NodeAssociations, addr)
-	connection.forgetPeer(addr)
+	if len(assoc.Sessions) == 0 {
+		delete(connection.NodeAssociations, addr)
+		connection.forgetPeer(addr)
+	}
 }
 
-// DeleteSession removes the forwarding rules of a session, including usage rules.
-// TS 29.244 V20.1.0 clause 6.2.8.3: association release deletes all session contexts.
-func (connection *PfcpConnection) DeleteSession(session *Session) {
-	for _, urr := range session.URRs {
-		if _, err := connection.mapOperations.DeleteUrr(urr.GlobalId); err != nil {
-			log.Error().Err(err).Uint32("urr", urr.GlobalId).Msg("Delete association usage rule")
-		}
+// DeleteSession removes a session through the same quiesced map journal as
+// PFCP deletion. The caller holds stateMu and retains ownership on failure.
+// TS 29.244 V20.1.0 clauses 6.2.8.3 and 6.3.4.
+func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
+	draft := cloneSession(session)
+	start, finish := connection.prepareSessionMutation(session.LocalSEID)
+	defer func() { err = errors.Join(err, finish(false)) }()
+	pool := NewOperationPool()
+	pool.Before = start
+	var reports []*ie.IE
+	context := NewPDRCreationContext(draft, connection.ResourceManager)
+	if err = processDeletionRequestRules(connection, log.Logger, pool, context, draft, &reports); err != nil {
+		return err
 	}
-	for _, far := range session.FARs {
-		if err := connection.mapOperations.DeleteFar(far.GlobalId); err != nil {
-			log.Error().Err(err).Uint32("far", far.GlobalId).Msg("Delete association forwarding rule")
-		}
+	if err = pool.Commit(); err != nil {
+		return err
 	}
-	for _, qer := range session.QERs {
-		if err := connection.mapOperations.DeleteQer(qer.GlobalId); err != nil {
-			log.Error().Err(err).Uint32("qer", qer.GlobalId).Msg("Delete association QoS rule")
-		}
-	}
-	pdrContext := NewPDRCreationContext(session, connection.ResourceManager)
-	for _, PDR := range session.PDRs {
-		if err := pdrContext.deletePDR(PDR, connection.mapOperations); err != nil {
-			log.Error().Err(err).Uint32("pdr", PDR.PdrID).Msg("Delete association detection rule")
-		}
-	}
+	connection.ReleaseResources(session.LocalSEID)
+	return finish(true)
 }
 
 func (connection *PfcpConnection) GetSessionCount() int {
@@ -666,11 +671,26 @@ func (connection *PfcpConnection) ReleaseResources(seID uint64) {
 
 func (connection *PfcpConnection) SendReports() {
 	connection.stateMu.Lock()
+	type admittedReport struct {
+		wire   []byte
+		peer   *net.UDPAddr
+		socket *net.UDPConn
+		trace  bool
+	}
+	var admitted []admittedReport
 	var outgoing []queuedMessage
-	defer func() { connection.stateMu.Unlock(); connection.sendQueued(outgoing) }()
+	defer func() {
+		connection.stateMu.Unlock()
+		for _, r := range admitted {
+			if err := connection.sendEncodedAtSocket(r.wire, message.MsgTypeSessionReportRequest, r.peer, r.trace, r.socket); err != nil {
+				log.Warn().Err(err).Msg("Send admitted usage report; reliable delivery retains it")
+			}
+		}
+		connection.sendQueued(outgoing)
+	}()
 
 	for _, association := range connection.NodeAssociations {
-		for _, session := range association.Sessions {
+		for seid, session := range association.Sessions {
 			for urrid, urr := range session.URRs {
 
 				newReport, err := connection.mapOperations.GetUrr(urr.GlobalId)
@@ -681,21 +701,37 @@ func (connection *PfcpConnection) SendReports() {
 				uplink := newReport.UplinkVolume - urr.UrrInfo.UplinkVolume
 				downlink := newReport.DownlinkVolume - urr.UrrInfo.DownlinkVolume
 
-				if uplink+downlink > 0 { //we have usage increment
-					if urr.UrrInfo.VolumeThreshold > 0 && urr.UrrInfo.VolumeThreshold <= uplink+downlink {
-						urr.ReportSeqNumber += 1
-						session.URRSequence += 1
-						outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, uplink, downlink)...), association.endpoint, session.IsSessionTraced()})
+				if urr.UrrInfo.VolumeTrigger && !urr.UrrInfo.VolumeReported && urr.UrrInfo.VolumeThreshold > 0 && uplink+downlink >= urr.UrrInfo.VolumeThreshold {
+					report := message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, urr.ReportSeqNumber, uplink, downlink)...)
+					peer, err := net.ResolveUDPAddr("udp", association.endpoint)
+					if err != nil {
+						continue
 					}
-
+					socket := connection.socket()
+					entity := association.sessionEntities[seid]
+					if entity == "" {
+						entity = association.Addr
+					}
+					wire, err := connection.prepareRequestContext(report, peer, session.IsSessionTraced(), socket, entity, association)
+					if err != nil {
+						log.Warn().Err(err).Uint64("session", seid).Uint32("urr", urrid).Msg("Retain unreported usage until report admission succeeds")
+						continue
+					}
+					admitted = append(admitted, admittedReport{wire, peer, socket, session.IsSessionTraced()})
+					urr.ReportSeqNumber++
 					urr.UrrInfo.UplinkVolume = newReport.UplinkVolume
 					urr.UrrInfo.DownlinkVolume = newReport.DownlinkVolume
+					urr.UrrInfo.VolumeReported = true
 					session.URRs[urrid] = urr
 				}
+
 			}
 
 			for pdrID, pdr := range session.PDRs {
 				internalFarID := pdr.PdrInfo.FarId
+				if internalFarID == 0 {
+					continue
+				}
 				currentFar, err := connection.mapOperations.GetFar(internalFarID)
 				if err != nil {
 					continue
@@ -715,7 +751,6 @@ func (connection *PfcpConnection) SendReports() {
 					}
 
 					traced := session.IsSessionTraced()
-					session.URRSequence++
 					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), association.endpoint, traced})
 				}
 			}
@@ -724,38 +759,20 @@ func (connection *PfcpConnection) SendReports() {
 	}
 }
 
-func (connection *PfcpConnection) SendReportsSDF(referenceID uint32, sdfFilter string) {
-	connection.stateMu.Lock()
-	var outgoing []queuedMessage
-	defer func() { connection.stateMu.Unlock(); connection.sendQueued(outgoing) }()
-
-	log.Info().Msgf("SendReportsSDF: ref=%d filter=%s", referenceID, sdfFilter)
-
-	if sdfFilter == "" {
-		return
-	}
-
+// SDF events are diagnostics. Unsupported application/start-of-traffic URRs
+// are rejected when provisioned; a tuple match must not fabricate Usage Reports.
+func (connection *PfcpConnection) handleSDFNotification(notification ebpf.SdfFlowNotification) {
+	connection.stateMu.RLock()
+	defer connection.stateMu.RUnlock()
 	for _, association := range connection.NodeAssociations {
-		for _, session := range association.Sessions {
-
-			for _, pdr := range session.PDRs {
-				if pdr.Teid != referenceID /*|| pdr.Ipv4 != referenceID*/ { //FIXME: add IPv4 reference
-					continue
-				}
-			}
-
-			for urrid, urr := range session.URRs {
-				if urrid != 16733 {
-					continue
-				}
-
-				urr.ReportSeqNumber += 1
-				session.URRSequence += 1
-				outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportADCIEs(connection.profile, urrid, session.URRSequence, urr.ReportSeqNumber, sdfFilter)...), association.endpoint, session.IsSessionTraced()})
-
-				return
-			}
+		session := association.Sessions[notification.SessionID]
+		if session == nil {
+			continue
 		}
+		if _, exists := session.PDRs[notification.PDRID]; exists {
+			log.Debug().Uint64("session", notification.SessionID).Uint32("pdr", notification.PDRID).Msg("SDF matched")
+		}
+		return
 	}
 }
 
@@ -883,12 +900,11 @@ func (connection *PfcpConnection) DisableTracingByMsisdn(msisdn string) (tracing
 
 func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32, associationAddr string,
 	urrid uint32,
-	sessionSeq uint32,
 	reportSeq uint32,
 	uplink uint64,
 	downlink uint64,
 	traced bool) {
-	additionalIEs := buildSessionReportUsageIEs(conn.profile, urrid, sessionSeq, reportSeq, uplink, downlink)
+	additionalIEs := buildSessionReportUsageIEs(conn.profile, urrid, reportSeq, uplink, downlink)
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
@@ -904,11 +920,10 @@ func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32
 
 func SendSessionReportADC(conn *PfcpConnection, seid uint64, sequenceID uint32, associationAddr string,
 	urrid uint32,
-	sessionSeq uint32,
 	reportSeq uint32,
 	sdfFilter string,
 	traced bool) {
-	additionalIEs := buildSessionReportADCIEs(conn.profile, urrid, sessionSeq, reportSeq, sdfFilter)
+	additionalIEs := buildSessionReportADCIEs(conn.profile, urrid, reportSeq, sdfFilter)
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
@@ -1059,7 +1074,7 @@ func (connector *SxaAssociationConnector) getAddress() string {
 
 func (connector *SxaAssociationConnector) sendAssociationSetupRequest(connection *PfcpConnection) {
 	associationAddr := connector.getAddress()
-	ies, err := buildSxaSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.s1uAddress, connector.s5s8Address)
+	ies, err := buildSxaSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.s1uAddress, connector.s5s8Address, connection.featuresOctets)
 	if err != nil {
 		log.Error().Msgf("failed to build Sxa setup request IEs: %v", err)
 		return
@@ -1100,7 +1115,7 @@ func (connector *SxbAssociationConnector) getAddress() string {
 
 func (connector *SxbAssociationConnector) sendAssociationSetupRequest(connection *PfcpConnection) {
 	associationAddr := connector.getAddress()
-	ies, err := buildSxbSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.paAddress)
+	ies, err := buildSxbSetupRequestIEs(connection.profile, connection.localNodeID(), connection.RecoveryTimestamp, connector.paAddress, connection.featuresOctets)
 	if err != nil {
 		log.Error().Msgf("failed to build Sxb setup request IEs: %v", err)
 		return

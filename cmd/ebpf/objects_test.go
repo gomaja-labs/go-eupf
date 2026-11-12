@@ -173,12 +173,14 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 		return 0, fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := IpEntrypointPdrInfo{}
-	pdr.DefaultPdr.OuterHeaderRemoval = 0
-	pdr.DefaultPdr.FarId = 1
-	pdr.DefaultPdr.QerId = 1
+	pdr := IpEntrypointPdrInfo{Count: 1}
+	pdr.Entries[0].Pdr.OuterHeaderRemoval = 0
+	pdr.Entries[0].Pdr.FarId = 1
+	pdr.Count = 1
+	pdr.Entries[0].Pdr.QerCount = 1
+	pdr.Entries[0].Pdr.QerId[0] = 1
 	far := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &far); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
@@ -309,10 +311,10 @@ func testGtpWithSDFFilter(bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -404,9 +406,9 @@ func testGtpHeaderWithSequence(t *testing.T, bpfObjects *BpfObjects) error {
 
 	t.Logf("packet: %v", packet.Layers())
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 0, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -477,10 +479,10 @@ func testGtpIPv4WithSDFFilterV6(bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -569,10 +571,10 @@ func testGtpWithSDFFilterV6(bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -681,10 +683,10 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
 	farDrop := IpEntrypointFarInfo{Action: 1, OuterHeaderCreation: 1, Remoteip: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), Teid: 2, TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 0, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farDrop); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -724,11 +726,11 @@ func testGtpWithSDFFilterNotification(bpfObjects *BpfObjects) error {
 		return fmt.Errorf("unexpected error while waiting for event: %v", err.Error())
 	}
 
-	if sdfEvent.sdfFilter != "permit in 17 from 10.60.0.1/32 2153 to 1.1.1.1/32 2152" {
-		return fmt.Errorf("unexpected sdf flow filter: %v", sdfEvent.sdfFilter)
+	if sdfEvent.SDFFilter != "permit in 17 from 10.60.0.1/32 2153 to 1.1.1.1/32 2152" {
+		return fmt.Errorf("unexpected sdf flow filter: %v", sdfEvent.SDFFilter)
 	}
 
-	log.Println(sdfEvent.sdfFilter)
+	log.Println(sdfEvent.SDFFilter)
 
 	if bpfRet != 4 { // XDP_REDIRECT
 		return fmt.Errorf("unexpected return value: %d", bpfRet)
@@ -766,14 +768,14 @@ func testGtpExtHeader(t *testing.T, bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
 		Remoteip:              binary.LittleEndian.Uint32(net.IP{10, 3, 0, 30}),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -863,14 +865,14 @@ func testDLwithGTPPort(t *testing.T, bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
 		Remoteip:              binary.LittleEndian.Uint32(net.IP{10, 3, 0, 30}),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000}
+	qer := IpEntrypointQerInfo{QfiPresent: 1, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)
@@ -978,17 +980,17 @@ func testICMPv6RA(t *testing.T, bpfObjects *BpfObjects) error {
 		return fmt.Errorf("serializing input packet failed: %w", err)
 	}
 
-	pdrUplink := PdrInfo{OuterHeaderRemoval: 0, FarId: 2, QerId: 1}
+	pdrUplink := PdrInfo{ReturnFarID: 1, ReturnQerIDs: []uint32{1}, OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 2, QerIDs: []uint32{1}}
 	farUplink := FarInfo{Action: 2, OuterHeaderCreation: 0}
 
-	pdr := PdrInfo{OuterHeaderRemoval: 0, FarId: 1, QerId: 1}
+	pdr := PdrInfo{OuterHeaderRemovalPresent: true, OuterHeaderRemoval: 0, FarId: 1, QerIDs: []uint32{1}}
 	farForward := IpEntrypointFarInfo{
 		Action:                2,
 		OuterHeaderCreation:   1,
 		Remoteip:              binary.LittleEndian.Uint32(net.ParseIP("10.3.0.30").To4()),
 		Teid:                  teid,
 		TransportLevelMarking: 0}
-	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
+	qer := IpEntrypointQerInfo{UlGateStatus: 0, DlGateStatus: 0, QfiPresent: 1, Qfi: 5, UlMaximumBitrate: 1000000, DlMaximumBitrate: 100000, UlStart: 0, DlStart: 0}
 
 	if err := bpfObjects.FarMap.Put(uint32(1), &farForward); err != nil {
 		return fmt.Errorf("can't set FAR: %w", err)

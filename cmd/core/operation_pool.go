@@ -1,56 +1,58 @@
 package core
 
-import (
-	"github.com/rs/zerolog/log"
-)
-
+// Operation is one planned map change. Exact rollback belongs to the map
+// transaction, including the original slot, counters and QoS runtime state.
 type Operation struct {
-	Apply    func() error
-	Rollback func() error
+	Reserve func() error
+	Apply   func() error
 }
 
 type OperationPool struct {
-	operations  []Operation
-	failedIndex int
+	Before     func() error
+	operations []Operation
 }
 
-func NewOperationPool() *OperationPool {
-	return &OperationPool{
-		operations:  make([]Operation, 0),
-		failedIndex: -1,
-	}
+func NewOperationPool() *OperationPool { return &OperationPool{} }
+func (pool *OperationPool) Add(operation Operation) {
+	pool.operations = append(pool.operations, operation)
 }
-
-func (op *OperationPool) Add(operation Operation) {
-	op.operations = append(op.operations, operation)
-}
-
-func (op *OperationPool) Commit() error {
-	op.failedIndex = -1
-
-	for i, operation := range op.operations {
-		if err := operation.Apply(); err != nil {
-			log.Warn().Msgf("Operation failed at index %d: %v", i, err)
-			op.failedIndex = i
-			op.Rollback()
+func (pool *OperationPool) Commit() error {
+	if pool.Before != nil {
+		if err := pool.Before(); err != nil {
 			return err
 		}
 	}
-
+	for _, op := range pool.operations {
+		if op.Reserve != nil {
+			if err := op.Reserve(); err != nil {
+				return err
+			}
+		}
+	}
+	for _, operation := range pool.operations {
+		if err := operation.Apply(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (op *OperationPool) Rollback() {
-	if op.failedIndex == -1 {
-		log.Warn().Msg("Rollback called without a failed operation")
-		return
-	}
-
-	for i := op.failedIndex; i >= 0; i-- {
-		if err := op.operations[i].Rollback(); err != nil {
-			log.Warn().Msgf("Rollback failed at index %d: %v", i, err)
+func (pool *OperationPool) AddRule(kind uint8, id uint32, operation Operation) {
+	reserve := operation.Reserve
+	if reserve != nil {
+		operation.Reserve = func() error {
+			if err := reserve(); err != nil {
+				return &ruleFailure{kind, id, err}
+			}
+			return nil
 		}
 	}
-
-	op.failedIndex = -1
+	apply := operation.Apply
+	operation.Apply = func() error {
+		if err := apply(); err != nil {
+			return &ruleFailure{kind, id, err}
+		}
+		return nil
+	}
+	pool.Add(operation)
 }
