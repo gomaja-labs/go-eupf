@@ -430,7 +430,7 @@ func (h *ApiHandler) editGTPPathConfig(c *gin.Context) {
 // runs the same validator as startup before any runtime or persistence change.
 func (h *ApiHandler) validatedEdit(data any) (*config.UpfConfig, map[string]interface{}, error) {
 	h.cfgMu.RLock()
-	next := *h.Cfg
+	next := h.Cfg.Clone()
 	h.cfgMu.RUnlock()
 	cfgs := make(map[string]interface{})
 	val := reflect.ValueOf(data)
@@ -446,7 +446,7 @@ func (h *ApiHandler) validatedEdit(data any) (*config.UpfConfig, map[string]inte
 			cfgs[key] = val.Field(i).Interface()
 		}
 	}
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &next, WeaklyTypedInput: true})
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &next, WeaklyTypedInput: true, ZeroFields: true})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create config decoder: %w", err)
 	}

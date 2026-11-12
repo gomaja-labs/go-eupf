@@ -6,10 +6,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,6 +141,21 @@ type UpfConfig struct {
 	Ip6RaPrefix             string         `mapstructure:"ip6_ra_prefix" validate:"cidrv6" json:"ip6_ra_prefix"`
 
 	n3AdvertisedAddress5G net.IP
+}
+
+// Clone returns a configuration with independent slices, maps and parsed IPs.
+func (c *UpfConfig) Clone() UpfConfig {
+	next := *c
+	next.InterfaceName = slices.Clone(c.InterfaceName)
+	next.PfcpPeerAllowList = slices.Clone(c.PfcpPeerAllowList)
+	next.PfcpRemoteNode = slices.Clone(c.PfcpRemoteNode)
+	next.SxaRemoteNode = slices.Clone(c.SxaRemoteNode)
+	next.SxbRemoteNode = slices.Clone(c.SxbRemoteNode)
+	next.GtpPeer = slices.Clone(c.GtpPeer)
+	next.ApiAllowedOrigins = slices.Clone(c.ApiAllowedOrigins)
+	next.Qci2DscpMapping = maps.Clone(c.Qci2DscpMapping)
+	next.n3AdvertisedAddress5G = slices.Clone(c.n3AdvertisedAddress5G)
+	return next
 }
 
 func initialize() error {

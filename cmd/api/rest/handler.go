@@ -7,11 +7,9 @@ package rest
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"maps"
 	"mime"
 	"net"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 
@@ -62,14 +60,7 @@ func NewApiHandler(
 	gtpPathManager *core.GtpPathManager,
 	releaseChan chan struct{},
 ) *ApiHandler {
-	snapshot := *cfg
-	snapshot.InterfaceName = slices.Clone(cfg.InterfaceName)
-	snapshot.PfcpRemoteNode = slices.Clone(cfg.PfcpRemoteNode)
-	snapshot.SxaRemoteNode = slices.Clone(cfg.SxaRemoteNode)
-	snapshot.SxbRemoteNode = slices.Clone(cfg.SxbRemoteNode)
-	snapshot.GtpPeer = slices.Clone(cfg.GtpPeer)
-	snapshot.ApiAllowedOrigins = slices.Clone(cfg.ApiAllowedOrigins)
-	snapshot.Qci2DscpMapping = maps.Clone(cfg.Qci2DscpMapping)
+	snapshot := cfg.Clone()
 	return &ApiHandler{
 		BpfObjects:             bpfObjects,
 		pfcpSrv:                pfcpSrv,
