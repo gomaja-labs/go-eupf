@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/cilium/ebpf/link"
@@ -36,20 +35,6 @@ var (
 	ErrNonePFCPConn      = errors.New("none PFCP connection")
 )
 
-func joinErrors(errs []error) error {
-	if len(errs) == 0 {
-		return nil
-	}
-
-	var messages []string
-
-	for _, err := range errs {
-		messages = append(messages, err.Error())
-	}
-
-	return errors.New(strings.Join(messages, "; "))
-}
-
 func UpdateLogLevel(logLevel string) error {
 	if err := SetLoggerLevel(logLevel); err != nil {
 		return fmt.Errorf("logger configuring error: %s. Using '%s' level",
@@ -74,66 +59,61 @@ func BindDataPlaneInterfaces(
 		return ErrNilBPFObj
 	}
 
-	var errList []error
-	oldLinks := *links
-	newLinks := make([]link.Link, 0)
-	existingLinksMap := make(map[link.ID]struct{})
-
-	for _, l := range oldLinks {
+	if links == nil {
+		return ErrNilInterface
+	}
+	desired := make(map[uint32]bool)
+	for _, name := range interfaceNames {
+		iface, err := net.InterfaceByName(name)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrLookupIface, name, err)
+		}
+		desired[uint32(iface.Index)] = true
+	}
+	existing := make(map[uint32]link.Link)
+	for _, l := range *links {
 		info, err := l.Info()
 		if err != nil {
-			log.Error().Msgf("Could not get link info: %s", err)
-			continue
+			return fmt.Errorf("inspect XDP link: %w", err)
 		}
-		existingLinksMap[info.ID] = struct{}{}
+		if info.XDP() == nil {
+			return fmt.Errorf("expected an XDP link")
+		}
+		existing[info.XDP().Ifindex] = l
 	}
-
-	for _, ifaceName := range interfaceNames {
-		iface, err := net.InterfaceByName(ifaceName)
+	var added []link.Link
+	for index := range desired {
+		if _, ok := existing[index]; ok {
+			continue
+		}
+		l, err := link.AttachXDP(link.XDPOptions{Program: bpfObjects.UpfIpEntrypointFunc, Interface: int(index), Flags: StringToXDPAttachMode(xdpAttachMode)})
 		if err != nil {
-			log.Error().Msgf("Lookup network iface %q: %s", ifaceName, err)
-			errList = append(errList, fmt.Errorf("%w: %q", ErrLookupIface, ifaceName))
-			continue
-		}
-
-		if _, exists := existingLinksMap[link.ID(iface.Index)]; exists {
-			continue
-		}
-
-		l, err := link.AttachXDP(link.XDPOptions{
-			Program:   bpfObjects.UpfIpEntrypointFunc,
-			Interface: iface.Index,
-			Flags:     StringToXDPAttachMode(xdpAttachMode),
-		})
-		if err != nil {
-			log.Error().Msgf("Could not attach XDP program to %q: %s", ifaceName, err.Error())
-			errList = append(errList, fmt.Errorf("%w: %s", ErrAttachXDP, err))
-			continue
-		}
-
-		newLinks = append(newLinks, l)
-		log.Info().Msgf("Attached XDP program to iface %q (index %d)", iface.Name, iface.Index)
-	}
-
-	for _, l := range oldLinks {
-		info, err := l.Info()
-		if err != nil {
-			log.Error().Msgf("Could not get link info for closing: %s", err)
-			continue
-		}
-
-		if _, exists := existingLinksMap[info.ID]; !exists {
-			if err := l.Close(); err != nil {
-				log.Error().Msgf("Could not close old link %v: %s", info.ID, err)
-				errList = append(errList, fmt.Errorf("%w: %s", ErrCloseOldLink, err))
-			} else {
-				log.Info().Msgf("Closed old link %v", info.ID)
+			var failures []error
+			failures = append(failures, fmt.Errorf("%w: %w", ErrAttachXDP, err))
+			for _, newLink := range added {
+				if err := newLink.Close(); err != nil {
+					*links = append(*links, newLink)
+					failures = append(failures, err)
+				}
 			}
+			return errors.Join(failures...)
+		}
+		added = append(added, l)
+	}
+	kept := added
+	var failures []error
+	for index, l := range existing {
+		if desired[index] {
+			kept = append(kept, l)
+			continue
+		}
+		if err := l.Close(); err != nil {
+			kept = append(kept, l)
+			failures = append(failures, fmt.Errorf("%w: %w", ErrCloseOldLink, err))
 		}
 	}
-
-	*links = newLinks
-	return joinErrors(errList)
+	*links = kept
+	return errors.Join(failures...)
 }
 
 func UpdateDataPlaneAddresses(
@@ -220,7 +200,7 @@ func UpdateAssociationSetupTimeout(
 	associationSetupTimeout uint32,
 ) {
 	for _, connection := range pfcpSrv {
-		connection.AssociationSetupTicker = time.NewTicker(time.Duration(associationSetupTimeout) * time.Second)
+		connection.AssociationSetupTicker.Reset(time.Duration(associationSetupTimeout) * time.Second)
 	}
 }
 
