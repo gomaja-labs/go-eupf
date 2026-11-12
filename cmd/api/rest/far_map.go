@@ -72,7 +72,6 @@ func (h *ApiHandler) getFarValue(c *gin.Context) {
 //	@Failure 405 {object} map[string]string
 //	@Failure 400 {object} map[string]string
 //	@Failure 500 {object} map[string]string
-//	@Router /far_map/{id} [put]
 func (h *ApiHandler) setFarValue(c *gin.Context) {
 	c.Header("Allow", "GET")
 	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "forwarding rules are managed through PFCP"})

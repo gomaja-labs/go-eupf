@@ -49,7 +49,6 @@ func (h *ApiHandler) getUplinkPdrValue(c *gin.Context) {
 // @Failure 405 {object} map[string]string
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
-// @Router /uplink_pdr_map/{id} [put]
 func (h *ApiHandler) setUplinkPdrValue(c *gin.Context) {
 	c.Header("Allow", "GET")
 	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "forwarding rules are managed through PFCP"})
@@ -90,7 +89,6 @@ func (h *ApiHandler) getDownlinkPdrValue(c *gin.Context) {
 // @Failure 405 {object} map[string]string
 // @Failure 400 {object} map[string]string
 // @Failure 500 {object} map[string]string
-// @Router /downlink_pdr_map/{id} [put]
 func (h *ApiHandler) setDownlinkPdrValue(c *gin.Context) {
 	c.Header("Allow", "GET")
 	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "forwarding rules are managed through PFCP"})
