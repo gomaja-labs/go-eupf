@@ -45,7 +45,7 @@ services:
   eupf-cli:
     build:
       context: ../../../
-      dockerfile: Dockerfile.cli
+      target: cli
     volumes:
       - ./backups:/var/lib/eupf/backups
     networks:
