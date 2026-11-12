@@ -499,7 +499,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 
 	fteid3 := ie.NewFTEID(1, 10, net.ParseIP("127.0.0.2"), nil, 1)
 	createPDR3 := ie.NewCreatePDR(
-		ie.NewPDRID(2),
+		ie.NewPDRID(3),
 		ie.NewPDI(
 			ie.NewSourceInterface(ie.SrcInterfaceCore),
 			fteid3,

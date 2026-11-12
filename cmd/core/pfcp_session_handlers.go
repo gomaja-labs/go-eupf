@@ -205,13 +205,11 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 
 	// This IE shall be present if the CP function decides to change its F-SEID for the PFCP session. The UP function
 	// shall use the new CP F-SEID for subsequent PFCP Session related messages for this PFCP Session
+	newRemoteSEID := session.RemoteSEID
 	if req.CPFSEID != nil {
 		remoteSEID, err := req.CPFSEID.FSEID()
 		if err == nil {
-			session.RemoteSEID = remoteSEID.SEID
-
-			association.Sessions[req.SEID()] = session // FIXME
-			conn.NodeAssociations[addr] = association  // FIXME
+			newRemoteSEID = remoteSEID.SEID
 		}
 	}
 
@@ -237,6 +235,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
+	// TS 29.244 V20.1.0 clause 6.3.3.3: rejected requests discard every
+	// context update, including the CP F-SEID used for subsequent messages.
+	session.RemoteSEID = newRemoteSEID
 	association.Sessions[req.SEID()] = session
 
 	additionalIEs := []*ie.IE{
@@ -664,6 +665,9 @@ func processEstablishmentRequestRules(
 	session *Session,
 	createdPDRs *[]SPDRInfo,
 ) error {
+	if err := validateSessionRuleIDs(session, req.CreatePDR, req.CreateFAR, req.CreateQER, req.CreateURR); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
@@ -831,6 +835,11 @@ func processModificationRequestRules(
 	removedURRs *[]*ie.IE,
 	session *Session,
 ) error {
+	if err := validateSessionRuleIDs(session, req.CreatePDR, req.UpdatePDR, req.RemovePDR,
+		req.CreateFAR, req.UpdateFAR, req.RemoveFAR, req.CreateQER, req.UpdateQER, req.RemoveQER,
+		req.CreateURR, req.UpdateURR, req.RemoveURR); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
