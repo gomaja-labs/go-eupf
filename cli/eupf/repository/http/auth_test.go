@@ -2,10 +2,11 @@ package http
 
 import (
 	"context"
-	"github.com/gomaja-labs/go-eupf/cli/config"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gomaja-labs/go-eupf/cli/config"
 )
 
 func TestRepositorySendsBearerToken(t *testing.T) {

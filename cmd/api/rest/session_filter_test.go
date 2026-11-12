@@ -2,11 +2,12 @@ package rest
 
 import (
 	"encoding/json"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestInvalidSessionFilterReturnsSingleJSONResponse(t *testing.T) {

@@ -11,7 +11,8 @@ import (
 
 func TestLoggerCallerDuringLogging(t *testing.T) {
 	oldBase, oldLogger := baseLogger, log.Logger
-	defer func() { baseLogger, log.Logger = oldBase, oldLogger }()
+	oldCaller := logCaller.Load()
+	defer func() { baseLogger, log.Logger = oldBase, oldLogger; logCaller.Store(oldCaller) }()
 	baseLogger = zerolog.New(io.Discard)
 	log.Logger = baseLogger
 	start := make(chan struct{})

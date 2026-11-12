@@ -33,6 +33,21 @@ func TestRemovingDataPlaneInterfaceClosesXDPLink(t *testing.T) {
 	links := []link.Link{l}
 	bpf := dataplane.NewBpfObjects()
 	bpf.UpfIpEntrypointFunc = prog
+	if err := BindDataPlaneInterfaces(bpf, &links, []string{iface.Name}, "generic"); err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0] != l {
+		t.Fatal("retained interface lost its existing link")
+	}
+	if err := BindDataPlaneInterfaces(bpf, &links, []string{"missing-test-interface"}, "generic"); err == nil {
+		t.Fatal("unknown interface accepted")
+	}
+	if len(links) != 1 {
+		t.Fatal("failed edit changed existing link ownership")
+	}
+	if _, err := l.Info(); err != nil {
+		t.Fatalf("failed edit closed the active link: %v", err)
+	}
 	if err := BindDataPlaneInterfaces(bpf, &links, nil, "generic"); err != nil {
 		t.Fatal(err)
 	}

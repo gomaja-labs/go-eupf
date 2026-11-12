@@ -3,9 +3,10 @@ package core
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/rs/zerolog"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 func TestCallerHookTracksRuntimeOption(t *testing.T) {

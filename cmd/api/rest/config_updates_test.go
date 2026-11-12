@@ -1,18 +1,21 @@
 package rest
 
 import (
-	"github.com/cilium/ebpf/link"
-	"github.com/gin-gonic/gin"
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/gin-gonic/gin"
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/rs/zerolog"
 )
 
 func TestConfigurationEditsDoNotMutateStartupConfig(t *testing.T) {
+ previousLevel:=zerolog.GlobalLevel();defer zerolog.SetGlobalLevel(previousLevel)
 	t.Chdir(t.TempDir())
 	startup := config.UpfConfig{LoggingLevel: "info", InterfaceName: []string{"original"}}
 	h := NewApiHandler(nil, nil, nil, &startup, nil, nil, nil)
