@@ -4,6 +4,15 @@ This deployment starts Open5gs 4G mobile core with UPF or eUPF.
 
 ## Prerequisites
 
+Generate local test TLS credentials with OpenSSL before the first start:
+
+```bash
+.deploy/docker/diameter/generate-certs.sh
+export UPF_API_TOKEN="$(openssl rand -hex 32)"
+```
+
+Keep the token in the environment for Compose and the CLI. The generated private keys and certificates are ignored by Git. Regeneration requires explicitly removing the existing credentials and restarting all Diameter peers together. The script discards the signing key after issuing these local certificates.
+
 Before starting services, ensure your host system has loaded required kernel modules:
 
 ```bash
