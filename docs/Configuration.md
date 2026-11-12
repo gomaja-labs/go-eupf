@@ -229,3 +229,12 @@ Use `[]` to remove all interfaces, GTP peers or PFCP remote nodes. Use `false`
 to disable `logging_caller`, and an explicit `heartbeat_timeout: 0` to disable
 heartbeat probing. Omitting those fields does not disable them. The CLI sends
 complete sections, including empty lists and explicit zero values.
+
+The advertised N3, 5G N3 and N9 addresses (`n3_adv_address`,
+`n3_adv_address_5g`, `n9_adv_address`) each remember whether a nonempty value
+was supplied in the startup file, flag or environment. Unset or empty values
+derive from `n3_address` / `n9_address`, and follow subsequent interface address
+edits. Explicit values stay fixed, even when they initially equal the interface
+address. Sxa S1-U/S5S8 and Sxb PA addresses are independent and stay fixed.
+Derived advertised values are not written into the file by interface edits, so
+restarting with the same startup sources derives the same addresses.

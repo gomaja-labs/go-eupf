@@ -166,7 +166,8 @@ func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, _, err := h.validatedEdit(config); err != nil {
+	next, _, err := h.validatedEdit(config)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -200,7 +201,7 @@ func (h *ApiHandler) editDataPlaneAddressesConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	err := core.UpdateDataPlaneAddresses(h.GetPFCPSrv(), h.GtpPathManager, n3Addr, n9Addr)
+	err = core.UpdateDataPlaneAddresses(h.GetPFCPSrv(), h.GtpPathManager, next)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 
@@ -472,6 +473,9 @@ func (h *ApiHandler) validatedEdit(data any) (*config.UpfConfig, map[string]inte
 	}
 	if err := decoder.Decode(cfgs); err != nil {
 		return nil, nil, fmt.Errorf("decode configuration edit: %w", err)
+	}
+	if _, changed := cfgs["n3_address"]; changed {
+		next.RefreshDerivedAdvertisedAddresses()
 	}
 	if err := next.Validate(); err != nil {
 		return nil, nil, err

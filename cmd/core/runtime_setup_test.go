@@ -25,17 +25,27 @@ func TestAssociationSetupUsesStartupTimeout(t *testing.T) {
 	}
 }
 
-func TestInterfaceEditPreservesAdvertisedAddresses(t *testing.T) {
+func TestInterfaceEditUsesCandidateAdvertisedAddresses(t *testing.T) {
+	old := config.Conf
+	t.Cleanup(func() { config.Conf = old })
 	conn := newProtocolConnection(t)
 	conn.UpdateN3Address(net.ParseIP("198.51.100.1"))
 	conn.UpdateN9Address(net.ParseIP("198.51.100.2"))
+	sxa, sxb := newProtocolConnection(t), newProtocolConnection(t)
+	sxa.UpdateN3Address(net.ParseIP("198.51.100.3"))
+	sxa.UpdateN9Address(net.ParseIP("198.51.100.4"))
+	sxb.UpdateN3Address(net.ParseIP("198.51.100.5"))
 	manager := NewGtpPathManager("127.0.0.1:2152", time.Minute)
 	defer manager.Stop()
-	if err := UpdateDataPlaneAddresses(map[string]*PfcpConnection{"n4": conn}, manager, net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")); err != nil {
+	next := &config.UpfConfig{N3Address: "192.0.2.1", N9Address: "192.0.2.2", N3AdvertisedAddress: "192.0.2.1", N9AdvertisedAddress: "198.51.100.2"}
+	if err := UpdateDataPlaneAddresses(map[string]*PfcpConnection{N4PFCPKeyName: conn, SxaPFCPKeyName: sxa, SxbPFCPKeyName: sxb}, manager, next); err != nil {
 		t.Fatal(err)
 	}
-	if conn.GetN3Addr() != "198.51.100.1" || conn.GetN9Addr() != "198.51.100.2" {
-		t.Fatal("interface edit rewrote advertised addresses")
+	if conn.GetN3Addr() != "192.0.2.1" || conn.GetN9Addr() != "198.51.100.2" {
+		t.Fatal("interface edit did not follow the candidate advertised addresses")
+	}
+	if sxa.GetN3Addr() != "198.51.100.3" || sxa.GetN9Addr() != "198.51.100.4" || sxb.GetN3Addr() != "198.51.100.5" {
+		t.Fatal("N3/N9 edit changed Sxa/Sxb advertised addresses")
 	}
 }
 func TestEndpointPersistenceFailurePreservesState(t *testing.T) {

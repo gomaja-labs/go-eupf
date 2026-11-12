@@ -141,10 +141,16 @@ type UpfConfig struct {
 	Ip6RaPrefix             string         `mapstructure:"ip6_ra_prefix" validate:"cidrv6" json:"ip6_ra_prefix"`
 
 	n3AdvertisedAddress5G net.IP
+	// Set at startup from the effective file, flag and environment sources.
+	n3AdvertisedExplicit   bool
+	n3Advertised5GExplicit bool
+	n9AdvertisedExplicit   bool
 }
 
 // Clone returns a configuration with independent slices, maps and parsed IPs.
 func (c *UpfConfig) Clone() UpfConfig {
+	configMu.Lock()
+	defer configMu.Unlock()
 	next := *c
 	next.InterfaceName = slices.Clone(c.InterfaceName)
 	next.PfcpPeerAllowList = slices.Clone(c.PfcpPeerAllowList)
@@ -359,8 +365,33 @@ func (c *UpfConfig) GetDscpMarkByQci(qci uint8) uint8 {
 	return uint8(dscp)
 }
 
+// GetN3AdvertisedAddress5G returns an independent runtime address snapshot.
 func (c *UpfConfig) GetN3AdvertisedAddress5G() net.IP {
-	return c.n3AdvertisedAddress5G
+	configMu.Lock()
+	defer configMu.Unlock()
+	return slices.Clone(c.n3AdvertisedAddress5G)
+}
+
+// SetRuntimeN3AdvertisedAddress5G publishes the address read by 5G session
+// handlers without changing the immutable exported startup configuration.
+func (c *UpfConfig) SetRuntimeN3AdvertisedAddress5G(address net.IP) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	c.n3AdvertisedAddress5G = slices.Clone(address)
+}
+
+// RefreshDerivedAdvertisedAddresses follows N3/N9 edits only for addresses
+// which were not explicitly configured at startup.
+func (c *UpfConfig) RefreshDerivedAdvertisedAddresses() {
+	if !c.n3AdvertisedExplicit {
+		c.N3AdvertisedAddress = c.N3Address
+	}
+	if !c.n3Advertised5GExplicit {
+		c.N3AdvertisedAddress5G = c.N3Address
+	}
+	if !c.n9AdvertisedExplicit {
+		c.N9AdvertisedAddress = c.N9Address
+	}
 }
 
 func (c *UpfConfig) Validate() error {
@@ -442,7 +473,7 @@ func (c *UpfConfig) Validate() error {
 	if n3AdvertisedAddress5G == nil {
 		return fmt.Errorf("failed to parse N3 IP address for 5G: %s", c.N3AdvertisedAddress5G)
 	}
-	c.n3AdvertisedAddress5G = n3AdvertisedAddress5G
+	c.SetRuntimeN3AdvertisedAddress5G(n3AdvertisedAddress5G)
 
 	return nil
 }
@@ -454,8 +485,19 @@ func (c *UpfConfig) Unmarshal() error {
 	if err := commonConfigV.UnmarshalExact(c); err != nil {
 		return err
 	}
-
+	c.n3AdvertisedExplicit = explicitAddress("n3_adv_address", "n3advaddr", c.N3AdvertisedAddress)
+	c.n3Advertised5GExplicit = explicitAddress("n3_adv_address_5g", "n3advaddr5g", c.N3AdvertisedAddress5G)
+	c.n9AdvertisedExplicit = explicitAddress("n9_adv_address", "n9advaddr", c.N9AdvertisedAddress)
+	c.RefreshDerivedAdvertisedAddresses()
 	return nil
+}
+
+func explicitAddress(key, flag, value string) bool {
+	if value == "" {
+		return false
+	}
+	f := pflag.Lookup(flag)
+	return commonConfigV.InConfig(key) || (f != nil && f.Changed) || os.Getenv("UPF_"+strings.ToUpper(key)) != ""
 }
 
 func validateSdfFilter(fl validator.FieldLevel) bool {

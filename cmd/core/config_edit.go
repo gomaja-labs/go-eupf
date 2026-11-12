@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf/link"
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/rs/zerolog/log"
 
@@ -116,21 +117,24 @@ func BindDataPlaneInterfaces(
 	return errors.Join(failures...)
 }
 
+// UpdateDataPlaneAddresses publishes a validated candidate's interface and
+// advertised addresses. Sxa S1-U/S5S8 and Sxb PA addresses remain independent.
 func UpdateDataPlaneAddresses(
-	_ map[string]*PfcpConnection,
+	pfcpSrv map[string]*PfcpConnection,
 	gtpPathManager *GtpPathManager,
-	n3Addr net.IP,
-	_ net.IP,
+	next *config.UpfConfig,
 ) error {
 	if gtpPathManager == nil {
 		return ErrNilGtpPathManager
 	}
-
-	gtpPathManager.UpdateLocalAddress(n3Addr.String() + GTPPortStr)
-
-	// Interface addresses do not change the separately configured advertised
-	// N4, Sxa or Sxb F-TEID addresses (which may be behind NAT).
-
+	gtpPathManager.UpdateLocalAddress(next.N3Address + GTPPortStr)
+	// TS 29.244 V20.1.0 clause 5.5.3: new UP-allocated F-TEIDs use
+	// the advertised address selected for the interface.
+	if n4 := pfcpSrv[N4PFCPKeyName]; n4 != nil {
+		n4.UpdateN3Address(net.ParseIP(next.N3AdvertisedAddress))
+		n4.UpdateN9Address(net.ParseIP(next.N9AdvertisedAddress))
+	}
+	config.Conf.SetRuntimeN3AdvertisedAddress5G(next.GetN3AdvertisedAddress5G())
 	return nil
 }
 
