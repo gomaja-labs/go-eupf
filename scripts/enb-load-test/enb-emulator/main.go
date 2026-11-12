@@ -22,7 +22,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to listen on UDP port %s: %v", gtpUPort, err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("failed to close UDP socket: %v", err)
+		}
+	}()
 
 	log.Printf("GTP-U Echo Server is listening on UDP port %s...\n", gtpUPort)
 
