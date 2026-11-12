@@ -39,7 +39,7 @@ func NewNodeAssociation(remoteNodeID string, addr string) *NodeAssociation {
 		NextSessionID:    1,
 		NextSequenceID:   1,
 		Sessions:         make(map[uint64]*Session),
-		HeartbeatChannel: make(chan uint32),
+		HeartbeatChannel: make(chan uint32, 1),
 		ctx:              ctx,
 		ctxCancel:        cancel,
 		// AssociationStart: time.Now(),
@@ -106,7 +106,12 @@ func (association *NodeAssociation) ScheduleHeartbeat(conn *PfcpConnection) {
 }
 
 func (association *NodeAssociation) HandleHeartbeat(sequence uint32) {
-	association.HeartbeatChannel <- sequence
+	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: a late or duplicate
+	// response must never stall dispatch while the heartbeat task is idle.
+	select {
+	case association.HeartbeatChannel <- sequence:
+	default:
+	}
 }
 
 func (association *NodeAssociation) Close() {
