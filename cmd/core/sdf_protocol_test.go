@@ -36,3 +36,15 @@ func TestSDFValidGrammarNeverBecomesAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestSDFIPv6MappedLiteralKeepsIPv6Mask(t *testing.T) {
+	for _, address := range []string{"::ffff:192.0.2.10/128", "::ffff:192.0.2.10/120"} {
+		filter, err := ParseSdfFilter("permit out ip from " + address + " to any")
+		if err != nil {
+			t.Fatalf("valid IPv6 SDF became absent: %s: %v", address, err)
+		}
+		if filter.SrcAddress.Type != 2 || len(filter.SrcAddress.Ip) != 16 {
+			t.Fatalf("IPv6 literal changed family: %+v", filter.SrcAddress)
+		}
+	}
+}

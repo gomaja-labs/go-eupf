@@ -114,6 +114,7 @@ int walk_ipv6_headers(struct xdp_md *xdp, __u32 ip_offset, struct ipv6_metadata 
         } else if (next==IPPROTO_AH) {
             length=((__u32)header[1]+2)*4;
         } else {
+            // RFC 8200 sections 4.3/4.4/4.6; section 4.8 Errata 5256.
             length=((__u32)header[1]+1)*8;
         }
         if (length<8 || cursor+length>end || cursor+length>ip_end) return -2;
@@ -189,7 +190,7 @@ static __always_inline int parse_tcp(struct packet_context *ctx) {
 }
 
 // RFC 6733 section 4.3.1: SCTP has source/destination ports too.
-// Only the common 12-byte header is needed for classification.
+// RFC 9260 section 3.1: only the common 12-byte header is needed here.
 static __always_inline int parse_sctp(struct packet_context *ctx) {
     const __be16 *ports = (const void *)ctx->data;
     if (ctx->data + 12 > ctx->data_end ||

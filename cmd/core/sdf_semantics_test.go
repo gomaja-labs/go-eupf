@@ -43,7 +43,7 @@ func TestValidUnsupportedSDFFilterIsRejected(t *testing.T) {
 
 func FuzzSdfFlowDescription(f *testing.F) {
 	for _, seed := range []string{
-		"", "invalid", "permit out ip from any to assigned",
+		"", "invalid", "permit out ip from any to assigned", "permit out ip from ::ffff:192.0.2.10/128 to any",
 		"permit out 17 from 198.51.100.0/24 1000-2000 to assigned",
 		"permit in udp from assigned to 2001:db8::/64 53",
 		"permit out udp from 192.0.2.1/99 to any",
@@ -71,7 +71,7 @@ func FuzzSdfFlowDescription(f *testing.F) {
 				}
 			case 2:
 				_, bits := address.Mask.Size()
-				if address.Ip.To16() == nil || address.Ip.To4() != nil || bits != 128 {
+				if len(address.Ip) != 16 || bits != 128 {
 					t.Fatal("accepted an invalid IPv6 constraint")
 				}
 			default:

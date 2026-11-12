@@ -54,3 +54,15 @@ func TestPDRBucketCapacityAndOwnership(t *testing.T) {
 		}
 	}
 }
+
+func TestPDRSDFPortPresenceIsExplicit(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		entry, err := encodePDR(PdrInfo{SdfFilter: []SdfFilter{{Protocol: 47, PortsPresent: present}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (entry.SdfFilters[0].PortsPresent != 0) != present {
+			t.Fatalf("port presence=%t encoded %d", present, entry.SdfFilters[0].PortsPresent)
+		}
+	}
+}

@@ -291,6 +291,7 @@ func TestDatapathIPv6DownlinkUDPSdfSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := anyDatapathFilter(17)
+	f.PortsPresent = true
 	f.DstPortRange = PortRange{4321, 4321}
 	if err := b.PutDownlinkPdrIp6(ip, PdrInfo{FarId: 2, QerIDs: []uint32{1}, SdfFilter: []SdfFilter{f}}); err != nil {
 		t.Fatal(err)

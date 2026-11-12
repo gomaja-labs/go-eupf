@@ -577,7 +577,7 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 	for i, source := range info.SdfFilter {
 		target := &entry.SdfFilters[i]
 		target.Protocol = source.Protocol
-		if source.PortsPresent || source.SrcPortRange != (PortRange{0, 65535}) || source.DstPortRange != (PortRange{0, 65535}) {
+		if source.PortsPresent {
 			target.PortsPresent = 1
 		}
 		target.SrcAddr.Type = source.SrcAddress.Type

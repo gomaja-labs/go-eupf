@@ -34,6 +34,7 @@ func ipv6Extensions(t *testing.T, headers int, fragment uint16) []byte {
 func TestDatapathIPv6ExtensionClassification(t *testing.T) {
 	b := loadDatapath(t)
 	f := anyDatapathFilter(17)
+	f.PortsPresent = true
 	f.DstPortRange = PortRange{4321, 4321}
 	for _, uplink := range []bool{false, true} {
 		if uplink {
@@ -103,6 +104,7 @@ func TestDatapathIPv6ExtensionsAndFragments(t *testing.T) {
 					f.PortsPresent = true
 					f.DstPortRange = PortRange{4321, 4321}
 					if !matchingPort {
+						f.PortsPresent = true
 						f.DstPortRange = PortRange{4322, 4322}
 					}
 					key := net.ParseIP("2001:db8::2")

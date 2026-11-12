@@ -213,7 +213,7 @@ func ParseProtocol(protocol string) (uint16, error) {
 func ParseCidrIp(ipStr, maskStr string) (ebpf.IpWMask, error) {
 	var ipType uint8
 	if ip := net.ParseIP(ipStr); ip != nil {
-		if ip.To4() != nil {
+		if !strings.Contains(ipStr, ":") {
 			ipType = 1
 			ip = ip.To4()
 		} else {
@@ -226,7 +226,9 @@ func ParseCidrIp(ipStr, maskStr string) (ebpf.IpWMask, error) {
 					return ebpf.IpWMask{}, fmt.Errorf("IP mask is out of range")
 				}
 				mask = net.CIDRMask(int(maskUint), 8*len(ip))
-				ip = ip.Mask(mask)
+				for i := range ip {
+					ip[i] &= mask[i]
+				}
 			} else {
 				return ebpf.IpWMask{}, fmt.Errorf("bad IP mask formatting")
 			}

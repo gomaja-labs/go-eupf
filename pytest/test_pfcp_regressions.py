@@ -346,3 +346,15 @@ def test_ignored_sdf_metric_counts_each_filter(peer):
         assert response[pfcp.IE_Cause].cause == 1
         assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
     assert count() - before == 3
+
+
+def test_ipv6_mapped_sdf_is_not_ignored(peer):
+    # RFC 6733 section 4.3.1: an IPv6 literal retains its 128-bit mask.
+    response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(
+        FD=1, flow_description=b"permit out ip from ::ffff:192.0.2.10/128 to any"))])
+    assert response[pfcp.IE_Cause].cause == 1
+    with urllib.request.urlopen("http://127.0.0.1:19090/metrics", timeout=2) as metrics:
+        counters = [line for line in metrics.read().decode().splitlines()
+                    if line.startswith("upf_ignored_sdf_filters_total ")]
+    assert counters == ["upf_ignored_sdf_filters_total 0"]
+    assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1

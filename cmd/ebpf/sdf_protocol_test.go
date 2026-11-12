@@ -54,6 +54,7 @@ func TestDatapathSCTPPorts(t *testing.T) {
 	inner := serializeDatapath(t, &layers.IPv4{Version: 4, TTL: 64, Protocol: 132, SrcIP: net.IP{198, 51, 100, 1}, DstIP: net.IP{198, 51, 100, 2}}, gopacket.Payload(payload))
 	for _, port := range []uint16{4321, 4322} {
 		f := anyDatapathFilter(132)
+		f.PortsPresent = true
 		f.DstPortRange = PortRange{port, port}
 		if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, Precedence: 10, FarId: 2, SdfFilter: []SdfFilter{f}}); err != nil {
 			t.Fatal(err)
