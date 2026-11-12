@@ -13,7 +13,7 @@ import (
 )
 
 func TestFailedUsageReportIsIncludedInNextReport(t *testing.T) {
-	for _, outcome := range []string{"rejected", "timeout", "accepted"} {
+	for _, outcome := range []string{"rejected", "timeout", "accepted", "changed CP F-SEID"} {
 		t.Run(outcome, func(t *testing.T) {
 			conn := newProtocolConnection(t)
 			maps := &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20, DownlinkVolume: 3}}
@@ -28,11 +28,19 @@ func TestFailedUsageReportIsIncludedInNextReport(t *testing.T) {
 			conn.requestTimeout = time.Millisecond
 			conn.SendReports()
 			first := identityRead(t, cp).(*message.SessionReportRequest)
+			if outcome == "changed CP F-SEID" {
+				conn.Handle(protocolWire(t, message.NewSessionModificationRequest(11, 800,
+					ie.NewFSEID(88, net.ParseIP("127.0.0.25"), nil))), cp.LocalAddr().(*net.UDPAddr))
+				if cause := pipelineCause(t, identityRead(t, cp)); cause != ie.CauseRequestAccepted {
+					t.Fatal("CP F-SEID update rejected")
+				}
+				session = assoc.Sessions[11]
+			}
 			if outcome == "timeout" {
 				conn.serviceTransactions(time.Now().Add(time.Second))
 			} else {
 				cause := ie.CauseRequestAccepted
-				if outcome == "rejected" {
+				if outcome == "rejected" || outcome == "changed CP F-SEID" {
 					cause = ie.CauseSystemFailure
 				}
 				conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, first.Sequence(), ie.NewCause(cause))), cp.LocalAddr().(*net.UDPAddr))

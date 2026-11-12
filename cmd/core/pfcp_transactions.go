@@ -283,10 +283,11 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 		case message.MsgTypeHeartbeatRequest:
 			conn.finishProbeLocked(req)
 		case message.MsgTypeSessionReportRequest:
-			// Bind completion to the original UP session, even when the CP
-			// reuses its SEID after deletion (TS 29.244 V20.1.0 clause 6.3.5).
+			// Bind completion to the original UP session. Its CP F-SEID can
+			// change while delivery is pending (TS 29.244 V20.1.0 clauses
+			// 6.3.3.3 and 6.3.5); that does not remove its URRs or usage debt.
 			session := assoc.Sessions[req.localSEID]
-			if session == nil || session.RemoteSEID != req.remoteSEID {
+			if session == nil {
 				if failedReport {
 					recordUndeliveredUsage(req, "session removed or replaced")
 				}
