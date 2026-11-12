@@ -5,6 +5,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 
@@ -15,6 +16,11 @@ type ResourceManager struct {
 	IPAM   *IPAM
 	FTEIDM *FTEIDM
 }
+
+// MaxResourcePoolSize bounds each eagerly materialized resource pool to one
+// million entries. IPv4 pools exclude their network address. IPv6 allocation
+// requires a prefix allocator and is not supported by this address allocator.
+const MaxResourcePoolSize = 1 << 20
 
 type FTEIDM struct {
 	freeTEIDs []uint32
@@ -29,6 +35,24 @@ type IPAM struct {
 }
 
 func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, error) {
+	// Validate cardinality before enumerating. In particular uint32's maximum
+	// would wrap the TEID loop, and IPv6 /64 would enumerate 2^64 addresses.
+	if teidRange > MaxResourcePoolSize {
+		return nil, fmt.Errorf("fteid_pool %d exceeds limit %d", teidRange, MaxResourcePoolSize)
+	}
+	if ipRange != "" {
+		_, prefix, err := net.ParseCIDR(ipRange)
+		if err != nil {
+			return nil, fmt.Errorf("ueip_pool: %w", err)
+		}
+		ones, bits := prefix.Mask.Size()
+		if bits != 32 {
+			return nil, fmt.Errorf("ueip_pool supports IPv4 only")
+		}
+		if uint64(1)<<uint(32-ones)-1 > MaxResourcePoolSize {
+			return nil, fmt.Errorf("ueip_pool %s exceeds limit %d", ipRange, MaxResourcePoolSize)
+		}
+	}
 
 	var ipam IPAM
 	var fteidm FTEIDM
