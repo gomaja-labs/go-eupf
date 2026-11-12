@@ -108,6 +108,8 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err := spec.LoadAndAssign(&bpfObjects.IpEntrypointObjects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
 		return err
 	}
+	// Own freshly assigned handles even if subsequent initialization fails.
+	bpfObjects.ruleClosed = false
 	loaded := false
 	defer func() {
 		if !loaded {
@@ -138,7 +140,6 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err != nil {
 		return err
 	}
-	bpfObjects.ruleClosed = false
 	loaded = true
 	return nil
 }

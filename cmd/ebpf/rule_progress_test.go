@@ -145,3 +145,17 @@ func TestRuleTransactionPublishesIPv4DownlinkKey(t *testing.T) {
 		t.Fatalf("IPv4 key was not removed: %v", err)
 	}
 }
+
+func TestRuleSynchronizationRequiresLoadedMaps(t *testing.T) {
+	b := NewBpfObjects()
+	if err := b.SynchronizeRules(); err == nil {
+		t.Fatal("unloaded synchronization succeeded")
+	}
+	b = loadDatapath(t)
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SynchronizeRules(); err == nil {
+		t.Fatal("closed synchronization succeeded")
+	}
+}

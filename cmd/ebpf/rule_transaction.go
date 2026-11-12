@@ -407,4 +407,11 @@ func (b *BpfObjects) DetachRule(uint8, uint32) error {
 }
 
 func (tx *ruleTransaction) SynchronizeRules() error { return tx.synchronize() }
-func (b *BpfObjects) SynchronizeRules() error       { return b.grace.wait() }
+func (b *BpfObjects) SynchronizeRules() error {
+	b.ruleMutex.Lock()
+	defer b.ruleMutex.Unlock()
+	if b.ruleClosed || b.grace == nil {
+		return fmt.Errorf("rule maps are not loaded")
+	}
+	return b.grace.wait()
+}
