@@ -339,6 +339,11 @@ func startupConfigChanges(current, saved *domain.UpfConfig) []string {
 		"association_setup_timeout": true, "heartbeat_timeout": true,
 		"gtp_peer": true, "gtp_echo_interval": true,
 	}
+	// Enabling or disabling a listener has no runtime setter. Existing
+	// listeners can still move to another address through their section edit.
+	mutable["sxa_address"] = (current.SxaLocalAddress == "") == (saved.SxaLocalAddress == "")
+	mutable["sxb_address"] = (current.SxbLocalAddress == "") == (saved.SxbLocalAddress == "")
+
 	a, b := reflect.ValueOf(*current), reflect.ValueOf(*saved)
 	var keys []string
 	for i := 0; i < a.NumField(); i++ {
