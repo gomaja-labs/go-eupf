@@ -16,6 +16,9 @@ import (
 // Compile the production C helper and compare its output with arbitrary-
 // precision rational arithmetic, independent of the kernel's wall clock.
 func TestRateCostAgainstRationalModel(t *testing.T) {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("C compiler is unavailable in this test environment")
+	}
 	probe := filepath.Join(t.TempDir(), "rate-cost")
 	cc := exec.Command("cc", "-x", "c", "-I.", "-o", probe, "-")
 	cc.Stdin = strings.NewReader(`#include <stdint.h>

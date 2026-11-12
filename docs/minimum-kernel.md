@@ -7,7 +7,7 @@ host kernel alone does not validate the minimum.
 `scripts/ci/test-kernel.py` builds a small initramfs around an already-built,
 statically linked test binary, static BusyBox, iproute2 and the matching veth
 and dummy modules. It boots KVM with no external network interface and runs the
-packet and rule tests. Test processes create private network/mount namespaces.
+entire eBPF test suite, including fuzz seed corpora. Test processes create private network/mount namespaces.
 The script requires `qemu-system-x86_64`, `ip`, `ldd`, Python 3 and access to
 `/dev/kvm`; it never attaches XDP to a host interface.
 
@@ -40,8 +40,9 @@ A successful run prints `qemu_exit=0 test_exit=0`. `result.json` records the
 kernel, executable, modules, runtime libraries, initramfs and log hashes. Both
 the QEMU exit and the guest test exit must pass. `boot.log` retains verifier
 failures and the individual packet-test results. `--pattern` selects a narrower
-regression; the default includes the packet paths, transaction journal, grace
-ordering and old-packet/URR-reuse tests. This script is the reproducible KVM
+regression; the default selects every test and fuzz seed in `cmd/ebpf`.
+The rate-arithmetic comparison skips when the guest has no C compiler; that
+source-level comparison runs in the development image instead. This script is the reproducible KVM
 entry point; CI runner KVM access and the complete fresh-image job duration
 must be established before adding a hosted CI job.
 

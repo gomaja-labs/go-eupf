@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--busybox", type=pathlib.Path, required=True)
     parser.add_argument("--modules-dir", type=pathlib.Path)
     parser.add_argument("--output-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--pattern", default="TestDatapath|TestRule|TestFrozen|TestConcurrentOldPackets|TestRetainedURR|TestDetachedURR")
+    parser.add_argument("--pattern", default=".")
     parser.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()
     for path in (args.kernel, args.test_binary, args.busybox):
