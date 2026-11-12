@@ -134,6 +134,20 @@ func UpdateDataPlaneAddresses(
 	return nil
 }
 
+// samePFCPEndpoint compares bind addresses after normalising wildcard and
+// IPv4-mapped representations. A different port always needs a new socket.
+func samePFCPEndpoint(a, b *net.UDPAddr) bool {
+	if a.Port != b.Port {
+		return false
+	}
+	aWildcard := len(a.IP) == 0 || a.IP.IsUnspecified()
+	bWildcard := len(b.IP) == 0 || b.IP.IsUnspecified()
+	if aWildcard || bWildcard {
+		return aWildcard && bWildcard
+	}
+	return a.IP.Equal(b.IP) && a.Zone == b.Zone
+}
+
 func UpdatePFCPConnections(pfcpSrv map[string]*PfcpConnection, keyName, address, nodeID string, remoteNodes []string) error {
 	return UpdatePFCPConnectionsAndPersist(pfcpSrv, keyName, address, nodeID, remoteNodes, nil)
 }

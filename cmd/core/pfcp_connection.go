@@ -200,7 +200,7 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 	}
 
 	var replacement *net.UDPConn
-	if connection.socket().LocalAddr().String() != udpAddr.String() {
+	if !samePFCPEndpoint(connection.socket().LocalAddr().(*net.UDPAddr), udpAddr) {
 		replacement, err = net.ListenUDP("udp", udpAddr)
 		if err != nil {
 			return fmt.Errorf("listen updated PFCP endpoint: %w", err)
