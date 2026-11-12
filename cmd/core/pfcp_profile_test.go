@@ -408,3 +408,41 @@ func TestHuaweiProfileSessionReportReleaseVendorIEEmptyPdrList(t *testing.T) {
 		t.Errorf("expected type 32799, got %d", vendorIE.Type)
 	}
 }
+
+func TestProfileQFIExtensions(t *testing.T) {
+	tests := []struct {
+		name                 string
+		children             []*ie.IE
+		update               bool
+		standard, vendor     uint8
+		standardOK, vendorOK bool
+	}{
+		{"vendor", []*ie.IE{ie.NewVendorSpecificIE(32785, 2011, []byte{5})}, false, 0, 5, false, true},
+		{"empty-vendor", []*ie.IE{ie.NewVendorSpecificIE(32785, 2011, nil)}, false, 0, 0, false, false},
+		{"other-enterprise", []*ie.IE{ie.NewVendorSpecificIE(32785, 2012, []byte{5})}, false, 0, 0, false, false},
+		{"standard-first", []*ie.IE{ie.NewQFI(7), ie.NewQFI(9), ie.NewVendorSpecificIE(32785, 2011, []byte{5})}, false, 7, 7, true, true},
+		{"vendor-first", []*ie.IE{ie.NewVendorSpecificIE(32785, 2011, []byte{5}), ie.NewVendorSpecificIE(32785, 2011, []byte{9})}, false, 0, 5, false, true},
+		{"null-standard-update", []*ie.IE{ie.New(ie.QFI, nil), ie.NewVendorSpecificIE(32785, 2011, []byte{5})}, true, 0, 0, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			group := ie.NewCreateQER(tt.children...)
+			if tt.update {
+				group = ie.NewUpdateQER(tt.children...)
+			}
+			wire, err := group.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := ie.Parse(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			standard, standardOK := (DefaultProfile{}).ParseQFI(decoded)
+			vendor, vendorOK := testHuaweiProfile.ParseQFI(decoded)
+			if standard != tt.standard || standardOK != tt.standardOK || vendor != tt.vendor || vendorOK != tt.vendorOK {
+				t.Fatalf("standard=(%d,%t), vendor=(%d,%t)", standard, standardOK, vendor, vendorOK)
+			}
+		})
+	}
+}

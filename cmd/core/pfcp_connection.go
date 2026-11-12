@@ -79,6 +79,9 @@ func NewPfcpConnection(
 	sdfNotifyC <-chan ebpf.SdfFlowNotification,
 	profile PfcpProfile,
 ) (*PfcpConnection, error) {
+	if err := validateLocalNodeID(profile, nodeId); err != nil {
+		return nil, err
+	}
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log.Warn().Msgf("Can't resolve UDP address: %s", err.Error())
@@ -147,6 +150,9 @@ func (connection *PfcpConnection) Update(
 	pfcpAddress string,
 	pfcpNodeId string,
 ) error {
+	if err := validateLocalNodeID(connection.profile, pfcpNodeId); err != nil {
+		return err
+	}
 	udpAddr, err := net.ResolveUDPAddr("udp", pfcpAddress)
 	if err != nil {
 		log.Warn().Msgf("Can't resolve UDP address: %s", err.Error())

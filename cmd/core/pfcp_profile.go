@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
@@ -382,4 +383,17 @@ func (h HuaweiProfile) SessionReportReleaseVendorIE(pdrList []uint16) *ie.IE {
 	// 	CHOICE
 	// 	pdr-id --- 0x5(5)
 	return ie.NewVendorSpecificGroupedIE(32799, 2011, pdrListIE...)
+}
+
+// validateLocalNodeID rejects configuration that cannot identify this node in a response.
+// TS 29.244 V20.1.0 clause 8.2.38 and Tables 7.4.4.2/4/6-1.
+func validateLocalNodeID(profile PfcpProfile, nodeID string) error {
+	value := profile.NodeID(nodeID)
+	if value == nil {
+		return fmt.Errorf("local PFCP Node ID: %w", ie.ErrIENotFound)
+	}
+	if _, err := value.Marshal(); err != nil {
+		return fmt.Errorf("local PFCP Node ID: %w", err)
+	}
+	return nil
 }

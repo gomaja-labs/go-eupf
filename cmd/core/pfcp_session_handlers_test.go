@@ -30,7 +30,8 @@ func TestHeartbeat(t *testing.T) {
 		NodeAssociations: map[string]*NodeAssociation{
 			addr: NewNodeAssociation("test-node", ""),
 		},
-		profile:           DefaultProfile{},
+		profile: DefaultProfile{},
+		// TS 29.244 V20.1.0 clause 8.2.65: the response carries a valid entity start time.
 		RecoveryTimestamp: time.Now(),
 	}
 	hbReq := message.NewHeartbeatRequest(0,
@@ -193,7 +194,7 @@ func SendDefaulMappingPdrs(t *testing.T, pfcpConn *PfcpConnection, smfIP string)
 		),
 	)
 
-	// Request with TEID
+	// Request with TEID. TS 29.244 V20.1.0 clause 8.2.3 requires the IPv4 family bit.
 	seReqPre2 := message.NewSessionEstablishmentRequest(3, 1,
 		ie.NewNodeIDFQDN("test"),
 		ie.NewFSEID(2, net.ParseIP(smfIP), nil),
@@ -481,7 +482,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	}
 	pfcpConn.ResourceManager = resourceManager
 
-	fteid1 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.1"), nil, 1) // 0x04 - CH true
+	fteid1 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.1"), nil, 1) // TS 29.244 V20.1.0 clause 8.2.3: CH and IPv4.
 	createPDR1 := ie.NewCreatePDR(
 		ie.NewPDRID(1),
 		ie.NewPDI(

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -587,5 +588,27 @@ func TestProtocolSessionEstablishmentRequirements(t *testing.T) {
 				t.Fatal("wrong rejection header or mutated association")
 			}
 		})
+	}
+}
+
+func TestProtocolLocalNodeIDValidation(t *testing.T) {
+	for _, node := range []string{"", "invalid..example", strings.Repeat("a", 64) + ".example"} {
+		t.Run(node, func(t *testing.T) {
+			conn, err := NewPfcpConnection("127.0.0.1:0", node, "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, nil, nil, nil, DefaultProfile{})
+			if conn != nil {
+				conn.Close()
+			}
+			var encode *ie.EncodeError
+			if conn != nil || !errors.As(err, &encode) {
+				t.Fatalf("invalid local identity accepted: connection=%v error=%v", conn != nil, err)
+			}
+		})
+	}
+	conn := newProtocolConnection(t)
+	originalID, originalSocket := conn.nodeId, conn.udpConn
+	err := conn.Update(conn.GetLocalAddr(), "")
+	var encode *ie.EncodeError
+	if !errors.As(err, &encode) || conn.nodeId != originalID || conn.udpConn != originalSocket {
+		t.Fatalf("invalid identity update changed the connection: %v", err)
 	}
 }
