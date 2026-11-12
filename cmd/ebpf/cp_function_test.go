@@ -25,6 +25,10 @@ func TestDatapathCPFunctionDownlinkTunnel(t *testing.T) {
 	if !ok || gtpu.TEID != 200 || len(gtpu.GTPExtensionHeaders) == 0 {
 		t.Fatal("CP packet lacks the assigned N3 tunnel/QFI")
 	}
+	extension := gtpu.GTPExtensionHeaders[0]
+	if extension.Type != 0x85 || len(extension.Content) < 2 || extension.Content[1]&0x3f != 9 {
+		t.Fatalf("wrong CP downlink QFI: %+v", extension)
+	}
 	var counters IpEntrypointUrrInfo
 	if err := b.UrrMap.Lookup(uint32(1), &counters); err != nil {
 		t.Fatal(err)

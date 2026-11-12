@@ -66,6 +66,11 @@ func TestDatapathIPv6ExtensionClassification(t *testing.T) {
 }
 
 func TestDatapathIPv6ExtensionsAndFragments(t *testing.T) {
+	longChain := make([]byte, 9*8)
+	for i := range 9 {
+		longChain[i*8] = 60
+	}
+	longChain[8*8] = 17
 	cases := []struct {
 		name    string
 		next    byte
@@ -83,6 +88,7 @@ func TestDatapathIPv6ExtensionsAndFragments(t *testing.T) {
 		{"offset_one_fragment", 44, []byte{17, 0, 0, 8, 0, 0, 0, 1}, true, true},
 		{"fragment_hides_next_header", 44, []byte{60, 0, 0, 16, 0, 0, 0, 1}, true, true},
 		{"invalid_extension_span", 60, []byte{17, 255, 0, 0, 0, 0, 0, 0}, true, false},
+		{"chain_beyond_bound", 60, longChain, true, false},
 	}
 	b := loadDatapath(t)
 	for _, c := range cases {

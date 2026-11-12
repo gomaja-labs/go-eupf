@@ -160,7 +160,7 @@ var protocolNames = sync.OnceValue(func() map[string]uint16 {
 	if err != nil {
 		return names
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line, _, _ := strings.Cut(scanner.Text(), "#")
@@ -197,7 +197,8 @@ func ParseProtocol(protocol string) (uint16, error) {
 		return number, nil
 	}
 	for i, c := range protocol {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '-' || c == '_')) {
+		allowed := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && (c >= '0' && c <= '9' || c == '-' || c == '_')
+		if !allowed {
 			return 0, fmt.Errorf("invalid SDF protocol name")
 		}
 	}
