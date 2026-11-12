@@ -25,7 +25,7 @@ func NewEupfHttpRepository(baseURL string, cfg *config.Config) (*EupfHttpReposit
 		SetBaseURL(baseURL).
 		SetAuthToken(cfg.ApiToken)
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // RFC 8996 section 3
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // RFC 8996 sections 4 and 5
 	if cfg.ApiCABundle != "" {
 		data, err := os.ReadFile(cfg.ApiCABundle)
 		if err != nil {

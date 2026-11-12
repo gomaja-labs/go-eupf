@@ -267,13 +267,15 @@ configured address, preventing a remote DNS name from rebinding to this API.
 Configure `api_tls_cert_file` and `api_tls_key_file` together to serve HTTPS directly.
 The files contain a PEM certificate chain and private key. Startup fails if either
 is missing or invalid. TLS 1.2 and later are supported; TLS 1.0 and 1.1 are disabled
-([RFC 8996 section 3](https://www.rfc-editor.org/rfc/rfc8996.html#section-3), updating RFC 6750).
+([RFC 8996 sections 4 and 5](https://www.rfc-editor.org/rfc/rfc8996.html#section-4), updating RFC 6750).
 TLS does not replace the required bearer token outside loopback. If using plain HTTP
 off loopback, provide equivalent transport security, such as a TLS proxy on an
 isolated local network; startup logs a warning. Bearer tokens require confidentiality
 in transit ([RFC 6750 section 5.3](https://www.rfc-editor.org/rfc/rfc6750.html#section-5.3)).
-The shared administration token is not an OAuth authorization server or grant flow;
-RFC 9700's grant-flow guidance does not add such flows to this API.
+End-to-end TLS is recommended by [RFC 9700 section 2.6](https://www.rfc-editor.org/rfc/rfc9700.html#section-2.6).
+If terminating TLS at a proxy, protect its backend connection and sanitize security
+headers as described in [section 4.13](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.13).
+The shared administration token is not an OAuth authorization server or grant flow.
 
 ```yaml
 api_address: 0.0.0.0:8080

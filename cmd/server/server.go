@@ -61,7 +61,7 @@ func serverResult(err error) error {
 }
 
 // NewTLS prepares the certificate before a listener is opened. RFC 6750 section
-// 5.3 requires bearer token confidentiality; RFC 8996 section 3 prohibits TLS 1.0/1.1.
+// 5.3 requires bearer token confidentiality; RFC 8996 sections 4 and 5 prohibits TLS 1.0/1.1.
 func NewTLS(addr string, handler http.Handler, certFile, keyFile string) (*Server, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
