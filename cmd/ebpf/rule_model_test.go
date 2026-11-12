@@ -277,3 +277,32 @@ func TestDatapathFifthSDFFilterIsSelectable(t *testing.T) {
 		t.Fatal("fifth SDF Filter did not match")
 	}
 }
+
+func TestDatapathUnfilteredSelectionKeepsConstraints(t *testing.T) {
+	b := loadDatapath(t)
+	packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
+	p := PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true}
+	for _, test := range []struct {
+		name   string
+		change func(*PdrInfo)
+		drop   bool
+	}{
+		{"unconstrained", func(*PdrInfo) {}, false},
+		{"source_interface", func(p *PdrInfo) { p.SourceInterfacePresent = true; p.SourceInterface = 1 }, true},
+		{"ue_address", func(p *PdrInfo) { p.UEIPv4 = net.IP{203, 0, 113, 1} }, true},
+		{"qfi", func(p *PdrInfo) { p.QFIs = []uint8{9} }, true},
+		{"sdf", func(p *PdrInfo) { p.SdfFilter = []SdfFilter{anyDatapathFilter(2)} }, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := p
+			test.change(&candidate)
+			if err := b.PutPdrUplink(10, candidate); err != nil {
+				t.Fatal(err)
+			}
+			action, _ := runDatapath(t, b, packet)
+			if (action == 1) != test.drop {
+				t.Fatalf("action=%d wantDrop=%v", action, test.drop)
+			}
+		})
+	}
+}

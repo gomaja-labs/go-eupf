@@ -190,16 +190,35 @@ static __noinline const struct pdr *select_pdr(struct packet_context *ctx,struct
     }
     return 0;
 }
+// A single unconstrained PDR needs no tuple construction or classifier call.
+// match_mode is encoded only when UE, QFI and SDF constraints are absent;
+// event notification still takes the complete tuple path. Source Interface
+// remains a predicate even on this path.
+static __always_inline const struct pdr *select_unfiltered_pdr(struct packet_context *ctx, struct pdr_info *session) {
+    if (session->count != 1) return 0;
+    struct pdr_entry *entry = &session->entries[0];
+    if (!entry->match_mode || entry->notify == 1) return 0;
+    if (entry->match_mode != 1 && entry->match_mode != ctx->source_interface + 2) return 0;
+    ctx->trace = entry->trace_flag;
+    ctx->nr_flag = entry->nr_flag;
+    ctx->return_pdr = &entry->return_pdr;
+    ctx->return_nr_flag = entry->return_nr_flag;
+    return &entry->pdr;
+}
 static __always_inline void pdi_ports(struct packet_context *ctx,struct pdi_packet *tuple) {
     if (ctx->udp) {tuple->source_port=bpf_ntohs(ctx->udp->source);tuple->destination_port=bpf_ntohs(ctx->udp->dest);}
     else if (ctx->tcp) {tuple->source_port=bpf_ntohs(ctx->tcp->source);tuple->destination_port=bpf_ntohs(ctx->tcp->dest);}
 }
 static __always_inline const struct pdr* check_sdf_filters_ipv4(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+    const struct pdr *unfiltered = select_unfiltered_pdr(ctx, session);
+    if (unfiltered) return unfiltered;
     struct pdi_packet packet={.source=ctx->ip4->saddr,.destination=ctx->ip4->daddr,.family=1,.protocol=ctx->ip4->protocol,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
     pdi_ports(ctx,&packet);
     return select_pdr(ctx,session,&packet,ref);
 }
 static __always_inline const struct pdr* check_sdf_filters_ipv6(struct packet_context *ctx,struct pdr_info *session,__u32 ref) {
+    const struct pdr *unfiltered = select_unfiltered_pdr(ctx, session);
+    if (unfiltered) return unfiltered;
     struct pdi_packet packet={.family=2,.protocol=ctx->ip6->nexthdr,.qfi=ctx->qfi,.qfi_present=ctx->qfi_present,.source_interface=ctx->source_interface};
     __builtin_memcpy(&packet.source,&ctx->ip6->saddr,16);__builtin_memcpy(&packet.destination,&ctx->ip6->daddr,16);
     pdi_ports(ctx,&packet);
@@ -207,6 +226,8 @@ static __always_inline const struct pdr* check_sdf_filters_ipv6(struct packet_co
 }
 
 static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_context *ctx, struct pdr_info *session, __u32 ref) {
+    const struct pdr *unfiltered = select_unfiltered_pdr(ctx, session);
+    if (unfiltered) return unfiltered;
     // Temporarily parse the inner tuple in the existing cursor. Keeping a
     // second full context on the BPF stack would exceed the 512-byte bound
     // when SDF matching calls its transport-specific subprogram.
