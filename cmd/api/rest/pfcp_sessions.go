@@ -96,6 +96,7 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 			}
 		} else {
 			c.IndentedJSON(http.StatusBadRequest, "Failed to parse IP")
+			return
 		}
 	}
 
@@ -108,6 +109,7 @@ func (h *ApiHandler) listPfcpSessionsFiltered(c *gin.Context) {
 			}
 		} else {
 			c.IndentedJSON(http.StatusBadRequest, "Failed to parse TEID")
+			return
 		}
 	}
 	c.IndentedJSON(http.StatusOK, sessions)
