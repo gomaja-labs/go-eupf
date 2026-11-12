@@ -34,6 +34,9 @@ Method | URL                    | Description                                   
 
 ### - Config
 
+See [address-edit derivation and persistence](advertised-addresses.md#rest-edits-and-restart-behaviour)
+and [data-plane restart requirements](dataplane-settings.md) before editing these sections.
+
 Method | URL                                  | Description                                                               | Example
 ------ | ------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------
 `GET`  | `/api/v1/config`                     | Displays the configuration. Returns an object of `UpfConfig`              | `/api/v1/config`

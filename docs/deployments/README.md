@@ -3,6 +3,10 @@ The eUPF can be integrated with different 5G Core implementations in different s
 
 eUPF outbound connections is pure routed at the node. There is no embedded NAT, so external NAT should be used if address translation is needed.
 
+See [advertised-address configuration](../advertised-addresses.md) for namespace
+or external-address deployments, and [deferred deployment requests](../roadmap.md)
+for the scope of the CNI, simulator and managed-cluster routing work.
+
 ## Docker-compose deployments
 
 | 5G Core | RAN | Options | Deployment description |

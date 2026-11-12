@@ -1,5 +1,9 @@
 # UPF Config
 
+See [advertised-address selection](advertised-addresses.md),
+[data-plane settings and restart requirements](dataplane-settings.md), and the
+[documentation index](README.md).
+
 ## Description
 
 Currently UPF have several config parameters shown below.

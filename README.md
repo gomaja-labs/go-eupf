@@ -78,6 +78,11 @@ sudo docker run -d --rm \
 
 Read **[eUPF configuration guide](./docs/Configuration.md)** for more info about how to configure eUPF.
 
+See [advertised user-plane addresses](docs/advertised-addresses.md),
+[data-plane settings and restart requirements](docs/dataplane-settings.md), and
+[deferred requests](docs/roadmap.md). The [documentation index](docs/README.md)
+lists the available guides.
+
 To go further, see the **[eUPF installation guide](./docs/install.md)** to learn how to run eUPF in different environments with different 5G core implementations using docker-compose or Kubernetes cluster.
 
 ## Deploy to Kubernetes
