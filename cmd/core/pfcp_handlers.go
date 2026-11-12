@@ -6,7 +6,6 @@ package core
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -24,18 +23,7 @@ type PfcpHandlerMap map[uint8]PfcpFunc
 
 func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *net.UDPAddr) error {
 	log.Debug().Msgf("Handling PFCP message from %s", addr)
-	// TS 29.244 V20.1.0 clauses 6.5, 7.2.1A, 8.2.25 and 8.2.58:
-	// both functions must advertise BUNDL before any bundled message is handled.
-	// Reject the entire unsupported/oversized bundle before decoding or replying.
-	if len(buf) > 0 && buf[0]>>5 == 1 && buf[0]&0x04 != 0 {
-		conn.stateMu.RLock()
-		assoc := conn.GetAssociation(addr.IP.String())
-		negotiated := assoc != nil && (&ie.IE{Type: ie.CPFunctionFeatures, Payload: assoc.CPFeatures}).HasBUNDL() && (&ie.IE{Type: ie.UPFunctionFeatures, Payload: conn.featuresOctets}).HasBUNDL()
-		conn.stateMu.RUnlock()
-		if !negotiated || !boundedBundle(buf) {
-			return nil
-		}
-	}
+	bundled := len(buf) > 0 && buf[0]>>5 == 1 && buf[0]&4 != 0
 
 	incoming, parseErr := message.ParseDatagram(buf)
 	var results []error
@@ -43,6 +31,9 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		log.Warn().Err(parseErr).Str("peer", addr.String()).Msg("Invalid PFCP datagram")
 		results = append(results, parseErr)
 		for _, failure := range datagramFailures(parseErr) {
+			if bundled && !conn.bundleHeaderNegotiated(failure.Header, addr.IP.String()) {
+				continue
+			}
 			if h := failure.Header; h != nil {
 				conn.failResponse(h.Type, h.Sequence(), addr, failure.Err)
 			}
@@ -72,6 +63,9 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		}
 	}
 	for _, incomingMsg := range incoming {
+		if bundled && !conn.bundleNegotiated(incomingMsg, addr.IP.String()) {
+			continue
+		}
 		invalidFrame := false
 		for _, failure := range datagramFailures(parseErr) {
 			if failure.Header != nil && failure.Header.Type == incomingMsg.MessageType() && failure.Header.Sequence() == incomingMsg.Sequence() && failure.Header.SEID == incomingMsg.SEID() {
@@ -158,33 +152,40 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		}
 	}
 
-	if handlerErr == nil && incomingMsg.IsRequest() {
-		switch incomingMsg.MessageType() {
-		case message.MsgTypeSessionEstablishmentRequest, message.MsgTypeSessionModificationRequest, message.MsgTypeSessionDeletionRequest:
-			if conn.associationForMessage(incomingMsg, addr.IP.String()) == nil {
-				handlerErr = errNoEstablishedAssociation
-				outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.responseSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoEstablishedPFCPAssociation, nil)
-			}
-		}
-	}
 	assoc := conn.associationForMessage(incomingMsg, addr.IP.String())
 	entity := conn.incomingEntity(incomingMsg, addr.IP.String())
-	// Heartbeat responses are deterministic from the immutable local timestamp.
-	// They must remain answerable even when the bounded response cache is full
-	// (clause 6.2.2.2), and unknown peers must not consume cache entries.
-	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && handlerErr == nil && assoc != nil
+	// Stateless Heartbeat and Release always bypass capacity (6.2.2.2,
+	// 6.2.8.3 NOTE). Replays are checked before session lookup: Deletion may
+	// already have removed its context. No new unassociated outcome is cached.
+	cacheable := incomingMsg.IsRequest() && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest && incomingMsg.MessageType() != message.MsgTypeAssociationReleaseRequest && handlerErr == nil
+	owner := ""
+	if assoc != nil {
+		owner = assoc.ID
+	}
+	if setup, ok := incomingMsg.(*message.AssociationSetupRequest); ok {
+		value, _ := setup.NodeID.NodeID()
+		owner = nodeIDText(value)
+	}
 	if cacheable {
-		wire, found, err := conn.cachedReply(key, digest)
+		wire, found, err := conn.cachedReply(key, digest, owner)
 		if found {
 			conn.stateMu.Unlock()
 			if err != nil {
 				return err
 			}
-
 			if wire == nil {
 				return nil
 			}
 			return conn.sendEncoded(wire, incomingMsg.MessageType()+1, addr, false)
+		}
+	}
+	if handlerErr == nil && incomingMsg.IsRequest() {
+		switch incomingMsg.MessageType() {
+		case message.MsgTypeSessionEstablishmentRequest, message.MsgTypeSessionModificationRequest, message.MsgTypeSessionDeletionRequest:
+			if assoc == nil {
+				handlerErr = errNoEstablishedAssociation
+				outgoing = conn.errorResponse(incomingMsg.MessageType()+1, conn.responseSEID(incomingMsg, addr.IP.String()), incomingMsg.Sequence(), ie.CauseNoEstablishedPFCPAssociation, nil)
+			}
 		}
 	}
 	if handlerErr == nil {
@@ -214,9 +215,17 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 			}
 		}
 	}
-	if cacheable && conn.associationForMessage(incomingMsg, addr.IP.String()) != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest && handlerErr == nil && conn.associationForMessage(incomingMsg, addr.IP.String()) != nil {
-		conn.cacheReply(key, digest, wire, entity)
+	if cacheable {
+		if current := conn.associationForMessage(incomingMsg, addr.IP.String()); current != nil {
+			conn.cacheReply(key, digest, wire, entity, current.ID)
+		}
 	}
+	if completed != nil && completed.typ == message.MsgTypeAssociationSetupRequest && handlerErr == nil {
+		if current := conn.associationForMessage(incomingMsg, addr.IP.String()); current != nil {
+			current.UPFeatures = append([]byte(nil), completed.upFeatures...)
+		}
+	}
+
 	conn.stateMu.Unlock()
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
 		conn.TraceMessage(buf, addr, true)
@@ -370,22 +379,19 @@ func HandlePfcpVersionNotSupportedResponse(_ *PfcpConnection, msg message.Messag
 	return nil, true, fmt.Errorf("PFCP peer %s rejected the protocol version (highest supported %d)", addr, msg.Version())
 }
 
-const maxBundleMessages = 16
-const maxBundleBytes = 8192
+// Negotiation belongs to this association's own Setup/Update exchange, including
+// UP-initiated Sxa/Sxb. A datagram bounds work; there is no extra count/size cap.
+// TS 29.244 V20.1.0 clause 6.5.
+func (conn *PfcpConnection) bundleNegotiated(msg message.Message, peer string) bool {
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	assoc := conn.associationForMessage(msg, peer)
+	return assoc != nil && (&ie.IE{Type: ie.CPFunctionFeatures, Payload: assoc.CPFeatures}).HasBUNDL() && (&ie.IE{Type: ie.UPFunctionFeatures, Payload: assoc.UPFeatures}).HasBUNDL()
+}
 
-func boundedBundle(buf []byte) bool {
-	if len(buf) > maxBundleBytes {
+func (conn *PfcpConnection) bundleHeaderNegotiated(h *message.Header, peer string) bool {
+	if h == nil || !h.HasSEID() {
 		return false
 	}
-	for count := 1; len(buf) > 0; count++ {
-		if count > maxBundleMessages || len(buf) < 4 {
-			return false
-		}
-		n := int(binary.BigEndian.Uint16(buf[2:4])) + 4
-		if n < 16 || n > len(buf) {
-			return false
-		}
-		buf = buf[n:]
-	}
-	return true
+	return conn.bundleNegotiated(message.NewGeneric(h.Type, h.SEID, h.Sequence()), peer)
 }

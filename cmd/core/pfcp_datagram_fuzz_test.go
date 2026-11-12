@@ -25,8 +25,8 @@ func FuzzPFCPDatagram(f *testing.F) {
 		f.Add(wire)
 	}
 	// TS 29.244 V20.1.0 clauses 6.5 and 7.2.1A: exercise framing only
-	// after both features have been negotiated, including the work bound.
-	for _, count := range []int{2, maxBundleMessages, maxBundleMessages + 1} {
+	// after both features have been negotiated, with work bounded by the UDP datagram.
+	for _, count := range []int{2, 32, 33} {
 		messages := make([]message.Message, count)
 		for i := range messages {
 			messages[i] = message.NewSessionDeletionRequest(1, uint32(i+1))
@@ -44,6 +44,7 @@ func FuzzPFCPDatagram(f *testing.F) {
 		conn := newProtocolConnection(t)
 		conn.NodeAssociations["127.0.0.1"] = NewNodeAssociation("synthetic.example", "127.0.0.1")
 		conn.GetAssociation("127.0.0.1").CPFeatures = []byte{0x10}
+		conn.GetAssociation("127.0.0.1").UPFeatures = append([]byte(nil), conn.featuresOctets...)
 		conn.Handle(wire, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9})
 	})
 }

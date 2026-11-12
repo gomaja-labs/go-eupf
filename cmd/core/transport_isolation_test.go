@@ -167,13 +167,13 @@ func TestResponseBudgetsAndMinimumReplayWindow(t *testing.T) {
 	conn.maxTransactions = 1
 	key := requestKey{peer: "127.0.0.1:8805", sequence: 1, typ: 5}
 	conn.cacheReply(key, [32]byte{1}, []byte{1})
-	created := conn.transport.responseExpiry[0].created
+	created := conn.transport.responseExpiry.Front().Value.(*responseIndex).created
 	next := requestKey{peer: "127.0.0.1:9999", sequence: 2, typ: 5}
 	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(minimumReplayWindow-time.Nanosecond)); err == nil {
 		t.Fatal("evicted within minimum replay window")
 	}
-	if _, _, err := conn.cachedReplyAt(requestKey{peer: "127.0.0.2:8805", sequence: 2, typ: 5}, [32]byte{2}, created); err != nil {
-		t.Fatal("peer budgets are shared")
+	if _, _, err := conn.cachedReplyAt(requestKey{peer: "127.0.0.2:8805", sequence: 2, typ: 5}, [32]byte{2}, created); err == nil {
+		t.Fatal("another association bypassed the protected global bound")
 	}
 	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(minimumReplayWindow)); err != nil {
 		t.Fatal(err)
@@ -191,12 +191,12 @@ func TestResponseIndexesFollowAssociationCleanup(t *testing.T) {
 		conn.transport.mu.Lock()
 		conn.expireResponsesLocked(time.Now())
 		conn.transport.mu.Unlock()
-		if len(conn.transport.responseExpiry) != 0 || len(conn.transport.responseBudgets) != 0 || conn.transport.bytes != 0 {
+		if conn.transport.responseExpiry.Len() != 0 || len(conn.transport.responseBudgets) != 0 || conn.transport.bytes != 0 {
 			t.Fatal("association cleanup leaked cache indexes")
 		}
 	}
 }
-func TestBundlingRequiresBothFeaturesAndBoundsWork(t *testing.T) {
+func TestBundlingRequiresAssociationFeatures(t *testing.T) {
 	for _, tc := range []struct {
 		name                                  string
 		associated, peerSupport, localSupport bool
@@ -205,7 +205,7 @@ func TestBundlingRequiresBothFeaturesAndBoundsWork(t *testing.T) {
 	}{
 		{"no_association", false, true, true, 2, 0}, {"no_peer_feature", true, false, true, 2, 0},
 		{"no_local_feature", true, true, false, 2, 0}, {"negotiated", true, true, true, 2, 2},
-		{"limit", true, true, true, 16, 16}, {"over_limit", true, true, true, 17, 0},
+		{"limit", true, true, true, 16, 16}, {"larger_bundle", true, true, true, 17, 17},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := newProtocolConnection(t)
@@ -217,7 +217,7 @@ func TestBundlingRequiresBothFeaturesAndBoundsWork(t *testing.T) {
 				}
 			}
 			if !tc.localSupport {
-				conn.featuresOctets[2] = 0
+				conn.GetAssociation("127.0.0.1").UPFeatures = nil
 			}
 			calls := 0
 			conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeSessionDeletionRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
@@ -250,23 +250,8 @@ func TestResponseIndexCompactionBoundsStaleMetadata(t *testing.T) {
 		conn.transport.mu.Lock()
 		conn.expireResponsesLocked(time.Now())
 		conn.transport.mu.Unlock()
-		if len(conn.transport.responseExpiry) > 2*len(conn.transport.responses)+64 {
+		if conn.transport.responseExpiry.Len() > 2*len(conn.transport.responses)+64 {
 			t.Fatal("deleted peers accumulated unbounded expiry metadata behind a live entry")
-		}
-	}
-}
-func TestBundleByteLimit(t *testing.T) {
-	for _, size := range []int{maxBundleBytes, maxBundleBytes + 1} {
-		first := message.NewSessionDeletionRequest(1, 1, ie.New(4000, make([]byte, size-36)))
-		wire, err := message.MarshalDatagram(first, message.NewSessionDeletionRequest(1, 2))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(wire) != size {
-			t.Fatalf("size=%d want=%d", len(wire), size)
-		}
-		if boundedBundle(wire) != (size <= maxBundleBytes) {
-			t.Fatalf("wrong bundle bound for %d bytes", size)
 		}
 	}
 }

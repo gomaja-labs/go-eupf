@@ -103,7 +103,7 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 	for peer, old := range conn.NodeAssociations {
 		if old.ID == id {
 			delete(conn.NodeAssociations, peer)
-			conn.forgetPeerExceptSetup(peer)
+			conn.forgetPeerExceptSetup(old.ID)
 		}
 	}
 	conn.NodeAssociations[id] = fresh
@@ -234,20 +234,24 @@ func (conn *PfcpConnection) forgetPeer(addr string) { conn.forgetPeerTransaction
 func (conn *PfcpConnection) forgetPeerExceptSetup(addr string) {
 	conn.forgetPeerTransactions(addr, true, "")
 }
-func (conn *PfcpConnection) forgetPeerTransactions(addr string, keepSetup bool, entity string) {
+func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, entity string) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for seq, request := range state.pending {
-		if request.peer.IP.String() == addr && (entity == "" || request.entity == entity) {
+		if request.associationID() == id && (entity == "" || request.entity == entity) {
 			state.deletePending(seq)
 		}
 	}
-	for key, entry := range state.responses {
-		host, _, _ := net.SplitHostPort(key.peer)
-		if host == addr && (!keepSetup || key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entry.entity == entity) {
-			state.bytes -= len(entry.wire)
-			delete(state.responses, key)
+	if budget := state.responseBudgets[id]; budget != nil {
+		for element := budget.entries.Front(); element != nil; {
+			next := element.Next()
+			e := element.Value.(*responseIndex)
+			entry := state.responses[e.key]
+			if (!keepSetup || e.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entry.entity == entity) {
+				state.removeResponse(e)
+			}
+			element = next
 		}
 	}
 }

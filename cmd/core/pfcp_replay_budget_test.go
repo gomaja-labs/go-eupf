@@ -1,0 +1,176 @@
+package core
+
+import (
+	"fmt"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
+	"github.com/rs/zerolog"
+)
+
+func TestReplayCacheHasOneConnectionBudget(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.maxTransactions = 64
+	old := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	defer zerolog.SetGlobalLevel(old)
+	for a := 0; a < 16; a++ {
+		node := fmt.Sprintf("cp-%d.example", a)
+		peer := &net.UDPAddr{IP: net.IPv4(127, 64, 0, byte(a+1)), Port: 40000}
+		conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(1, ie.NewNodeIDFQDN(node), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp))), peer)
+		for n := 0; n < 64; n++ {
+			conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(uint32(n+2), ie.NewNodeIDFQDN(node))), peer)
+		}
+	}
+	if got := len(conn.transport.responses); got > conn.transactionLimit() {
+		t.Fatalf("connection cached %d outcomes, limit %d", got, conn.transactionLimit())
+	}
+	start := time.Now()
+	conn.DeleteAllAssociations()
+	t.Logf("release 16 associations at the global bound: %v", time.Since(start))
+	if len(conn.transport.responses) != 0 || len(conn.transport.responseBudgets) != 0 {
+		t.Fatal("association cleanup retained response accounting")
+	}
+}
+
+func TestAssociationReleaseBypassesProtectedReplayCache(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.maxTransactions = 1
+	peer := identityPeer(t, "127.0.0.2", 0)
+	identitySetup(t, conn, peer, "cp.example")
+	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(2, ie.NewNodeIDFQDN("cp.example"))), peer.LocalAddr().(*net.UDPAddr))
+	response := identityRead(t, peer).(*message.AssociationReleaseResponse)
+	if cause, _ := response.Cause.Cause(); cause != ie.CauseRequestAccepted || conn.GetAssiciationCount() != 0 {
+		t.Fatal("protected cache blocked Release")
+	}
+}
+
+func TestNegotiatedBundlesUseEveryDatagramBoundedFrame(t *testing.T) {
+	for _, count := range []int{17, 32} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			peer := identityPeer(t, "127.0.0.2", 0)
+			conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(1, ie.NewNodeIDFQDN("cp.example"), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp), ie.NewCPFunctionFeatures(0x10))), peer.LocalAddr().(*net.UDPAddr))
+			_ = identityRead(t, peer)
+			msgs := make([]message.Message, count)
+			for i := range msgs {
+				msgs[i] = message.NewSessionDeletionRequest(999, uint32(i+2), ie.New(4000, make([]byte, 300)))
+			}
+			wire, err := message.MarshalDatagram(msgs...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Handle(wire, peer.LocalAddr().(*net.UDPAddr))
+			for range count {
+				_ = identityRead(t, peer)
+			}
+		})
+	}
+}
+
+func TestBundleRequiresFeaturesAdvertisedForThatAssociation(t *testing.T) {
+	conn := newProtocolConnection(t)
+	peer := identityPeer(t, "127.0.0.2", 0)
+	identitySetup(t, conn, peer, "cp.example")
+	assoc := conn.associationByID("cp.example")
+	assoc.CPFeatures = []byte{0x10}
+	assoc.UPFeatures = []byte{0, 0} // A UP-initiated Sxa Setup advertised no BUNDL.
+	msgs := []message.Message{message.NewSessionDeletionRequest(99, 2), message.NewSessionDeletionRequest(99, 3)}
+	wire, err := message.MarshalDatagram(msgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Handle(wire, peer.LocalAddr().(*net.UDPAddr))
+	if got := isolationRead(t, peer, 20*time.Millisecond); got != nil {
+		t.Fatal("connection features substituted for association negotiation")
+	}
+}
+
+func TestReplayFairShareProtectsYoungEntriesAndReclaimsOldHeavyPeer(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.maxTransactions = 4
+	conn.NodeAssociations["heavy"] = NewNodeAssociation("heavy", "127.0.0.2")
+	conn.NodeAssociations["light"] = NewNodeAssociation("light", "127.0.0.3")
+	for i := 0; i < 4; i++ {
+		owner, peer := "heavy", "127.0.0.2:40000"
+		if i == 3 {
+			owner, peer = "light", "127.0.0.3:40000"
+		}
+		conn.cacheReply(requestKey{peer: peer, sequence: uint32(i), typ: 7}, [32]byte{}, []byte{1}, owner, owner)
+	}
+	created := conn.transport.responseExpiry.Front().Value.(*responseIndex).created
+	next := requestKey{peer: "127.0.0.3:50000", sequence: 20, typ: 7}
+	if _, _, err := conn.cachedReplyAt(next, [32]byte{}, created.Add(minimumReplayWindow-time.Nanosecond), "light"); err == nil {
+		t.Fatal("reclaimed a protected outcome")
+	}
+	if _, _, err := conn.cachedReplyAt(next, [32]byte{}, created.Add(minimumReplayWindow+time.Second), "light"); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.transport.responseBudgets["heavy"].entries.Len(); got != 2 {
+		t.Fatalf("heavy peer entries %d", got)
+	}
+	if got := conn.transport.responseBudgets["light"].entries.Len(); got != 1 {
+		t.Fatalf("light peer lost its own oldest entry: %d", got)
+	}
+	conn.cacheReply(next, [32]byte{}, []byte{1}, "light", "light")
+	if len(conn.transport.responses) != 4 {
+		t.Fatal("fair reclamation changed the global bound")
+	}
+	conn.forgetEntityTransactions("heavy", "heavy")
+	if conn.transport.responseBudgets["heavy"] != nil || conn.transport.responseExpiry.Len() != 2 || len(conn.transport.responses) != 2 {
+		t.Fatal("invalidation left stale accounting behind a live entry")
+	}
+	bytes := 0
+	for _, entry := range conn.transport.responses {
+		bytes += entry.index.size
+	}
+	if bytes != conn.transport.bytes {
+		t.Fatalf("charged bytes %d, live bytes %d", conn.transport.bytes, bytes)
+	}
+}
+
+func TestReplayBudgetFollowsNodeAcrossSourceAddresses(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.maxTransactions = 4
+	first := identityPeer(t, "127.0.0.2", 0)
+	second := identityPeer(t, "127.0.0.4", 0)
+	identitySetup(t, conn, first, "cp.example")
+	for seq := uint32(2); seq <= 4; seq++ {
+		conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(seq, ie.NewNodeIDFQDN("cp.example"))), second.LocalAddr().(*net.UDPAddr))
+		_ = identityRead(t, second)
+	}
+	budget := conn.transport.responseBudgets["cp.example"]
+	if len(conn.transport.responseBudgets) != 1 || budget == nil || budget.entries.Len() != 4 {
+		t.Fatal("one association acquired multiple address budgets")
+	}
+	conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(5, ie.NewNodeIDFQDN("cp.example"))), first.LocalAddr().(*net.UDPAddr))
+	if got := isolationRead(t, first, 20*time.Millisecond); got != nil {
+		t.Fatal("source migration bypassed protected global bound")
+	}
+}
+
+func TestReleaseAllAssociationsAtConnectionReplayBound(t *testing.T) {
+	conn := newProtocolConnection(t)
+	const peers = 1024
+	for i := range peers {
+		id := fmt.Sprintf("cp-%d.example", i)
+		conn.NodeAssociations[id] = NewNodeAssociation(id, "127.0.0.2")
+	}
+	for i := 0; i < conn.transactionLimit(); i++ {
+		id := fmt.Sprintf("cp-%d.example", i%peers)
+		conn.cacheReply(requestKey{peer: "127.0.0.2:8805", sequence: uint32(i), typ: 7}, [32]byte{}, []byte{1}, id, id)
+	}
+	start := time.Now()
+	conn.DeleteAllAssociations()
+	elapsed := time.Since(start)
+	t.Logf("release %d associations and %d cached outcomes: %v", peers, conn.transactionLimit(), elapsed)
+	if conn.GetAssiciationCount() != 0 || len(conn.transport.responses) != 0 || conn.transport.responseExpiry.Len() != 0 || conn.transport.bytes != 0 {
+		t.Fatal("release leaked association/replay state")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("release %v exceeds one-second cleanup budget", elapsed)
+	}
+}

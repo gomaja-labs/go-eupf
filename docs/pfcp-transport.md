@@ -15,7 +15,7 @@ change `heartbeat_timeout` and `association_setup_timeout` while running.
 | `pfcp_request_timeout` | `5` | T1 in seconds for originated requests other than heartbeat. Range 1–3600; zero selects 5. |
 | `pfcp_request_retries` | `3` | N1 retransmissions after the initial request, 0–100. Zero sends once. |
 | `pfcp_response_retention` | `60` | Duplicate request response cache lifetime in seconds, 20–86400. Zero selects 60. Must cover the configured local retry windows; align it with the peer's maximum retransmission window too. |
-| `pfcp_max_transactions` | `4096` | Maximum outstanding originated requests and maximum cached request outcomes per association. At most 65536; zero selects 4096. |
+| `pfcp_max_transactions` | `4096` | Maximum outstanding originated requests and maximum cached request outcomes per connection. At most 65536; zero selects 4096. |
 | `pfcp_max_associations` | `1024` | Maximum simultaneous associations per connection. At most 65536; zero selects 1024. Existing Node IDs may replace their association at this limit. |
 | `heartbeat_failure_grace` | `0` | Extra unreachable seconds after exhausting heartbeat retransmissions, at most 86400. During this interval sessions remain installed and probes continue. Zero deletes the failed peer and its sessions after the retry budget. A valid heartbeat clears the failure period. |
 
@@ -44,27 +44,41 @@ TS 29.244 clause 6.4 requires identical retransmissions and endpoint/sequence
 matching. Originated sequence numbers are allocated across the local endpoint
 and are never reused while outstanding. Duplicate requests replay their encoded
 response without repeating session operations. Cache retention is local policy;
-clause 6.4 specifies no numeric lifetime. Each association's response cache and the connection's outbound queue have separate
-16 MiB encoded-payload ceilings. Unassociated sources do not consume replay entries.
-Expiry uses an ordered index rather than scanning all responses on every datagram.
+clause 6.4 specifies no numeric lifetime. Cached responses have one connection-wide
+entry limit (`pfcp_max_transactions`) and one 16 MiB total accounting limit.
+Accounting includes the encoded response, stored peer/entity strings, and a
+conservative 1024-byte metadata charge per entry for both indexes and the map.
+The bound is shared by all associations; adding associations does not multiply
+it. The originated-request queue has a separate 16 MiB encoded-payload ceiling.
+These are retained-state limits, not a bound on process RSS, transient decoding
+allocations or the Go allocator's overhead. Unassociated sources consume no
+replay entries. Initial successful Setup is charged to the new Node ID.
 
-A full association budget evicts its oldest entries after a minimum replay window
-of 20 seconds, even if the configured retention has not elapsed. A peer's N1/T1 is
-unknown; operators must size the budget for the peer's retransmission window and
-burst rate. Entries younger than 20 seconds are protected: new requests beyond
-capacity are left unexecuted and unanswered for peer retransmission, without a
-Cause 75 rejection. Defaults sustain up to 4096 / 20 = 204.8 distinct requests per
-second per association when replies fit the byte budget and bursts stay within
-4096 entries. At maximum 65535-byte replies, the byte budget permits only 256
-protected entries (12.8 requests/s); allow headroom for bursts and other procedures.
-These are admission-budget rates, not measured throughput claims.
+Before executing new work, admission reserves room for a maximum-size response
+and its metadata. On saturation, an association below its entry and byte fair
+shares may evict the oldest eligible response of the association most above its
+share. Other associations may replace only their own old responses. No response
+is evicted within the 20-second minimum replay window. If none is eligible, new
+work is left unexecuted and unanswered for retransmission, without Cause 75.
+Both Heartbeat and Association Release bypass this gate. The fair shares adapt
+to the number of associations; all of a Node ID's source addresses share them.
+Expiry and association cleanup use linked indexes: forgetting an association
+visits only its own responses and removes their accounting immediately.
 
-Bundling requires both UP and CP BUNDL feature bits negotiated during association
-setup or update (TS 29.244 V20.1.0 clauses 6.5, 8.2.25 and 8.2.58). The UPF
-advertises support and accepts at most 16 messages and 8192 bytes in a bundle.
-Unassociated, unnegotiated and oversized bundles are discarded as a whole, before
-any decoder or handler can produce responses. A supported datagram can cause at
-most 16 responses, each bounded by the UDP payload limit.
+With default limits, at most 4096 small outcomes fit in one protected window
+across the entire connection: 4096 / 20 = 204.8 distinct requests per second,
+shared between associations. Large responses can reach the byte bound earlier.
+These are admission-budget calculations, not measured throughput. Size limits
+and replay retention must cover the peer's N1/T1 window and expected bursts.
+
+Bundling requires both UP and CP BUNDL bits from that association's own Setup
+or Update exchange, including UP-initiated Sxa/Sxb (TS 29.244 V20.1.0 clause
+6.5). Every valid session message in a negotiated bundle is processed as if it
+arrived alone, subject to the same replay admission. The UDP datagram bounds
+work; there is no additional message-count or 8192-byte cutoff. Unassociated or
+unnegotiated bundled frames are discarded. Node messages in a bundle are not
+processed: the codec reports invalid bundle framing, which is logged with the
+peer and frame position. No frame boundary is invented after invalid framing.
 
 TS 23.527 V20.0.0 clauses 4.2, 4.4.2.1 and 4.4.3.1 require ignoring Association
 Setup recovery timestamps, detecting restarts from heartbeat timestamps, and

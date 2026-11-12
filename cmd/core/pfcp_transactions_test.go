@@ -133,8 +133,8 @@ func TestResponseCacheBoundsAndExpiry(t *testing.T) {
 	if _, _, err := conn.cachedReply(key, [32]byte{2}); err == nil {
 		t.Fatal("changed request reused transaction ID")
 	}
-	if _, _, err := conn.cachedReply(requestKey{peer: "127.0.0.2:8805", sequence: 1, typ: 5}, digest); err != nil {
-		t.Fatal("another peer inherited a full budget")
+	if _, _, err := conn.cachedReply(requestKey{peer: "127.0.0.2:8805", sequence: 1, typ: 5}, digest); err == nil {
+		t.Fatal("another peer bypassed the protected global budget")
 	}
 	conn.transport.mu.Lock()
 	conn.expireResponsesLocked(time.Now().Add(2 * time.Second))

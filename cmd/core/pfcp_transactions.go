@@ -4,7 +4,6 @@
 package core
 
 import (
-	"container/heap"
 	"container/list"
 	"errors"
 	"fmt"
@@ -29,7 +28,7 @@ type transportState struct {
 	responses       map[requestKey]cachedResponse
 	bytes           int
 	pendingBytes    int
-	responseExpiry  responseHeap
+	responseExpiry  list.List
 	responseBudgets map[string]*responseBudget
 }
 type requestKey struct {
@@ -55,6 +54,7 @@ type pendingRequest struct {
 	entity      string
 	association *NodeAssociation
 	socket      *net.UDPConn
+	upFeatures  []byte
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -110,6 +110,11 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	copied := *peer
 	copied.IP = append(net.IP(nil), peer.IP...)
 	state.pending[state.next] = &pendingRequest{wire: wire, peer: &copied, typ: msg.MessageType(), retryAt: time.Now().Add(interval), interval: interval, remaining: retries, trace: trace, entity: entity, association: association, socket: socket}
+	if setup, ok := msg.(*message.AssociationSetupRequest); ok {
+		if features, err := setup.UPFunctionFeatures.UPFunctionFeatures(); err == nil {
+			state.pending[state.next].upFeatures = append([]byte(nil), features...)
+		}
+	}
 	state.pendingBytes += len(wire)
 	return wire, nil
 }
@@ -177,44 +182,33 @@ func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
 // minimumReplayWindow is local policy, not a peer-advertised N1/T1. TS 29.244
 // V20.1.0 clause 6.4 specifies retransmission but no numeric retention window.
 const minimumReplayWindow = 20 * time.Second
+
+// One connection-wide accounting bound includes encoded responses plus a
+// conservative metadata charge per entry; associations never multiply it.
 const responseByteBudget = 16 << 20
+const responseMetadataBytes = 1024
+const responseReservation = 65535 + responseMetadataBytes + 512
 
 type responseBudget struct {
-	host    string
+	host    string // Association Node ID; host only in isolated index tests.
 	entries list.List
 	bytes   int
 }
 type responseIndex struct {
-	key              requestKey
-	created, expires time.Time
-	budget           *responseBudget
-	element          *list.Element
-	position         int
-	size             int
-}
-type responseHeap []*responseIndex
-
-func (h responseHeap) Len() int           { return len(h) }
-func (h responseHeap) Less(i, j int) bool { return h[i].expires.Before(h[j].expires) }
-func (h responseHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].position = i; h[j].position = j }
-func (h *responseHeap) Push(v any)        { e := v.(*responseIndex); e.position = len(*h); *h = append(*h, e) }
-func (h *responseHeap) Pop() any {
-	old := *h
-	e := old[len(old)-1]
-	old[len(old)-1] = nil
-	*h = old[:len(old)-1]
-	e.position = -1
-	return e
+	key                    requestKey
+	created, expires       time.Time
+	budget                 *responseBudget
+	element, expiryElement *list.Element
+	size                   int
 }
 
-// removeResponse also handles entries invalidated by association/entity cleanup:
-// that path already removes the wire map entry and accounts for its bytes.
+// Both indexes are intrusive lists: expiration and per-association invalidation
+// unlink each entry in O(1). The retention interval is constant per connection,
+// so insertion order is also expiration order. No stale accounting remains.
 func (state *transportState) removeResponse(e *responseIndex) {
-	if live, ok := state.responses[e.key]; ok && live.index == e {
-		state.bytes -= len(live.wire)
-		delete(state.responses, e.key)
-	}
-	heap.Remove(&state.responseExpiry, e.position)
+	state.bytes -= e.size
+	delete(state.responses, e.key)
+	state.responseExpiry.Remove(e.expiryElement)
 	e.budget.entries.Remove(e.element)
 	e.budget.bytes -= e.size
 	if e.budget.entries.Len() == 0 {
@@ -223,36 +217,26 @@ func (state *transportState) removeResponse(e *responseIndex) {
 }
 func (conn *PfcpConnection) expireResponsesLocked(now time.Time) {
 	state := &conn.transport
-	// Association cleanup invalidates wire entries without touching this index.
-	// Compact only after enough removals to pay for the scan; stale metadata is
-	// bounded even when a live peer keeps the oldest heap entry unexpired.
-	if len(state.responses) == 0 {
-		clear(state.responseBudgets)
-		state.responseExpiry = nil
-		return
-	}
-	if len(state.responseExpiry) > 2*len(state.responses)+64 {
-		state.compactResponseIndexes()
-	}
-	for len(state.responseExpiry) > 0 {
-		e := state.responseExpiry[0]
-		entry, live := state.responses[e.key]
-		if live && entry.index == e && now.Before(e.expires) {
+	for front := state.responseExpiry.Front(); front != nil; front = state.responseExpiry.Front() {
+		e := front.Value.(*responseIndex)
+		if now.Before(e.expires) {
 			break
 		}
 		state.removeResponse(e)
 	}
-	if len(state.responses) == 0 {
-		clear(state.responseBudgets)
-		clear(state.responseExpiry)
-		state.responseExpiry = nil
-	}
 }
 
-func (conn *PfcpConnection) cachedReply(key requestKey, digest [32]byte) ([]byte, bool, error) {
-	return conn.cachedReplyAt(key, digest, time.Now())
+func responseOwner(key requestKey, owners []string) string {
+	if len(owners) > 0 {
+		return owners[0]
+	}
+	host, _, _ := net.SplitHostPort(key.peer)
+	return host
 }
-func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now time.Time) ([]byte, bool, error) {
+func (conn *PfcpConnection) cachedReply(key requestKey, digest [32]byte, owners ...string) ([]byte, bool, error) {
+	return conn.cachedReplyAt(key, digest, time.Now(), owners...)
+}
+func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now time.Time, owners ...string) ([]byte, bool, error) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -261,35 +245,59 @@ func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now t
 	if entry, ok := state.responses[key]; ok {
 		return entry.wire, true, nil
 	}
-	host, _, _ := net.SplitHostPort(key.peer)
-	budget := state.responseBudgets[host]
-	if budget == nil {
+	owner := responseOwner(key, owners)
+	if owner == "" {
 		return nil, false, nil
 	}
-	// Amortized expiry/eviction only visits removed entries. One peer has no
-	// access to another peer's budget, even when it varies UDP source ports.
-	for budget.entries.Len() > 0 {
-		e := budget.entries.Front().Value.(*responseIndex)
-		entry, live := state.responses[e.key]
-		if !live || entry.index != e {
-			state.removeResponse(e)
-			continue
-		}
-		if budget.entries.Len() < conn.transactionLimit() && budget.bytes+65535 <= responseByteBudget {
-			break
-		}
-		if now.Sub(e.created) < minimumReplayWindow {
+	for len(state.responses) >= conn.transactionLimit() || state.bytes+responseReservation > responseByteBudget {
+		victim := conn.replayVictimLocked(owner, now)
+		if victim == nil {
 			return nil, true, errTransactionCapacity
 		}
-		state.removeResponse(e)
+		state.removeResponse(victim)
 	}
 	return nil, false, nil
 }
 
-// cachedReply reserves capacity under stateMu before application execution.
-// Saturation inside the minimum replay window drops new work for retransmission;
-// it never invents a Cause 75 or executes work that cannot be safely replayed.
-func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []byte, entities ...string) {
+// An association below both fair shares can reclaim eligible old entries from
+// the association most above its share. Otherwise it can replace only its own
+// old entries. Protected entries always win over new work (clause 6.4).
+func (conn *PfcpConnection) replayVictimLocked(owner string, now time.Time) *responseIndex {
+	state := &conn.transport
+	peers := len(conn.NodeAssociations)
+	if conn.associationByID(owner) == nil {
+		peers++
+	}
+	peers = max(1, peers)
+	entryShare := max(1, (conn.transactionLimit()+peers-1)/peers)
+	byteShare := responseByteBudget / peers
+	own := state.responseBudgets[owner]
+	below := own == nil || own.entries.Len() < entryShare && own.bytes < byteShare
+	var victim *responseIndex
+	greatest := float64(0)
+	for id, budget := range state.responseBudgets {
+		if id != owner && !below {
+			continue
+		}
+		e := budget.entries.Front().Value.(*responseIndex)
+		if now.Sub(e.created) < minimumReplayWindow {
+			continue
+		}
+		pressure := max(float64(budget.entries.Len())/float64(entryShare), float64(budget.bytes)/float64(byteShare))
+		if id != owner && pressure <= 1 {
+			continue
+		}
+		if victim == nil || pressure > greatest || pressure == greatest && e.created.Before(victim.created) {
+			victim, greatest = e, pressure
+		}
+	}
+	return victim
+}
+
+// The caller holds stateMu across admission, execution and insertion. Reserve
+// the largest possible encoded reply before executing a request. Unknown peers
+// never insert; successful initial Setup is charged to its new association.
+func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []byte, context ...string) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -303,27 +311,31 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	if old, ok := state.responses[key]; ok {
 		state.removeResponse(old.index)
 	}
-	host, _, _ := net.SplitHostPort(key.peer)
-	budget := state.responseBudgets[host]
+	owner := responseOwner(key, nil)
+	entity := ""
+	if len(context) > 0 {
+		entity = context[0]
+	}
+	if len(context) > 1 {
+		owner = context[1]
+	}
+	budget := state.responseBudgets[owner]
 	if budget == nil {
-		budget = &responseBudget{host: host}
-		state.responseBudgets[host] = budget
+		budget = &responseBudget{host: owner}
+		state.responseBudgets[owner] = budget
 	}
 	ttl := conn.responseRetention
 	if ttl <= 0 {
 		ttl = time.Minute
 	}
-	entity := ""
-	if len(entities) > 0 {
-		entity = entities[0]
-	}
 	now := time.Now()
-	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: len(wire)}
+	cost := len(wire) + len(key.peer) + len(entity) + responseMetadataBytes
+	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: cost}
 	e.element = budget.entries.PushBack(e)
-	heap.Push(&state.responseExpiry, e)
-	budget.bytes += len(wire)
+	e.expiryElement = state.responseExpiry.PushBack(e)
+	budget.bytes += cost
 	state.responses[key] = cachedResponse{wire: wire, expires: e.expires, entity: entity, index: e}
-	state.bytes += len(wire)
+	state.bytes += cost
 }
 
 func defaultDuration(seconds, fallback uint32) time.Duration {
@@ -376,26 +388,6 @@ func (conn *PfcpConnection) failResponse(typ uint8, seq uint32, peer *net.UDPAdd
 	conn.finishProbeLocked(req)
 	conn.stateMu.Unlock()
 	log.Warn().Err(err).Str("peer", peer.String()).Str("message", message.MessageTypeName(typ)).Msg("Invalid matched PFCP response")
-}
-
-func (state *transportState) compactResponseIndexes() {
-	kept := state.responseExpiry[:0]
-	for _, e := range state.responseExpiry {
-		entry, live := state.responses[e.key]
-		if live && entry.index == e {
-			e.position = len(kept)
-			kept = append(kept, e)
-			continue
-		}
-		e.budget.entries.Remove(e.element)
-		e.budget.bytes -= e.size
-		if e.budget.entries.Len() == 0 {
-			delete(state.responseBudgets, e.budget.host)
-		}
-	}
-	clear(state.responseExpiry[len(kept):])
-	state.responseExpiry = kept
-	heap.Init(&state.responseExpiry)
 }
 
 func (req *pendingRequest) associationID() string {

@@ -243,7 +243,7 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
 		clear(connection.transport.responseBudgets)
-		connection.transport.responseExpiry = nil
+		connection.transport.responseExpiry.Init()
 		connection.transport.bytes = 0
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
@@ -474,7 +474,7 @@ func (connection *PfcpConnection) Close() {
 		clear(connection.transport.pending)
 		clear(connection.transport.responses)
 		clear(connection.transport.responseBudgets)
-		connection.transport.responseExpiry = nil
+		connection.transport.responseExpiry.Init()
 		connection.transport.bytes = 0
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
@@ -634,7 +634,7 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 				delete(connection.NodeAssociations, key)
 			}
 		}
-		connection.forgetPeer(addr)
+		connection.forgetPeer(assoc.ID)
 	}
 }
 
