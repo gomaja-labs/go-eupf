@@ -184,7 +184,7 @@ func TestReleaseAllAssociationsAtConnectionReplayBound(t *testing.T) {
 }
 
 func TestBundleDeletionRetainsAdmissionAndReplayForAdditionalCPAddress(t *testing.T) {
-	conn := newProtocolConnection(t)
+	conn := identityConnection(t)
 	setupPeer := identityPeer(t, "127.0.0.2", 0)
 	entity := identityPeer(t, "127.0.0.4", 0)
 	identitySetup(t, conn, setupPeer, "cp.example")

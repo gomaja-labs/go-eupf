@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -38,11 +39,24 @@ func identitySetup(t *testing.T, conn *PfcpConnection, peer *net.UDPConn, node s
 	}
 }
 
+// identityConnection returns a protocol connection with a TEID pool, so that the
+// UP function can allocate the F-TEIDs it must allocate (TS 29.244 V20.1.0 clause 5.5.1).
+func identityConnection(t *testing.T) *PfcpConnection {
+	t.Helper()
+	conn := newProtocolConnection(t)
+	resources, err := service.NewResourceManager("", 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.ResourceManager = resources
+	return conn
+}
+
 func identityEstablish(t *testing.T, conn *PfcpConnection, peer *net.UDPConn, node, entity string) uint64 {
 	t.Helper()
 	request := message.NewSessionEstablishmentRequest(0, 2,
 		newIeNodeID(node), ie.NewFSEID(77, net.ParseIP(entity).To4(), nil),
-		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceAccess), ie.NewFTEID(1, 17, net.ParseIP("127.0.0.1"), nil, 0)), ie.NewFARID(1)),
+		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceAccess), ie.NewFTEID(5, 0, nil, nil, 0)), ie.NewFARID(1)), // TS 29.244 V20.1.0 clause 5.5.1: the UP function allocates the F-TEID.
 		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)))
 	conn.Handle(protocolWire(t, request), peer.LocalAddr().(*net.UDPAddr))
 	response := identityRead(t, peer).(*message.SessionEstablishmentResponse)
@@ -76,7 +90,7 @@ func TestOriginatedNodeRequestUsesNodeIDAndRegisteredPort(t *testing.T) {
 }
 
 func TestSessionIdentityIndependentOfSourceAddress(t *testing.T) {
-	conn := newProtocolConnection(t)
+	conn := identityConnection(t)
 	source := identityPeer(t, "127.0.0.2", 0)
 	second := identityPeer(t, "127.0.0.4", 0)
 	third := identityPeer(t, "127.0.0.7", 0)
@@ -133,7 +147,7 @@ func TestEstablishmentCannotBorrowAssociationOfDifferentNode(t *testing.T) {
 }
 
 func TestSessionControlAddressesChangeOnlyAfterAcceptedModification(t *testing.T) {
-	conn := newProtocolConnection(t)
+	conn := identityConnection(t)
 	peer := identityPeer(t, "127.0.0.2", 0)
 	identitySetup(t, conn, peer, "cp.example")
 	seid := identityEstablish(t, conn, peer, "cp.example", "127.0.0.6")
