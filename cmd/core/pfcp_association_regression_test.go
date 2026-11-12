@@ -125,3 +125,26 @@ func TestAssociationSnapshotIsIndependent(t *testing.T) {
 		t.Fatal("snapshot aliases live session index")
 	}
 }
+
+type associationCleanupMaps struct {
+	MapOperationsMock
+	deletedURRs []uint32
+}
+
+func (maps *associationCleanupMaps) DeleteUrr(id uint32) (ebpf.UrrInfo, error) {
+	maps.deletedURRs = append(maps.deletedURRs, id)
+	return ebpf.UrrInfo{}, nil
+}
+func TestAssociationCleanupRemovesUsageRules(t *testing.T) {
+	conn := newProtocolConnection(t)
+	maps := &associationCleanupMaps{}
+	conn.mapOperations = maps
+	associationSetup(t, conn, "127.0.0.1", 1)
+	session := NewSession(3, 4, "", "", false)
+	session.URRs[1] = SUrrInfo{GlobalId: 9}
+	conn.GetAssociation("127.0.0.1").Sessions[3] = session
+	conn.DeleteAssociation("127.0.0.1")
+	if len(maps.deletedURRs) != 1 || maps.deletedURRs[0] != 9 {
+		t.Fatalf("removed URR IDs=%v", maps.deletedURRs)
+	}
+}

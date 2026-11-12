@@ -532,17 +532,29 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 	connection.forgetPeer(addr)
 }
 
-// DeleteSession deletes a session and all PDRs, FARs and QERs associated with it.
+// DeleteSession removes the forwarding rules of a session, including usage rules.
+// TS 29.244 V20.1.0 clause 6.2.8.3: association release deletes all session contexts.
 func (connection *PfcpConnection) DeleteSession(session *Session) {
+	for _, urr := range session.URRs {
+		if _, err := connection.mapOperations.DeleteUrr(urr.GlobalId); err != nil {
+			log.Error().Err(err).Uint32("urr", urr.GlobalId).Msg("Delete association usage rule")
+		}
+	}
 	for _, far := range session.FARs {
-		_ = connection.mapOperations.DeleteFar(far.GlobalId)
+		if err := connection.mapOperations.DeleteFar(far.GlobalId); err != nil {
+			log.Error().Err(err).Uint32("far", far.GlobalId).Msg("Delete association forwarding rule")
+		}
 	}
 	for _, qer := range session.QERs {
-		_ = connection.mapOperations.DeleteQer(qer.GlobalId)
+		if err := connection.mapOperations.DeleteQer(qer.GlobalId); err != nil {
+			log.Error().Err(err).Uint32("qer", qer.GlobalId).Msg("Delete association QoS rule")
+		}
 	}
 	pdrContext := NewPDRCreationContext(session, connection.ResourceManager)
 	for _, PDR := range session.PDRs {
-		_ = pdrContext.deletePDR(PDR, connection.mapOperations)
+		if err := pdrContext.deletePDR(PDR, connection.mapOperations); err != nil {
+			log.Error().Err(err).Uint32("pdr", PDR.PdrID).Msg("Delete association detection rule")
+		}
 	}
 }
 
