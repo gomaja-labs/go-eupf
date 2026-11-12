@@ -17,7 +17,8 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() error, func(bool) error) {
 	maps, resources := conn.mapOperations, conn.ResourceManager
 	unlockReservations := resources.LockReservations()
-	reserved := resources.Clone()
+	journal := resources.BeginReservation(session.LocalSEID)
+	reserved := journal.View()
 	proxy := &sessionMapProxy{maps}
 	conn.mapOperations, conn.ResourceManager = proxy, reserved
 	var tx ebpf.RuleTransaction
@@ -52,23 +53,52 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() err
 		defer unlockReservations()
 		defer func() { conn.mapOperations, conn.ResourceManager = maps, resources }()
 		if tx == nil {
-			return nil
+			return reclaimReservations(journal.Rollback())
 		}
+		async, deferred := tx.(interface {
+			RetireResources(func() error)
+			UsageCompletion() <-chan error
+		})
 		if !commit {
-			return tx.Rollback()
+			reclaim := journal.Rollback()
+			if deferred {
+				async.RetireResources(reclaim)
+			}
+			err := tx.Rollback()
+			if !deferred && err == nil {
+				err = reclaimReservations(reclaim)
+			}
+			return err
 		}
-		// Detached tunnel IDs and address leases cannot be published as free
-		// until old rule readers have returned, even when there is no URR.
-		if resources.ReleasesComparedWith(reserved, session.LocalSEID) {
+		if !deferred && journal.Releases() {
 			if err := tx.SynchronizeRules(); err != nil {
-				return errors.Join(err, tx.Rollback())
+				reclaim := journal.Rollback()
+				rollback := tx.Rollback()
+				if rollback == nil {
+					_ = reclaimReservations(reclaim)
+				}
+				return errors.Join(err, rollback)
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			return errors.Join(err, tx.Rollback())
+		reclaim := journal.Commit()
+		if deferred {
+			async.RetireResources(reclaim)
 		}
-		resources.CommitReservations(reserved)
-		return nil
+		if err := tx.Commit(); err != nil {
+			reclaim = journal.Rollback()
+			if deferred {
+				async.RetireResources(reclaim)
+			}
+			rollback := tx.Rollback()
+			if !deferred && rollback == nil {
+				_ = reclaimReservations(reclaim)
+			}
+			return errors.Join(err, rollback)
+		}
+		if deferred {
+			return nil
+		}
+		return reclaimReservations(reclaim)
 	}
 	return start, finish
 }
@@ -101,4 +131,11 @@ func (conn *PfcpConnection) reconcileSessionResources(session *Session) {
 		conn.ResourceManager.IPAM.ReleaseUnused(session.LocalSEID, ips)
 		conn.ResourceManager.IPAM.ReleaseUnusedPrefixes(session.LocalSEID, prefixes)
 	}
+}
+
+func reclaimReservations(reclaim func() error) error {
+	if reclaim == nil {
+		return nil
+	}
+	return reclaim()
 }
