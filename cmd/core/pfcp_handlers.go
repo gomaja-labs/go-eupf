@@ -30,7 +30,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 	if len(buf) > 0 && buf[0]>>5 == 1 && buf[0]&0x04 != 0 {
 		conn.stateMu.RLock()
 		assoc := conn.GetAssociation(addr.IP.String())
-		negotiated := assoc != nil && len(assoc.CPFeatures) > 4 && assoc.CPFeatures[4]&0x10 != 0 && len(conn.featuresOctets) > 6 && conn.featuresOctets[6]&0x40 != 0
+		negotiated := assoc != nil && (&ie.IE{Type: ie.CPFunctionFeatures, Payload: assoc.CPFeatures}).HasBUNDL() && (&ie.IE{Type: ie.UPFunctionFeatures, Payload: conn.featuresOctets}).HasBUNDL()
 		conn.stateMu.RUnlock()
 		if !negotiated || !boundedBundle(buf) {
 			return nil

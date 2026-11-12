@@ -213,11 +213,11 @@ func TestBundlingRequiresBothFeaturesAndBoundsWork(t *testing.T) {
 			if tc.associated {
 				associationSetup(t, conn, "127.0.0.1", 1)
 				if tc.peerSupport {
-					conn.GetAssociation("127.0.0.1").CPFeatures = []byte{0, 0, 0, 0, 0x10}
+					conn.GetAssociation("127.0.0.1").CPFeatures = []byte{0x10}
 				}
 			}
 			if !tc.localSupport {
-				conn.featuresOctets[6] = 0
+				conn.featuresOctets[2] = 0
 			}
 			calls := 0
 			conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeSessionDeletionRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
@@ -274,7 +274,7 @@ func TestBundleByteLimit(t *testing.T) {
 func TestBundledRetransmissionReplaysStandalone(t *testing.T) {
 	conn := newProtocolConnection(t)
 	src := transactionPeer(t)
-	associationSetup(t, conn, "127.0.0.1", 1, ie.NewCPFunctionFeatures(0, 0, 0, 0, 0x10))
+	associationSetup(t, conn, "127.0.0.1", 1, ie.NewCPFunctionFeatures(0x10))
 	calls := 0
 	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeSessionDeletionRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
 		calls++
@@ -289,5 +289,60 @@ func TestBundledRetransmissionReplaysStandalone(t *testing.T) {
 	conn.Handle(protocolWire(t, first), src.LocalAddr().(*net.UDPAddr))
 	if calls != 2 {
 		t.Fatalf("bundled retransmission executed %d handlers, want 2", calls)
+	}
+}
+
+func TestBundlingUsesStandardFeatureOctets(t *testing.T) {
+	conn := newProtocolConnection(t)
+	// Feature octets include the four-octet IE header: TS 29.244 V20.1.0
+	// tables 8.2.25-1 (7/7) and 8.2.58-1 (5/5).
+	if len(conn.featuresOctets) < 3 || conn.featuresOctets[2]&0x40 == 0 {
+		t.Error("UP BUNDL is not in IE octet 7")
+	}
+	associationSetup(t, conn, "127.0.0.1", 1, ie.NewCPFunctionFeatures(0x10))
+	peer := transactionPeer(t)
+	calls := 0
+	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeSessionDeletionRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
+		calls++
+		return message.NewSessionDeletionResponse(m.SEID(), m.Sequence(), ie.NewCause(1)), false, nil
+	}}
+	wire, err := message.MarshalDatagram(message.NewSessionDeletionRequest(1, 20), message.NewSessionDeletionRequest(1, 21))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Handle(wire, peer.LocalAddr().(*net.UDPAddr))
+	if calls != 2 {
+		t.Fatalf("standard CP BUNDL bit did not negotiate bundling: executed %d handlers", calls)
+	}
+}
+
+func TestBundlingRejectsUnrelatedFeatureBits(t *testing.T) {
+	for _, cp := range []bool{false, true} {
+		t.Run(fmt.Sprint(cp), func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			if cp {
+				conn.featuresOctets = []byte{0, 0, 0, 0, 0, 0, 0x40}
+			}
+			associationSetup(t, conn, "127.0.0.1", 1)
+			features := []byte{0, 0, 0, 0, 0x10}
+			if cp {
+				features = []byte{0x10}
+			}
+			conn.GetAssociation("127.0.0.1").CPFeatures = features
+			peer := transactionPeer(t)
+			calls := 0
+			conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeSessionDeletionRequest: func(_ *PfcpConnection, m message.Message, _ string) (message.Message, bool, error) {
+				calls++
+				return message.NewSessionDeletionResponse(m.SEID(), m.Sequence(), ie.NewCause(1)), false, nil
+			}}
+			wire, err := message.MarshalDatagram(message.NewSessionDeletionRequest(1, 20), message.NewSessionDeletionRequest(1, 21))
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Handle(wire, peer.LocalAddr().(*net.UDPAddr))
+			if calls != 0 {
+				t.Fatal("unrelated feature bits enabled bundling")
+			}
+		})
 	}
 }
