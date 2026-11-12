@@ -204,3 +204,15 @@ REST edits write the file selected by `--config`. A read-only ConfigMap cannot p
 
 PFCP retry, admission, capacity, response-cache and failure-grace settings are
 documented in [PFCP transport and peer liveness](pfcp-transport.md).
+
+
+Startup and REST edits share the configuration validator. `heartbeat_timeout`
+accepts 0–3600 seconds (0 disables probes), `heartbeat_interval` accepts 0–3600
+(0 selects five seconds), and `heartbeat_retries` accepts 0–100. Retention must
+cover both configured retry windows and be at least 20 seconds. The association
+setup interval accepts 1–1048576 seconds. See [PFCP transport](pfcp-transport.md)
+for cache budgets, replay windows and request-rate sizing.
+
+For direct management HTTPS, set `api_tls_cert_file` / `UPF_API_TLS_CERT_FILE` /
+`--api-tls-cert-file` and `api_tls_key_file` / `UPF_API_TLS_KEY_FILE` /
+`--api-tls-key-file` together. These are startup settings. See [API security](api.md).

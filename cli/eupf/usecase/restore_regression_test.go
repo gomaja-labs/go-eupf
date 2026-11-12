@@ -36,7 +36,11 @@ func TestBackupRestoreReportsHTTPFailures(t *testing.T) {
 		http.Error(w, "configuration rejected", http.StatusBadRequest)
 	}))
 	defer srv.Close()
-	u := NewEupf(repository.NewEupfHttpRepository(srv.URL, cfg), storage, cfg)
+	repo, initErr := repository.NewEupfHttpRepository(srv.URL, cfg)
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	u := NewEupf(repo, storage, cfg)
 	err = u.BackupRestore(ctx, "", backups[0].Name)
 	if requests.Load() != 7 {
 		t.Fatalf("restore reached %d sections, want 7", requests.Load())
@@ -70,7 +74,11 @@ func TestBackupRestoreSkipsDisabledConnections(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	u := NewEupf(repository.NewEupfHttpRepository(srv.URL, cfg), storage, cfg)
+	repo, initErr := repository.NewEupfHttpRepository(srv.URL, cfg)
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	u := NewEupf(repo, storage, cfg)
 	if err := u.BackupRestore(ctx, "", backups[0].Name); err != nil {
 		t.Fatal(err)
 	}

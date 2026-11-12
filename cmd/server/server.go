@@ -5,7 +5,9 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -46,6 +48,9 @@ func (s *Server) Stop(ctx context.Context) error {
 }
 
 func (s *Server) serve(l net.Listener) error {
+	if s.httpServer.TLSConfig != nil {
+		l = tls.NewListener(l, s.httpServer.TLSConfig)
+	}
 	return serverResult(s.httpServer.Serve(l))
 }
 func serverResult(err error) error {
@@ -53,4 +58,16 @@ func serverResult(err error) error {
 		return nil
 	}
 	return err
+}
+
+// NewTLS prepares the certificate before a listener is opened. RFC 6750 section
+// 5.3 requires bearer token confidentiality; RFC 8996 section 3 prohibits TLS 1.0/1.1.
+func NewTLS(addr string, handler http.Handler, certFile, keyFile string) (*Server, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("api_tls_cert_file/api_tls_key_file: %w", err)
+	}
+	s := New(addr, handler)
+	s.httpServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	return s, nil
 }

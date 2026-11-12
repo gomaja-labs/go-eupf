@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"maps"
+	"mime"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -106,6 +108,25 @@ func (h *ApiHandler) InitRoutes() *gin.Engine {
 		c.Next()
 	})
 
+	// RFC 9110 section 9.2.1: only unsafe methods can change state. JSON is
+	// required even for empty unsafe requests, preventing cross-site simple forms.
+	apiHost, _, _ := net.SplitHostPort(h.Cfg.ApiAddress)
+	router.Use(func(c *gin.Context) {
+		if token == "" && apiHost != "" && !allowedManagementHost(c.Request.Host, apiHost) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "untrusted management Host"})
+			return
+		}
+		switch c.Request.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			typ, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+			if err != nil || typ != "application/json" {
+				c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "Content-Type must be application/json"})
+				return
+			}
+		}
+		c.Next()
+	})
+
 	v1 := router.Group("/api/v1")
 	{
 		v1.GET("/health", health)
@@ -173,7 +194,7 @@ func (h *ApiHandler) initDefaultRoutes(group *gin.RouterGroup) {
 	{
 		associations.GET("", h.listPfcpAssociations)
 		associations.GET("full", h.listPfcpAssociationsFull)
-		associations.GET("release", h.pfcpAssociationRelease)
+		associations.POST("release", h.pfcpAssociationRelease)
 	}
 
 	sessions := group.Group("pfcp_sessions")
@@ -218,3 +239,19 @@ func (h *ApiHandler) InitMetricsRoute() *gin.Engine {
 // @Success 200 {string} string "OK"
 // @Router /health [get]
 func health(c *gin.Context) { c.JSON(http.StatusOK, "OK") }
+
+func allowedManagementHost(authority, configured string) bool {
+	host := authority
+	if h, _, err := net.SplitHostPort(authority); err == nil {
+		host = h
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == strings.TrimSuffix(strings.ToLower(configured), ".") || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}

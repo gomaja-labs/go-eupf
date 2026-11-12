@@ -27,6 +27,11 @@ image:
 api:
   token: ""
   existingSecret: ""
+  tls:
+    # A kubernetes.io/tls Secret containing tls.crt and tls.key.
+    existingSecret: ""
+    # Optional PEM CA key in the same Secret, used by the CLI sidecar.
+    caBundleKey: ""
 
 # Optional management shell, using the published CLI image and the same token.
 cli:

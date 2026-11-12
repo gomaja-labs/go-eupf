@@ -14,8 +14,8 @@ change `heartbeat_timeout` and `association_setup_timeout` while running.
 | `pfcp_peer_allow_list` | `[]` | Source IP addresses or CIDR networks admitted before decoding any PFCP datagram. Empty admits every source, including unknown heartbeat peers. Restrict this list or isolate the PFCP network when peers are untrusted. |
 | `pfcp_request_timeout` | `5` | T1 in seconds for originated requests other than heartbeat. Range 1–3600; zero selects 5. |
 | `pfcp_request_retries` | `3` | N1 retransmissions after the initial request, 0–100. Zero sends once. |
-| `pfcp_response_retention` | `60` | Duplicate request response cache lifetime in seconds, at most 86400. Zero selects 60. Must cover the configured local retry windows; align it with the peer's maximum retransmission window too. |
-| `pfcp_max_transactions` | `4096` | Maximum outstanding originated requests and maximum cached request outcomes per connection. At most 65536; zero selects 4096. |
+| `pfcp_response_retention` | `60` | Duplicate request response cache lifetime in seconds, 20–86400. Zero selects 60. Must cover the configured local retry windows; align it with the peer's maximum retransmission window too. |
+| `pfcp_max_transactions` | `4096` | Maximum outstanding originated requests and maximum cached request outcomes per association. At most 65536; zero selects 4096. |
 | `pfcp_max_associations` | `1024` | Maximum simultaneous associations per connection. At most 65536; zero selects 1024. Existing Node IDs may replace their association at this limit. |
 | `heartbeat_failure_grace` | `0` | Extra unreachable seconds after exhausting heartbeat retransmissions, at most 86400. During this interval sessions remain installed and probes continue. Zero deletes the failed peer and its sessions after the retry budget. A valid heartbeat clears the failure period. |
 
@@ -44,8 +44,27 @@ TS 29.244 clause 6.4 requires identical retransmissions and endpoint/sequence
 matching. Originated sequence numbers are allocated across the local endpoint
 and are never reused while outstanding. Duplicate requests replay their encoded
 response without repeating session operations. Cache retention is local policy;
-clause 6.4 specifies no numeric lifetime. The response cache and the outbound queue each also have a 16 MiB
-encoded-payload ceiling. Live entries are not evicted to admit new work.
+clause 6.4 specifies no numeric lifetime. Each association's response cache and the connection's outbound queue have separate
+16 MiB encoded-payload ceilings. Unassociated sources do not consume replay entries.
+Expiry uses an ordered index rather than scanning all responses on every datagram.
+
+A full association budget evicts its oldest entries after a minimum replay window
+of 20 seconds, even if the configured retention has not elapsed. A peer's N1/T1 is
+unknown; operators must size the budget for the peer's retransmission window and
+burst rate. Entries younger than 20 seconds are protected: new requests beyond
+capacity are left unexecuted and unanswered for peer retransmission, without a
+Cause 75 rejection. Defaults sustain up to 4096 / 20 = 204.8 distinct requests per
+second per association when replies fit the byte budget and bursts stay within
+4096 entries. At maximum 65535-byte replies, the byte budget permits only 256
+protected entries (12.8 requests/s); allow headroom for bursts and other procedures.
+These are admission-budget rates, not measured throughput claims.
+
+Bundling requires both UP and CP BUNDL feature bits negotiated during association
+setup or update (TS 29.244 V20.1.0 clauses 6.5, 8.2.25 and 8.2.58). The UPF
+advertises support and accepts at most 16 messages and 8192 bytes in a bundle.
+Unassociated, unnegotiated and oversized bundles are discarded as a whole, before
+any decoder or handler can produce responses. A supported datagram can cause at
+most 16 responses, each bounded by the UDP payload limit.
 
 TS 23.527 V20.0.0 clauses 4.2, 4.4.2.1 and 4.4.3.1 require ignoring Association
 Setup recovery timestamps, detecting restarts from heartbeat timestamps, and
@@ -79,3 +98,16 @@ and backup archives. Archives use the server's YAML key names. Restore checks al
 startup-only fields before any runtime edit: if any differ, it lists their keys
 and returns an error requiring a configuration file update and restart. It never
 reports a successful restore while discarding a changed transport policy.
+
+
+The association setup timer uses `association_setup_timeout` at startup and after
+REST edits (range 1–1048576 seconds). An existing unreadable or malformed config
+file fails startup; an explicitly selected missing `--config` or `--pcc-config`
+file also fails. Only an absent implicit default file uses defaults.
+
+SIGTERM and SIGINT stop HTTP listeners and run deferred socket, map, XDP-link,
+SDF-listener and capture cleanup. Normal shutdown exits zero. HTTP shutdown has a
+three-second deadline and force-closes remaining connections; the process gives
+all shutdown work at most 15 seconds and reports deadline expiry as failure.
+Association release is still handled by the existing release hook pending the
+separate release-lifecycle change.

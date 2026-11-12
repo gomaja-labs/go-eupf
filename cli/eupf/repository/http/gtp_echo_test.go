@@ -14,7 +14,10 @@ func TestGTPEchoCLIRejectsShortIntervals(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
 	defer server.Close()
-	repo := NewEupfHttpRepository(server.URL, &config.Config{})
+	repo, initErr := NewEupfHttpRepository(server.URL, &config.Config{})
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
 	for _, seconds := range []uint32{0, 1, 59} {
 		err := repo.RestoreConfigGTPPath(context.Background(), nil, seconds, "")
 		if err == nil || !strings.Contains(err.Error(), "gtp_echo_interval") || !strings.Contains(err.Error(), "7.2.1") {

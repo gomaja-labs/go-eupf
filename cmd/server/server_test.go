@@ -2,9 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -54,4 +60,53 @@ func TestShutdownDeadlineClosesActiveRequests(t *testing.T) {
 		t.Error("active request remained connected after shutdown deadline")
 	}
 	close(release)
+}
+
+func TestTLSListenerAndCertificateValidation(t *testing.T) {
+	reference := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer reference.Close()
+	dir := t.TempDir()
+	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	cert := reference.TLS.Certificates[0]
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewTLS("127.0.0.1:0", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }), certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = s.serve(l) }()
+	defer func() { _ = s.Stop(context.Background()) }()
+	roots := x509.NewCertPool()
+	roots.AddCert(reference.Certificate())
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get("https://" + l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	legacy := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11}
+	connection, err := tls.Dial("tcp", l.Addr().String(), legacy)
+	if err == nil {
+		_ = connection.Close()
+		t.Fatal("TLS 1.1 accepted")
+	}
+	if _, err := NewTLS("127.0.0.1:0", nil, certPath, "missing.key"); err == nil {
+		t.Fatal("invalid key accepted")
+	}
 }

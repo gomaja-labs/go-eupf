@@ -374,7 +374,18 @@ func run(ctx context.Context) (runErr error) {
 	metricsEngine := h.InitMetricsRoute()
 
 	apiSrv := server.New(config.Conf.ApiAddress, engine)
-
+	if config.Conf.ApiTLSCertFile != "" {
+		apiSrv, err = server.NewTLS(config.Conf.ApiAddress, engine, config.Conf.ApiTLSCertFile, config.Conf.ApiTLSKeyFile)
+		if err != nil {
+			return err
+		}
+	} else if config.Conf.ApiToken != "" {
+		host, _, _ := net.SplitHostPort(config.Conf.ApiAddress)
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			log.Warn().Msg("Management API uses plaintext HTTP: bearer tokens require equivalent transport security (RFC 6750 section 5.3)")
+		}
+	}
 	metricsSrv := server.New(config.Conf.MetricsAddress, metricsEngine)
 
 	serverErrors := make(chan error, 2)

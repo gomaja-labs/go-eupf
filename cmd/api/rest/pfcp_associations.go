@@ -61,7 +61,7 @@ func (h *ApiHandler) listPfcpAssociationsFull(c *gin.Context) {
 // @Summary Release PFCP associations
 // @Tags PFCP
 // @Success 204 "No Content"
-// @Router /pfcp_associations/release [get]
+// @Router /pfcp_associations/release [post]
 func (h *ApiHandler) pfcpAssociationRelease(c *gin.Context) {
 	select {
 	case h.associationReleaseChan <- struct{}{}:

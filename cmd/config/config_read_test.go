@@ -52,3 +52,14 @@ func TestValidationIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestTLSConfigurationNeedsBothFiles(t *testing.T) {
+	c := validLimitsConfig()
+	c.ApiTLSCertFile = "cert.pem"
+	if err := c.Validate(); err == nil {
+		t.Fatal("partial TLS configuration accepted")
+	}
+	c.ApiTLSKeyFile = "key.pem"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

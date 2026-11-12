@@ -20,7 +20,10 @@ func TestRepositorySendsBearerToken(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	repository := NewEupfHttpRepository(server.URL, &config.Config{ApiToken: "synthetic-token"})
+	repository, initErr := NewEupfHttpRepository(server.URL, &config.Config{ApiToken: "synthetic-token"})
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
 	for _, base := range []string{"", server.URL} {
 		if _, err := repository.GetUpfConfig(context.Background(), base); err != nil {
 			t.Fatal(err)

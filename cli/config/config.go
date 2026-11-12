@@ -22,10 +22,11 @@ var (
 
 // Config defines CLI-related config
 type Config struct {
-	ApiToken   string `mapstructure:"api_token"`
-	LogLevel   string `mapstructure:"log_level" validate:"omitempty,oneof=debug info warn error"`
-	EupfAddr   string `mapstructure:"eupf_addr" validate:"omitempty,url"`
-	BackupPath string `mapstructure:"backup_path" validate:"required"`
+	ApiCABundle string `mapstructure:"api_ca_bundle"`
+	ApiToken    string `mapstructure:"api_token"`
+	LogLevel    string `mapstructure:"log_level" validate:"omitempty,oneof=debug info warn error"`
+	EupfAddr    string `mapstructure:"eupf_addr" validate:"omitempty,url"`
+	BackupPath  string `mapstructure:"backup_path" validate:"required"`
 }
 
 // NewConfig initializes config: flags, env, file
@@ -103,6 +104,7 @@ func GlobalFlags() *pflag.FlagSet {
 func defineFlags() {
 	flagGroup = pflag.NewFlagSet("cli-flags", pflag.ContinueOnError)
 	flagGroup.ParseErrorsAllowlist.UnknownFlagsHandling = pflag.IgnoreUnknownFlag
+	flagGroup.String("api_ca_bundle", "", "PEM CA bundle for management API HTTPS")
 	flagGroup.String("api_token", "", "Bearer token for the administration API")
 	flagGroup.String("log_level", "", "Log level (debug, info, warn, error)")
 	flagGroup.String("eupf_addr", "", "Base URL for eupf API (e.g. http://localhost:8080/api/v1/)")

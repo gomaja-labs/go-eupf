@@ -27,6 +27,8 @@ type UpfConfig struct {
 	InterfaceName           []string       `json:"interface_name" yaml:"interface_name"`
 	XDPAttachMode           string         `json:"xdp_attach_mode" yaml:"xdp_attach_mode"`
 	ApiAllowedOrigins       []string       `json:"api_allowed_origins" yaml:"api_allowed_origins"`
+	ApiTLSCertFile          string         `json:"api_tls_cert_file" yaml:"api_tls_cert_file"`
+	ApiTLSKeyFile           string         `json:"api_tls_key_file" yaml:"api_tls_key_file"`
 	ApiAddress              string         `json:"api_address" yaml:"api_address"`
 	PfcpAddress             string         `json:"pfcp_address" yaml:"pfcp_address"`
 	PfcpNodeId              string         `json:"pfcp_node_id" yaml:"pfcp_node_id"`

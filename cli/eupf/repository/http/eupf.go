@@ -2,7 +2,10 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -16,16 +19,33 @@ type EupfHttpRepository struct {
 	baseURL string
 }
 
-func NewEupfHttpRepository(baseURL string, cfg *config.Config) domain.EupfRepository {
+func NewEupfHttpRepository(baseURL string, cfg *config.Config) (*EupfHttpRepository, error) {
 	client := resty.New().
 		SetTimeout(5 * time.Second).
 		SetBaseURL(baseURL).
 		SetAuthToken(cfg.ApiToken)
 
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // RFC 8996 section 3
+	if cfg.ApiCABundle != "" {
+		data, err := os.ReadFile(cfg.ApiCABundle)
+		if err != nil {
+			return nil, fmt.Errorf("api_ca_bundle: %w", err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system CAs: %w", err)
+		}
+		if !roots.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("api_ca_bundle contains no CA certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
+	client.SetTLSClientConfig(tlsConfig).SetHeader("Content-Type", "application/json")
+
 	return &EupfHttpRepository{
 		client:  client,
 		baseURL: baseURL,
-	}
+	}, nil
 }
 
 func (r *EupfHttpRepository) getClient(baseURL string) *resty.Client {

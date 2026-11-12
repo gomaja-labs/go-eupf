@@ -209,7 +209,7 @@ Method | URL                              | Description                         
 ------ | -------------------------------- | --------------------------------------------------------------------------- | --------------------------------
 `GET`  | `/api/v1/pfcp_associations`      | Lists the PFCP associations. Returns a list of `NodeAssociationDescription` | `/api/v1/pfcp_associations`
 `GET`  | `/api/v1/pfcp_associations/full` | Lists the full PFCP associations. Returns objects of `NodeAssociation`      | `/api/v1/pfcp_associations/full`
-`GET`  | `/api/v1/pfcp_associations/release` | Calls for PFCP Association Release Request for all established associations. Returns nothing      | `/api/v1/pfcp_associations/release`
+`POST` | `/api/v1/pfcp_associations/release` | Calls for PFCP Association Release Request for all established associations. Returns nothing      | `/api/v1/pfcp_associations/release`
 
 ### - PFCP sessions
 
@@ -254,3 +254,43 @@ curl -H "Authorization: Bearer $UPF_API_TOKEN" http://127.0.0.1:8080/api/v1/conf
 An empty session result currently serializes as JSON `null`. Session deletion takes exactly one query key (`imsi`, `msisdn` or `id`) and returns a JSON message/error object. Trace creation returns empty HTTP 201; a trace lookup with no matches returns empty HTTP 404. Association release returns empty HTTP 204. Configuration edits return HTTP 500 when the runtime edit is applied but the selected configuration file cannot be written.
 
 To change XDP attach mode, first submit `interface_name: []` with the current mode to detach all links, then submit the desired interfaces and mode. Changing the mode while links are active returns HTTP 409.
+
+
+### Request safety and HTTPS
+
+GET and HEAD never change state ([RFC 9110 section 9.2.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.1)).
+Every POST, PUT, PATCH and DELETE requires `Content-Type: application/json`, including
+operations with an empty body, such as association release. Other media types return
+415. A tokenless loopback listener accepts only loopback Host names/addresses or its
+configured address, preventing a remote DNS name from rebinding to this API.
+
+Configure `api_tls_cert_file` and `api_tls_key_file` together to serve HTTPS directly.
+The files contain a PEM certificate chain and private key. Startup fails if either
+is missing or invalid. TLS 1.2 and later are supported; TLS 1.0 and 1.1 are disabled
+([RFC 8996 section 3](https://www.rfc-editor.org/rfc/rfc8996.html#section-3), updating RFC 6750).
+TLS does not replace the required bearer token outside loopback. If using plain HTTP
+off loopback, provide equivalent transport security, such as a TLS proxy on an
+isolated local network; startup logs a warning. Bearer tokens require confidentiality
+in transit ([RFC 6750 section 5.3](https://www.rfc-editor.org/rfc/rfc6750.html#section-5.3)).
+The shared administration token is not an OAuth authorization server or grant flow;
+RFC 9700's grant-flow guidance does not add such flows to this API.
+
+```yaml
+api_address: 0.0.0.0:8080
+api_tls_cert_file: /etc/eupf/tls/tls.crt
+api_tls_key_file: /etc/eupf/tls/tls.key
+```
+
+Supply the token through `UPF_API_TOKEN`. The CLI accepts an `https://` URL in
+`eupf_addr` or `--baseurl` and verifies the server certificate and hostname.
+For a private CA, set `api_ca_bundle` in `config-cli.yaml`, `CLI_API_CA_BUNDLE`, or
+`--api_ca_bundle` to a PEM CA file. There is no option to disable verification.
+The Helm chart mounts `api.tls.existingSecret` at `/etc/eupf/tls`, selects HTTPS in
+the optional CLI sidecar, and uses `api.tls.caBundleKey` when configured. The server
+certificate must cover the addresses clients use, including 127.0.0.1 for that sidecar.
+
+Configuration edits validate a candidate copy with the startup validator. Invalid
+values return 400 naming the setting before runtime or persistence changes. PFCP
+endpoint edits resolve every peer and bind the candidate socket before committing;
+a failure leaves the old socket, identity, connectors and file in place. N3/N9
+interface edits preserve separately advertised N3/N9, S1-U/S5S8 and PA addresses.

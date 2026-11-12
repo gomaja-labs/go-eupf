@@ -22,7 +22,11 @@ func TestConfigShowPreservesServerFields(t *testing.T) {
 	}))
 	defer server.Close()
 	cfg := &config.Config{}
-	cli := NewCLI(usecase.NewEupf(repository.NewEupfHttpRepository(server.URL, cfg), nil, cfg))
+	repo, initErr := repository.NewEupfHttpRepository(server.URL, cfg)
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	cli := NewCLI(usecase.NewEupf(repo, nil, cfg))
 	var output bytes.Buffer
 	cli.Root.SetOut(&output)
 	cli.Root.SetArgs([]string{"show"})

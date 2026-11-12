@@ -31,10 +31,15 @@ func TestManagementAuthenticationAndCORS(t *testing.T) {
 		{"/api/v1/config", "Bearer   test-token", "", 200, ""},
 		{"/api/v1/config", "Bearer test-token", "https://evil.example", 403, ""},
 	} {
-		req, err := http.NewRequest(http.MethodGet, srv.URL+tc.path, nil)
+		method := http.MethodGet
+		if strings.HasSuffix(tc.path, "/release") {
+			method = http.MethodPost
+		}
+		req, err := http.NewRequest(method, srv.URL+tc.path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.Header.Set("Content-Type", "application/json")
 		if tc.token != "" {
 			req.Header.Set("Authorization", tc.token)
 		}

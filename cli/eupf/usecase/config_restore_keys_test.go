@@ -39,7 +39,11 @@ func TestRestoreRejectsChangedStartupPolicyBeforeEdits(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
-	u := NewEupf(repository.NewEupfHttpRepository(srv.URL, cfg), storage, cfg)
+	repo, initErr := repository.NewEupfHttpRepository(srv.URL, cfg)
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	u := NewEupf(repo, storage, cfg)
 	err = u.BackupRestore(ctx, "", backups[0].Name)
 	for _, key := range []string{"pfcp_peer_allow_list", "pfcp_request_timeout", "pfcp_request_retries", "pfcp_response_retention", "pfcp_max_transactions", "pfcp_max_associations", "heartbeat_failure_grace"} {
 		if err == nil || !strings.Contains(err.Error(), key) {

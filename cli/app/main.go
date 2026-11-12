@@ -45,8 +45,12 @@ func main() {
 		log.Fatal().Err(err).Msg("Error setting log level")
 	}
 
+	repo, err := http.NewEupfHttpRepository(cfg.EupfAddr, cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Initialize API client")
+	}
 	root := delivery.NewCLI(usecase.NewEupf(
-		http.NewEupfHttpRepository(cfg.EupfAddr, cfg),
+		repo,
 		file.NewFileRepository(cfg),
 		cfg,
 	))

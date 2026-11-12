@@ -83,6 +83,8 @@ type UpfConfig struct {
 
 	InterfaceName           []string       `mapstructure:"interface_name" json:"interface_name"`
 	XDPAttachMode           string         `mapstructure:"xdp_attach_mode" validate:"oneof=generic native offload" json:"xdp_attach_mode"`
+	ApiTLSCertFile          string         `mapstructure:"api_tls_cert_file" json:"api_tls_cert_file"`
+	ApiTLSKeyFile           string         `mapstructure:"api_tls_key_file" json:"api_tls_key_file"`
 	ApiToken                string         `mapstructure:"api_token" json:"-"`
 	ApiAllowedOrigins       []string       `mapstructure:"api_allowed_origins" json:"api_allowed_origins"`
 	ApiAddress              string         `mapstructure:"api_address" validate:"hostname_port" json:"api_address"`
@@ -157,6 +159,8 @@ func defineFlags() {
 	// pflags defaults are ignored in this setup
 	pflag.StringArray("iface", []string{}, "Interface list to bind XDP program to")
 	pflag.String("attach", "generic", "XDP attach mode")
+	pflag.String("api-tls-cert-file", "", "Management HTTPS certificate chain PEM file")
+	pflag.String("api-tls-key-file", "", "Management HTTPS private key PEM file")
 	pflag.String("api-token", "", "Bearer token required for administration API access")
 	pflag.StringSlice("api-allowed-origins", nil, "Explicit CORS origins for the administration API")
 	pflag.String("aaddr", "127.0.0.1:8080", "Address to bind api server to")
@@ -253,6 +257,8 @@ func initCommonConfig() error {
 	// Bind flag errors only when flag is nil, and we ignore empty cli args
 	_ = commonConfigV.BindPFlag("interface_name", pflag.Lookup("iface"))
 	_ = commonConfigV.BindPFlag("xdp_attach_mode", pflag.Lookup("attach"))
+	_ = commonConfigV.BindPFlag("api_tls_cert_file", pflag.Lookup("api-tls-cert-file"))
+	_ = commonConfigV.BindPFlag("api_tls_key_file", pflag.Lookup("api-tls-key-file"))
 	_ = commonConfigV.BindPFlag("api_token", pflag.Lookup("api-token"))
 	_ = commonConfigV.BindPFlag("api_allowed_origins", pflag.Lookup("api-allowed-origins"))
 	_ = commonConfigV.BindPFlag("api_address", pflag.Lookup("aaddr"))
@@ -501,6 +507,9 @@ func (c *UpfConfig) UpdateFile(params map[string]interface{}) error {
 
 // ValidateAPIExposure permits unauthenticated management only on loopback.
 func (c *UpfConfig) ValidateAPIExposure() error {
+	if (c.ApiTLSCertFile == "") != (c.ApiTLSKeyFile == "") {
+		return fmt.Errorf("api_tls_cert_file and api_tls_key_file must be configured together")
+	}
 	host, _, err := net.SplitHostPort(c.ApiAddress)
 	if err != nil {
 		return fmt.Errorf("api_address: %w", err)
