@@ -43,7 +43,7 @@ func run() error {
 		return fmt.Errorf("process executable %q differs from expected %q", executable, expected)
 	}
 	name := os.Args[3]
-	if name != "far_map" && name != "qer_map" && name != "urr_map" {
+	if !faultMaps[name] {
 		return fmt.Errorf("unsupported fault map %q", name)
 	}
 	files, err := os.ReadDir(filepath.Join(process, "fdinfo"))
@@ -83,6 +83,20 @@ func run() error {
 	}
 	return fmt.Errorf("map %q not found in specified process", name)
 }
+
+// faultMaps lists the rule maps a test may make read-only for user space.
+var faultMaps = map[string]bool{"far_map": true, "qer_map": true, "urr_map": true, "pdr_map_teid_ip4": true}
+
+// kernelMapName returns the name the kernel reports for a map: at most
+// BPF_OBJ_NAME_LEN-1 (15) bytes of the name in the object file.
+func kernelMapName(name string) string {
+	const maxLength = 15
+	if len(name) > maxLength {
+		return name[:maxLength]
+	}
+	return name
+}
+
 func freeze(id ebpf.MapID, name string) (bool, error) {
 	m, err := ebpf.NewMapFromID(id)
 	if err != nil {
@@ -93,7 +107,7 @@ func freeze(id ebpf.MapID, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.Name != name {
+	if info.Name != kernelMapName(name) {
 		return false, nil
 	}
 	if err := m.Freeze(); err != nil {

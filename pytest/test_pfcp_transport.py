@@ -305,7 +305,8 @@ def test_release_cleanup_failure_exits_and_restart_has_empty_maps(server, eviden
         teid = response[pfcp.IE_FTEID].TEID
         traffic = TunnelTraffic(teid)
         traffic.send("before-cleanup-failure")
-        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "far_map"],
+        # Session deletion removes the uplink PDR synchronously; FAR slots are reclaimed later in the background.
+        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "pdr_map_teid_ip4"],
                                check=True, capture_output=True, text=True)
         (evidence / "release-map-fault.json").write_text(fault.stdout)
         remote.release()
