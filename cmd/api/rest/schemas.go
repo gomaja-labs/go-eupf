@@ -10,12 +10,12 @@ type LoggingCallerConfig struct {
 
 type DataPlaneEbpfConfig struct {
 	InterfaceName []string `json:"interface_name" binding:"required"`
-	XDPAttachMode string   `json:"xdp_attach_mode" binding:"required,oneof=generic native offload"`
+	XDPAttachMode string   `json:"xdp_attach_mode" binding:"required"`
 }
 
 type DataPlaneAddressesConfig struct {
-	N3Address string `json:"n3_address" binding:"required,ipv4"`
-	N9Address string `json:"n9_address" binding:"required,ipv4"`
+	N3Address string `json:"n3_address" binding:"required"`
+	N9Address string `json:"n9_address" binding:"required"`
 }
 
 type PFCPN4Config struct {
@@ -43,5 +43,5 @@ type PFCPTimersConfig struct {
 
 type GTPPathConfig struct {
 	GtpPeer         []string `json:"gtp_peer" binding:"required"`
-	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required,gte=60"`
+	GtpEchoInterval uint32   `json:"gtp_echo_interval" binding:"required"`
 }

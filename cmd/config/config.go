@@ -108,7 +108,7 @@ type UpfConfig struct {
 	S5S8Address             string         `mapstructure:"s5s8_address" validate:"omitempty,ipv4" json:"s5s8_address"`
 	PAAddress               string         `mapstructure:"pa_address" validate:"omitempty,ipv4" json:"pa_address"`
 	GtpPeer                 []string       `mapstructure:"gtp_peer" validate:"omitempty,dive,hostname_port" json:"gtp_peer"`
-	GtpEchoInterval         uint32         `mapstructure:"gtp_echo_interval" validate:"min=60" json:"gtp_echo_interval"`
+	GtpEchoInterval         uint32         `mapstructure:"gtp_echo_interval" json:"gtp_echo_interval"`
 	QerMapSize              uint32         `mapstructure:"qer_map_size" json:"qer_map_size"`
 	FarMapSize              uint32         `mapstructure:"far_map_size" json:"far_map_size"`
 	UrrMapSize              uint32         `mapstructure:"urr_map_size" json:"urr_map_size"`
