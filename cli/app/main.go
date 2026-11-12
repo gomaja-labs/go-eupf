@@ -5,7 +5,10 @@ import (
 	"os"
 
 	"github.com/gomaja-labs/go-eupf/cli/config"
-	"github.com/gomaja-labs/go-eupf/cli/eupf/injection"
+	"github.com/gomaja-labs/go-eupf/cli/eupf/delivery"
+	"github.com/gomaja-labs/go-eupf/cli/eupf/repository/file"
+	"github.com/gomaja-labs/go-eupf/cli/eupf/repository/http"
+	"github.com/gomaja-labs/go-eupf/cli/eupf/usecase"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -42,7 +45,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Error setting log level")
 	}
 
-	root := injection.InitEupfCLI(cfg.EupfAddr, cfg)
+	root := delivery.NewCLI(usecase.NewEupf(
+		http.NewEupfHttpRepository(cfg.EupfAddr, cfg),
+		file.NewFileRepository(cfg),
+		cfg,
+	))
 	err = root.Execute()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error executing command")

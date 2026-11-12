@@ -17,7 +17,6 @@ test)
 lint)
 	go tool actionlint
 	go generate ./cmd/...
-	go generate cli/eupf/injection/wire.go
 	git diff --exit-code
 	go mod tidy -diff
 	(cd scripts/enb-load-test/enb-emulator && go mod tidy -diff)

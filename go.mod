@@ -9,7 +9,6 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/gomaja-labs/go-pfcp v0.0.0-20261112034300-97644dfd6452
-	github.com/google/wire v0.7.0
 	github.com/gopacket/gopacket v1.7.7
 	github.com/jedib0t/go-pretty/v6 v6.8.3
 	github.com/korylprince/ipnetgen v1.0.1
@@ -49,7 +48,6 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
-	github.com/google/subcommands v1.2.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.16 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
@@ -57,7 +55,6 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pandatix/go-abnf v0.5.5 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.65.0 // indirect
 	github.com/rhysd/actionlint v1.7.12 // indirect
@@ -115,7 +112,6 @@ require (
 
 tool (
 	github.com/cilium/ebpf/cmd/bpf2go
-	github.com/google/wire/cmd/wire
 	github.com/rhysd/actionlint/cmd/actionlint
 	github.com/swaggo/swag/cmd/swag
 	honnef.co/go/tools/cmd/staticcheck
