@@ -6,7 +6,6 @@ package core
 import (
 	"net"
 	"net/netip"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,7 +31,6 @@ func TestSessionUEIpOverwrite(t *testing.T) {
 		nodeId:           "test-node",
 		mapOperations:    &mapOps,
 		pfcpHandlerMap:   pfcpHandlers,
-		associationMutex: &sync.Mutex{},
 		nodeAddrV4:       netip.MustParseAddrPort("127.0.0.1:8085"),
 		profile:          DefaultProfile{},
 	}

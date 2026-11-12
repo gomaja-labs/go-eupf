@@ -62,7 +62,6 @@ type PfcpConnection struct {
 
 	udpConn                *net.UDPConn
 	pfcpHandlerMap         PfcpHandlerMap
-	associationMutex       *sync.Mutex
 	NodeAssociations       map[string]*NodeAssociation
 	nodeId                 string
 	nodeAddrV4             netip.AddrPort
@@ -72,7 +71,6 @@ type PfcpConnection struct {
 	RecoveryTimestamp      time.Time
 	featuresOctets         []uint8
 	ResourceManager        *service.ResourceManager
-	heartbeatFailedC       chan string
 	sdfNotifyC             <-chan ebpf.SdfFlowNotification
 	nodes                  []AssociationConnector
 	neValidator            *NeValidator
@@ -141,7 +139,6 @@ func NewPfcpConnection(
 		udpConn:               udpConn,
 		done:                  make(chan struct{}),
 		pfcpHandlerMap:        pfcpHandlers,
-		associationMutex:      &sync.Mutex{},
 		NodeAssociations:      map[string]*NodeAssociation{},
 		nodeId:                nodeId,
 		nodeAddrV4:            udpAddr.AddrPort(),
@@ -151,7 +148,6 @@ func NewPfcpConnection(
 		RecoveryTimestamp:     time.Now(),
 		featuresOctets:        featuresOctets,
 		ResourceManager:       resourceManager,
-		heartbeatFailedC:      make(chan string),
 		sdfNotifyC:            sdfNotifyC,
 		nodes:                 []AssociationConnector{},
 		neValidator:           validator,
@@ -324,12 +320,8 @@ func (connection *PfcpConnection) SendAssociationReleaseRequest() {
 }
 
 func (connection *PfcpConnection) Run() {
-	interval := time.Duration(config.Conf.AssociationSetupTimeout) * time.Second
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	connection.AssociationSetupTicker = time.NewTicker(interval)
-	defer connection.AssociationSetupTicker.Stop()
+	ticker := connection.associationTicker()
+	defer ticker.Stop()
 	reportTicker := time.NewTicker(5 * time.Second)
 	defer reportTicker.Stop()
 	// A reassembled UDP payload can exceed the link MTU. Reading the maximum
@@ -339,10 +331,8 @@ func (connection *PfcpConnection) Run() {
 		select {
 		case <-connection.done:
 			return
-		case <-connection.AssociationSetupTicker.C:
+		case <-ticker.C:
 			connection.RefreshAssociations()
-		case associationAddr := <-connection.heartbeatFailedC:
-			connection.DeleteAssociation(associationAddr)
 		case <-reportTicker.C:
 			connection.SendReports()
 		case notification, ok := <-connection.sdfNotifyC:

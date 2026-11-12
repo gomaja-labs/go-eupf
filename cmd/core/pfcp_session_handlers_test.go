@@ -7,7 +7,6 @@ package core
 import (
 	"net"
 	"net/netip"
-	"sync"
 	"testing"
 	"time"
 
@@ -57,7 +56,6 @@ func TestAssociationSetup(t *testing.T) {
 	pfcpConn := PfcpConnection{
 		NodeAssociations: make(map[string]*NodeAssociation),
 		nodeId:           "test-node",
-		associationMutex: &sync.Mutex{},
 		profile:          DefaultProfile{},
 	}
 	asReq := message.NewAssociationSetupRequest(0,
@@ -130,7 +128,6 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 		n9Address:         net.ParseIP("1.2.3.5"),
 		RecoveryTimestamp: time.Now(),
 		nodeAddrV4:        netip.MustParseAddrPort("127.0.0.1:8085"),
-		associationMutex:  &sync.Mutex{},
 		featuresOctets:    featuresOctets,
 		neValidator:       validator,
 		profile:           profile,

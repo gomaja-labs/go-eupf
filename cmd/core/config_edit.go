@@ -200,7 +200,7 @@ func UpdateAssociationSetupTimeout(
 	associationSetupTimeout uint32,
 ) {
 	for _, connection := range pfcpSrv {
-		connection.AssociationSetupTicker.Reset(time.Duration(associationSetupTimeout) * time.Second)
+		connection.SetAssociationSetupTimeout(associationSetupTimeout)
 	}
 }
 
@@ -209,9 +209,7 @@ func UpdateHeartbeatTimeout(
 	heartbeatTimeout uint32,
 ) {
 	for _, connection := range pfcpSrv {
-		for _, nodeAssociation := range connection.NodeAssociations {
-			nodeAssociation.HeartbeatTimeout.Reset(time.Duration(heartbeatTimeout) * time.Second)
-		}
+		connection.SetHeartbeatTimeout(heartbeatTimeout)
 	}
 }
 

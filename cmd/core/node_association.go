@@ -15,7 +15,6 @@ type NodeAssociation struct {
 	NextSessionID     uint64
 	Sessions          map[uint64]*Session
 	RecoveryTimestamp time.Time
-	HeartbeatTimeout  *time.Timer `json:"-"`
 	CPFeatures        []byte
 	endpoint          string
 	sessionEntities   map[uint64]string

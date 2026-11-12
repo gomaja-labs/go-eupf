@@ -7,7 +7,6 @@ package core
 import (
 	"net"
 	"net/netip"
-	"sync"
 	"testing"
 	"time"
 
@@ -113,7 +112,6 @@ func TestSessionOverwrite(t *testing.T) {
 		mapOperations:    &mapOps,
 		n3Address:        net.ParseIP("127.0.0.1"),
 		nodeAddrV4:       netip.MustParseAddrPort("127.0.0.1:8085"),
-		associationMutex: &sync.Mutex{},
 		profile:          DefaultProfile{},
 	}
 	asReq := message.NewAssociationSetupRequest(0,

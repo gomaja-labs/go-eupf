@@ -2,7 +2,6 @@ package core
 
 import (
 	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,6 @@ func TestHandlePfcpAssociationSetupRequestProfileNodeID(t *testing.T) {
 			pfcpConn := PfcpConnection{
 				NodeAssociations: make(map[string]*NodeAssociation),
 				nodeId:           "127.0.0.1",
-				associationMutex: &sync.Mutex{},
 				profile:          tt.profile,
 			}
 			asReq := message.NewAssociationSetupRequest(0,
