@@ -440,6 +440,15 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
     }
 
     ctx->source_interface = ctx->ip4->daddr == global_config.n9_ipv4_address && global_config.n9_ipv4_address != global_config.n3_ipv4_address ? 1 : 0;
+    // TS 29.244 V20.1.0 clause 5.3.1: the UP-allocated N4-u TEID
+    // identifies the CP-side ingress context, even on the same local address.
+    for (int i=0; i<PDR_LIST_SIZE; i++) {
+        if (i>=session->count) break;
+        if (session->entries[i].source_interface_present && session->entries[i].source_interface==3) {
+            ctx->source_interface=3;
+            break;
+        }
+    }
     const struct pdr *pdr = check_sdf_filters_gtp(ctx,session,teid);
     if (!pdr || !pdr->far_id) return XDP_DROP;
     if (ctx->trace && global_config.trace_in) trace_packet(ctx,PACKET_DIRECTION_IN);
@@ -476,11 +485,12 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
      *   Step 3: search for QER and apply QER instructions
      */
     const __u64 packet_size=ctx->tpdu_length;
-    int marking=enforce_qers(pdr,packet_size,1);if (marking<0) return XDP_DROP;
+    int from_cp=ctx->source_interface==3;
+    int marking=enforce_qers(pdr,packet_size,!from_cp);if (marking<0) return XDP_DROP;
 
     const int urr_size = sizeof(pdr->urr_id)/sizeof(pdr->urr_id[0]);
     for (int i = 0; i < urr_size; i++) {
-        update_urr(pdr->urr_id[i], packet_size, 0);
+        update_urr(pdr->urr_id[i], from_cp ? 0 : packet_size, from_cp ? packet_size : 0);
     }
 
     upf_printk("upf: [n3] session for teid:%u far:%d outer_header_removal:%d", teid, pdr->far_id, pdr->outer_header_removal);
@@ -490,6 +500,12 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
     if (far->outer_header_creation & OHC_GTP_U_UDP_IPv4)
     {
         upf_printk("upf: [n3] session for teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);
+        if (from_cp) {
+            // CP-originated downlink packets need the session's DL QFI and
+            // PDU Session Container, rather than retaining an absent CP QFI.
+            if (remove_gtp_header(ctx)) return XDP_ABORTED;
+            return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
+        }
         update_gtp_tunnel(ctx, global_config.n9_ipv4_address, far->remoteip, 0, far->teid);
 
         if(is_local_ip(ctx->ip4->daddr)) {

@@ -38,7 +38,7 @@ func allocatedPDRChildren(pdr SPDRInfo, n3, n9 net.IP) []*ie.IE {
 	children := []*ie.IE{ie.NewPDRID(uint16(pdr.PdrID))}
 	if pdr.AllocatedTEID {
 		address := n3
-		if pdr.SourceInterface != 0 {
+		if pdr.SourceInterface == ie.SrcInterfaceCore {
 			address = n9
 		}
 		children = append(children, ie.NewFTEID(1, pdr.Teid, cloneIP(address), nil, 0))

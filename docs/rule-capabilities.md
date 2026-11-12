@@ -42,7 +42,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 
 | IE | Treatment | Reason / supported subset | TS 29.244 V20.1.0 table |
 |---|---|---|---|
-| Source Interface | Implemented | Access or Core; Core GTP needs a distinct N9 address. | 7.5.2.2-2 |
+| Source Interface | Implemented | Access, Core or CP-function; Core GTP needs a distinct N9 address. | 7.5.2.2-2 |
 | Local F-TEID | Implemented | UP allocation with CHOOSE; an existing UP-allocated tunnel may be referenced. RESTI permits restoration. | 7.5.2.2-2 |
 | Local Ingress Tunnel | Rejected | N4mb generic UDP tunnel handling is not implemented. | 7.5.2.2-2 |
 | Network Instance | Implemented | Admission-policy alias of the sole routing domain; see below. | 7.5.2.2-2 |
@@ -88,7 +88,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 
 | IE | Treatment | Reason / supported subset | TS 29.244 V20.1.0 table |
 |---|---|---|---|
-| Destination Interface | Implemented | Access, Core or SGi/N6; actual output follows the kernel FIB. | 7.5.2.3-2, 7.5.4.3-2 |
+| Destination Interface | Implemented | Access, Core, SGi/N6 or CP-function; actual output follows the supplied GTP-U tunnel and kernel FIB. | 7.5.2.3-2, 7.5.4.3-2 |
 | Network Instance | Implemented | Admission-policy alias of the sole routing domain. | 7.5.2.3-2, 7.5.4.3-2 |
 | Redirect Information | Rejected | Application redirection is not implemented. | 7.5.2.3-2, 7.5.4.3-2 |
 | Outer Header Creation | Implemented | IPv4/UDP/GTP-U only. | 7.5.2.3-2, 7.5.4.3-2 |
@@ -203,13 +203,18 @@ The read-only peer-source review used:
 - [free5GC SMF fd0052a1](https://github.com/free5gc/smf/tree/fd0052a19cb8e0950b5ba17d2a94506803f7fe7b):
   `internal/pfcp/message/build_establishment.go` constructs Source Interface,
   F-TEID choice, Network Instance, UE IP, SDF, FAR, QER and optional URR/BAR
-  children. The forwarding-only establishment shapes are tested. Its optional
+  children. Its SMF-allocated F-TEID request is tested and rejects with Cause 71. Its optional
   GBR, buffering, periodic/quota measurement and separate UL/DL thresholds
   remain explicit rejections. Eight PDI QFI alternatives and 64 session rules
   provide bounded sets rather than claiming the peer's unrestricted list sizes.
 
-`TestForwardingEstablishmentsFromCommonSMFShapes` reproduces the forwarding
-subsets with synthetic addresses, not recorded subscriber sessions. The tests
+`TestForwardingEstablishmentsFromCommonSMFShapes` follows Open5GS's default
+UL/DL plus cp2up/up2cp rules (`context.c:2395-2444,2785-2832`,
+`npcf-handler.c:729-775`) and free5GC's CP allocation (`datapath.go:679`). The
+Open5GS default BUFF|NOCP/BAR request remains rejected with Cause 76. Its
+forwarding variant accepts the four PDRs, including the CP-function rules.
+free5GC's CP-allocated tunnel remains rejected with Cause 71. These are
+synthetic requests constructed from pinned source, not live interoperability. The tests
 for implemented, informative and unsupported fields are separate.
 
 ## Network Instance and assigned
@@ -231,9 +236,18 @@ ambiguous multiple addresses are rejected rather than widening the filter.
 Access filters reverse a downlink description's endpoints and ports. A missing
 assigned address remains a rejection. Malformed optional Flow Descriptions are
 absent under TS 29.244 clause 7.6.8; valid deny rules, address negation, lists,
-unsupported protocol numbers or IPFilterRule options return Cause 76.
+unresolved protocol names or IPFilterRule options return Cause 76.
 
 FTUP is always advertised. TS 29.244 V20.1.0 clause 5.5.1 requires UP F-TEID
 allocation in EPC/5GC. New CP-allocated tunnels are rejected with Cause 71;
 RESTI allows an available existing tunnel during restoration. Referencing an
 already UP-allocated F-TEID in the same session does not allocate a new CP tunnel.
+
+Source and Destination Interface CP-function values are supported for GTP-U
+N4-u/Sx-u forwarding (TS 29.244 V20.1.0 clause 5.3.1). Local tunnel addresses
+remain IPv4-only: an F-TEID CHOOSE offering both families receives V4 only;
+a V6-only choice returns Cause 76. Numeric SDF protocol values cover 0-255,
+with a separate `ip` wildcard. TCP, UDP and SCTP port ranges are supported;
+port lists, address negation and filter options return Cause 76 with Failed
+Rule ID. Ignored malformed optional filters are logged with SEID/PDR ID and
+counted by `upf_ignored_sdf_filters_total`.

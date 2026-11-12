@@ -199,7 +199,7 @@ func validatePDICapability(pdi *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if source != ie.SrcInterfaceAccess && source != ie.SrcInterfaceCore {
+		if source != ie.SrcInterfaceAccess && source != ie.SrcInterfaceCore && source != ie.SrcInterfaceCPFunction {
 			return unsupportedRuleIE(ie.SourceInterface)
 		}
 	}
@@ -253,7 +253,9 @@ func validateForwardingCapability(fields interface{}, destination, policy *ie.IE
 		if err != nil {
 			return err
 		}
-		if value > 2 {
+		// TS 29.244 V20.1.0 clause 5.3.1: N4-u/Sx-u uses GTP-U
+		// forwarding with CP-function Source/Destination Interface values.
+		if value > ie.DstInterfaceCPFunction {
 			return unsupportedRuleIE(ie.DestinationInterface)
 		}
 	}

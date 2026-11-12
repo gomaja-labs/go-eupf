@@ -212,7 +212,10 @@ the minimum also has a separate KVM boot and packet-test script. See
 [minimum-kernel validation](minimum-kernel.md) for inputs and commands. An
 individual host-kernel run does not establish minimum-kernel support.
 
-F-TEID CHOOSE offers of both V4 and V6 allocate IPv4 on the current IPv4-only
-tunnel interfaces (TS 29.244 V20.1.0 clause 8.2.3). IPv6-only offers reject
-with Cause 76. User-plane IPv6 payloads are supported independently of the
-outer tunnel family.
+Packets on a CP-function local TEID use the CP-side ingress context (TS 29.244
+V20.1.0 clause 5.3.1). CP-originated downlink uses DL gates/rates/accounting and
+is re-encapsulated with the destination tunnel's QFI. UP-to-CP FARs use ordinary
+GTP-U forwarding. CP tunnels use the configured IPv4 N3 endpoint. CHOOSE offers
+of both V4 and V6 allocate IPv4 on the current IPv4-only tunnel interfaces;
+IPv6-only offers reject with Cause 76. User-plane IPv6 payloads are supported
+independently of the outer tunnel family.

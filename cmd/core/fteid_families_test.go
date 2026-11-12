@@ -52,3 +52,14 @@ func TestFTEIDChooseOfferedAddressFamilies(t *testing.T) {
 		})
 	}
 }
+
+func TestCPFunctionTunnelRules(t *testing.T) {
+	for _, rule := range []*ie.IE{
+		ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCPFunction), ie.NewFTEID(7, 0, nil, nil, 0)), ie.NewOuterHeaderRemoval(6, 0)),
+		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceCPFunction), ie.NewOuterHeaderCreation(0x100, 200, "192.0.2.10", "", 0, 0, 0))),
+	} {
+		if err := validateRuleCapability(rule); err != nil {
+			t.Errorf("CP-function tunnel rejected: %v", err)
+		}
+	}
+}
