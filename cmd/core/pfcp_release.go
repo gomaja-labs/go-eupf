@@ -20,7 +20,8 @@ const AssociationCleanupTimeout = 3 * time.Second
 
 // AssociationReleaseTimeout derives the graceful period from configured T1/N1,
 // rounded up to the IE's two-second units, with a two-to-eight-second bound.
-// This leaves cleanup and HTTP shutdown within the process's 15-second deadline.
+// AssociationReleaseWaitTimeout adds the delivery window; process shutdown
+// reserves a further four seconds for listener and map teardown.
 // TS 29.244 V20.1.0 clauses 6.2.7.3.1 and 8.2.78.
 func (conn *PfcpConnection) AssociationReleaseTimeout() time.Duration {
 	if conn == nil {
