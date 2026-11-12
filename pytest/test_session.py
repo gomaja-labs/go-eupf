@@ -85,6 +85,7 @@ heartbeat_response = PFCP(version=1, S=0, seq=1, seid=2, spare_oct=0) / \
 # Scapy's IE_UE_IP_Address predates the CHV4/CHV6/IPv6D/IP6PL flags of
 # TS 29.244 V20.1.0 clause 8.2.62 and keeps those bits in "spare": spare=2 sets
 # octet 5 bit 5, CHV4, so the UP function allocates the IPv4 address.
+# https://github.com/secdev/scapy/issues/5282
 ue_ip_address = IE_UE_IP_Address(spare=2, SD=0, V4=0)
 # Create FAR is mandatory in a Session Establishment Request (TS 29.244
 # V20.1.0 table 7.5.2.1-1); the PDR forwards uplink traffic to the core.
