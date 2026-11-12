@@ -50,7 +50,9 @@ def server(request, evidence):
     processes = []
 
     def start(extra=()):
-        output = (directory / (request.node.name.replace("/", "_") + ".log")).open("w")
+        suffix = "" if not processes else f"-{len(processes) + 1}"
+        output = (directory / (request.node.name.replace("/", "_") + suffix + ".log")).open("w")
+        started_ns = time.time_ns()
         process = subprocess.Popen([
             binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "16",
             "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
@@ -60,6 +62,9 @@ def server(request, evidence):
         ], stdout=output, stderr=output,
             env={**os.environ, "GORACE": "halt_on_error=1"})
         processes.append((process, output))
+        with (directory / "processes.jsonl").open("a") as events:
+            events.write(json.dumps({"test": request.node.name, "start_ns": started_ns,
+                                     "pid": process.pid, "log": Path(output.name).name}) + "\n")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             assert process.poll() is None, "server failed during startup; inspect process log"
@@ -75,7 +80,7 @@ def server(request, evidence):
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=16)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
@@ -87,13 +92,24 @@ class Peer:
         self.process = process
         self.address = address
         self.entity_address = address
+        self.node_address = address
+        self.associated = False
         self.sequence = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((address, 0))
         self.sock.settimeout(3)
 
     def close(self):
+        if self.associated and self.process.poll() is None:
+            self.release()
         self.sock.close()
+
+    def release(self):
+        response = self.request(pfcp.PFCPAssociationReleaseRequest(IE_list=[
+            pfcp.IE_NodeId(id_type=0, ipv4=self.node_address),
+        ]))
+        assert response[pfcp.IE_Cause].cause == 1
+        self.associated = False
 
     def packet(self, payload, seid=None):
         self.sequence += 1
@@ -113,14 +129,15 @@ class Peer:
 
     def associate(self):
         response = self.request(pfcp.PFCPAssociationSetupRequest(IE_list=[
-            pfcp.IE_NodeId(id_type=0, ipv4=self.address),
+            pfcp.IE_NodeId(id_type=0, ipv4=self.node_address),
             pfcp.IE_RecoveryTimeStamp(timestamp=3900000000),
         ]))
         assert response[pfcp.IE_Cause].cause == 1
+        self.associated = True
 
     def establishment_request(self, extra=None):
         return self.packet(pfcp.PFCPSessionEstablishmentRequest(IE_list=[
-            pfcp.IE_NodeId(id_type=0, ipv4=self.address),
+            pfcp.IE_NodeId(id_type=0, ipv4=self.node_address),
             pfcp.IE_FSEID(v4=1, seid=self.sequence+1, ipv4=self.entity_address),
 
         ] + ([far(), pdr()] if extra is None else extra)), seid=0)

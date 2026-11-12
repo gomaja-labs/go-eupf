@@ -31,7 +31,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		log.Warn().Err(parseErr).Str("peer", addr.String()).Msg("Invalid PFCP datagram")
 		results = append(results, parseErr)
 		for _, failure := range datagramFailures(parseErr) {
-			if bundled && !conn.bundleHeaderNegotiated(failure.Header, addr.IP.String()) {
+			if bundled && !conn.bundleHeaderNegotiated(failure.Header, addr) {
 				continue
 			}
 			if h := failure.Header; h != nil && !h.IsRequest() {
@@ -81,14 +81,38 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 			}
 		}
 	}
-	for _, incomingMsg := range incoming {
-		if bundled && !conn.bundleNegotiated(incomingMsg, addr.IP.String()) {
+	// Capture association identity before any sibling can delete its last
+	// session. A single peer entity's bundle retains that admission context.
+	contexts := make([]*NodeAssociation, len(incoming))
+	if bundled {
+		var unique *NodeAssociation
+		conflict := false
+		for i, msg := range incoming {
+			contexts[i] = conn.bundleAssociation(msg, addr)
+			if contexts[i] != nil {
+				if unique != nil && unique != contexts[i] {
+					conflict = true
+				}
+				unique = contexts[i]
+			}
+		}
+		if !conflict && unique != nil {
+			for i, msg := range incoming {
+				if contexts[i] == nil && (msg.MessageType() == message.MsgTypeSessionModificationRequest || msg.MessageType() == message.MsgTypeSessionDeletionRequest) {
+					contexts[i] = unique
+				}
+			}
+		}
+	}
+	for i, incomingMsg := range incoming {
+		if bundled && !conn.supportsBundle(contexts[i]) {
 			continue
 		}
-		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr); err != nil {
+		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr, contexts[i]); err != nil {
 			results = append(results, err)
 		}
 	}
+
 	return errors.Join(results...)
 }
 
@@ -110,7 +134,7 @@ func datagramFailures(err error) []*message.DatagramError {
 	return nil
 }
 
-func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr) error {
+func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr, contexts ...*NodeAssociation) error {
 	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: discard unmatched responses.
 	var completed *pendingRequest
 	if !incomingMsg.IsRequest() {
@@ -160,6 +184,11 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	var handlerErr error
 	if !incomingMsg.IsRequest() {
 		handlerErr = validateIncomingResponse(incomingMsg)
+		// An accepted Report Response identifies the UP session originally
+		// addressed by this procedure (TS 29.244 V20.1.0 clause 7.2.2.4.1).
+		if handlerErr == nil && incomingMsg.MessageType() == message.MsgTypeSessionReportResponse && completed.localSEID != 0 && incomingMsg.SEID() != completed.localSEID {
+			handlerErr = errors.New("PFCP Session Report Response has a different local SEID")
+		}
 	}
 
 	if incomingMsg.IsRequest() {
@@ -170,6 +199,13 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	}
 
 	assoc := conn.associationForMessage(incomingMsg, addr.IP.String())
+	var bound *NodeAssociation
+	if len(contexts) > 0 && contexts[0] != nil && activeAssociation(conn.associationByID(contexts[0].ID)) == contexts[0] {
+		bound = contexts[0]
+	}
+	if assoc == nil {
+		assoc = bound
+	}
 	entity := conn.incomingEntity(incomingMsg, addr.IP.String())
 	// Stateless Heartbeat and Release always bypass capacity (6.2.2.2,
 	// 6.2.8.3 NOTE). Replays are checked before session lookup: Deletion may
@@ -206,13 +242,20 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		}
 	}
 	if handlerErr == nil {
-		outgoing, trace, handlerErr = handler(conn, incomingMsg, addr.IP.String())
+		handlerIdentity := addr.IP.String()
+		if bound != nil {
+			handlerIdentity = bound.ID
+		}
+		if completed != nil && completed.typ == message.MsgTypeHeartbeatRequest && completed.association != nil {
+			handlerIdentity = completed.association.ID
+		}
+		outgoing, trace, handlerErr = handler(conn, incomingMsg, handlerIdentity)
 		if handlerErr == nil {
 			conn.rememberSessionEntity(incomingMsg, outgoing, addr.IP.String())
 		}
 	}
 	if _, deleted := incomingMsg.(*message.SessionDeletionRequest); deleted {
-		if assoc := conn.GetAssociation(addr.IP.String()); assoc != nil {
+		if assoc != nil {
 			conn.pruneEntityMetadata(assoc)
 		}
 	}
@@ -233,10 +276,15 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		}
 	}
 	if cacheable {
-		if current := conn.associationForMessage(incomingMsg, addr.IP.String()); current != nil {
+		current := conn.associationForMessage(incomingMsg, addr.IP.String())
+		if current == nil {
+			current = assoc
+		}
+		if current != nil && activeAssociation(conn.associationByID(current.ID)) == current {
 			conn.cacheReply(key, digest, wire, entity, current.ID)
 		}
 	}
+
 	if completed != nil && completed.typ == message.MsgTypeAssociationSetupRequest && handlerErr == nil {
 		if current := conn.associationForMessage(incomingMsg, addr.IP.String()); current != nil {
 			current.UPFeatures = append([]byte(nil), completed.upFeatures...)
@@ -284,6 +332,14 @@ func HandlePfcpAssociationReleaseRequest(conn *PfcpConnection, msg message.Messa
 }
 func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message, addr string) (message.Message, bool, error) {
 	request := msg.(*message.AssociationSetupRequest)
+	if conn.releasing || conn.terminalError != nil {
+		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP connection releasing")
+	}
+	if value, err := request.NodeID.NodeID(); err == nil {
+		if old := conn.associationByID(nodeIDText(value)); old != nil && (!old.releaseDeadline.IsZero() || !old.cleanupDeadline.IsZero()) {
+			return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP association releasing")
+		}
+	}
 	if failure := validateIncomingRequest(request); failure != nil {
 		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), failure.cause, ie.NewOffendingIE(failure.offending)), true, failure
 	}
@@ -312,7 +368,7 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 	node, _ := request.NodeID.NodeID()
 	assoc := conn.associationByID(nodeIDText(node))
 	cause := ie.CauseRequestAccepted
-	if assoc == nil || assoc.ID != nodeIDText(node) {
+	if activeAssociation(assoc) == nil || assoc.ID != nodeIDText(node) {
 		cause = ie.CauseNoEstablishedPFCPAssociation
 	} else if request.CPFunctionFeatures != nil {
 		if features, err := request.CPFunctionFeatures.CPFunctionFeatures(); err == nil {
@@ -402,18 +458,45 @@ func HandlePfcpVersionNotSupportedResponse(_ *PfcpConnection, msg message.Messag
 // Negotiation belongs to this association's own Setup/Update exchange, including
 // UP-initiated Sxa/Sxb. A datagram bounds work; there is no extra count/size cap.
 // TS 29.244 V20.1.0 clause 6.5.
-func (conn *PfcpConnection) bundleNegotiated(msg message.Message, peer string) bool {
+func (conn *PfcpConnection) supportsBundle(assoc *NodeAssociation) bool {
 	conn.stateMu.RLock()
 	defer conn.stateMu.RUnlock()
-	assoc := conn.associationForMessage(msg, peer)
-	return assoc != nil && (&ie.IE{Type: ie.CPFunctionFeatures, Payload: assoc.CPFeatures}).HasBUNDL() && (&ie.IE{Type: ie.UPFunctionFeatures, Payload: assoc.UPFeatures}).HasBUNDL()
+	if assoc == nil || activeAssociation(conn.associationByID(assoc.ID)) != assoc {
+		return false
+	}
+	return (&ie.IE{Type: ie.CPFunctionFeatures, Payload: assoc.CPFeatures}).HasBUNDL() && (&ie.IE{Type: ie.UPFunctionFeatures, Payload: assoc.UPFeatures}).HasBUNDL()
 }
-
-func (conn *PfcpConnection) bundleHeaderNegotiated(h *message.Header, peer string) bool {
+func (conn *PfcpConnection) bundleAssociation(msg message.Message, peer *net.UDPAddr) *NodeAssociation {
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	if assoc := conn.associationForMessage(msg, peer.IP.String()); assoc != nil {
+		return assoc
+	}
+	conn.transport.mu.Lock()
+	defer conn.transport.mu.Unlock()
+	if !msg.IsRequest() {
+		if req := conn.transport.pending[msg.Sequence()]; req != nil && req.peer.String() == peer.String() && msg.MessageType() == req.typ+1 {
+			return activeAssociation(conn.associationByID(req.associationID()))
+		}
+		return nil
+	}
+	// Deletion retransmissions retain their association through the replay index
+	// even after deleting the last session at an additional CP address (6.4/6.5).
+	wire := make([]byte, msg.MarshalLen())
+	if err := msg.MarshalTo(wire); err != nil {
+		return nil
+	}
+	key := requestKey{peer: peer.String(), sequence: msg.Sequence(), typ: msg.MessageType(), digest: sha256.Sum256(wire)}
+	if entry, ok := conn.transport.responses[key]; ok {
+		return activeAssociation(conn.associationByID(entry.index.budget.host))
+	}
+	return nil
+}
+func (conn *PfcpConnection) bundleHeaderNegotiated(h *message.Header, peer *net.UDPAddr) bool {
 	if h == nil || !h.HasSEID() {
 		return false
 	}
-	return conn.bundleNegotiated(message.NewGeneric(h.Type, h.SEID, h.Sequence()), peer)
+	return conn.supportsBundle(conn.bundleAssociation(message.NewGeneric(h.Type, h.SEID, h.Sequence()), peer))
 }
 
 func (conn *PfcpConnection) sessionOwnerID(seid uint64) string {

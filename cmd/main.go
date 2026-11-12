@@ -30,49 +30,45 @@ import (
 
 //go:generate go tool swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go
 
-func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection) {
-	const (
-		pfcpAssocReleaseTimeout      = time.Second * 10
-		pfcpAssocReleaseCheckTimeout = time.Millisecond * 100
-	)
-
-	ctx, cancel := context.WithTimeout(ctx, pfcpAssocReleaseTimeout)
+func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection) error {
+	period := time.Duration(0)
+	for _, conn := range conns {
+		period = max(period, conn.AssociationReleaseTimeout())
+	}
+	ctx, cancel := context.WithTimeout(ctx, period+core.AssociationCleanupTimeout+200*time.Millisecond)
 	defer cancel()
-
-	tick := time.NewTicker(pfcpAssocReleaseCheckTimeout)
+	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
-
 	for {
+		total := 0
+		for _, conn := range conns {
+			if conn == nil {
+				continue
+			}
+			if err := conn.FatalError(); err != nil {
+				return err
+			}
+			total += conn.GetAssiciationCount()
+		}
+		if total == 0 {
+			log.Info().Msg("All associations and rules released")
+			return nil
+		}
 		select {
 		case <-ctx.Done():
-			log.Warn().Msg("Association release timeout")
-			return
+			return fmt.Errorf("wait for association/rule release: %w", ctx.Err())
 		case <-tick.C:
-			totalAssocs := 0
-			for _, conn := range conns {
-				if conn == nil {
-					continue
-				}
-				totalAssocs += conn.GetAssiciationCount()
-			}
-
-			if totalAssocs == 0 {
-				log.Info().Msg("All associations released")
-				return
-			}
 		}
 	}
 }
 
-// safeReleaseConn sends an association release request and deletes all
-// associations on the connection. It is a no-op when conn is nil, which
-// happens when the corresponding Sxa/Sxb connection was not configured.
+// safeReleaseConn starts the CP Release procedure and keeps associations and
+// rules until CP Release or the bounded graceful period (TS 29.244 V20.1.0
+// clause 6.2.7.3.1). Optional Sxa/Sxb connections may be nil.
 func safeReleaseConn(conn *core.PfcpConnection) {
-	if conn == nil {
-		return
+	if conn != nil {
+		conn.SendAssociationReleaseRequest()
 	}
-	conn.SendAssociationReleaseRequest()
-	conn.DeleteAllAssociations()
 }
 
 // newStartupDumper returns capture initialization errors to the startup boundary.
@@ -289,7 +285,7 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	defer pfcpConn.Close()
+	defer func() { pfcpConn.Close(); runErr = errors.Join(runErr, pfcpConn.FatalError()) }()
 
 	// Create Sxa connection (optional — only when sxa_address is configured).
 	// Without an Sxa peer the S1U/S5S8 interfaces are unused, so we skip the
@@ -309,7 +305,7 @@ func run(ctx context.Context) (runErr error) {
 		if err != nil {
 			return err
 		}
-		defer sxaConn.Close()
+		defer func() { sxaConn.Close(); runErr = errors.Join(runErr, sxaConn.FatalError()) }()
 	} else {
 		log.Info().Msg("Sxa connection skipped (sxa_address not configured)")
 	}
@@ -330,7 +326,7 @@ func run(ctx context.Context) (runErr error) {
 		if err != nil {
 			return err
 		}
-		defer sxbConn.Close()
+		defer func() { sxbConn.Close(); runErr = errors.Join(runErr, sxbConn.FatalError()) }()
 	} else {
 		log.Info().Msg("Sxb connection skipped (sxb_address not configured)")
 	}
@@ -400,31 +396,34 @@ func run(ctx context.Context) (runErr error) {
 		}
 	}()
 
-	assocReleaseFunc := func() {
-		// Request release and clear associations. safeReleaseConn is a no-op
-		// for Sxa/Sxb connections that were never created (nil).
+	assocReleaseFunc := func() error {
 		safeReleaseConn(pfcpConn)
 		safeReleaseConn(sxaConn)
 		safeReleaseConn(sxbConn)
-
-		// Wait until every existing connection reports zero associations.
-		// waitForAllAssocReleases skips nil entries internally.
-		waitForAllAssocReleases(ctx, pfcpConn, sxaConn, sxbConn)
+		// Signal cancellation initiates shutdown; it must not cancel the CP's
+		// opportunity to release. The separate supervisor bounds every defer.
+		return waitForAllAssocReleases(context.Background(), pfcpConn, sxaConn, sxbConn)
 	}
 
 	for {
 		select {
+		case err := <-pfcpConn.Failures():
+			return err
+		case err := <-sxaConn.Failures():
+			return err
+		case err := <-sxbConn.Failures():
+			return err
 		case err := <-serverErrors:
 			if err != nil {
 				return fmt.Errorf("HTTP server: %w", err)
 			}
 		case <-ctx.Done():
 			log.Info().Msg("OS signal received. Initiating graceful shutdown...")
-			// Keep association release in one hook for the release-lifecycle follow-up.
-			assocReleaseFunc()
-			return nil
+			return assocReleaseFunc()
 		case <-resetAssociationChan:
-			assocReleaseFunc()
+			if err := assocReleaseFunc(); err != nil {
+				return err
+			}
 		}
 	}
 }

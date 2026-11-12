@@ -42,7 +42,7 @@ func FuzzPFCPDatagram(f *testing.F) {
 			t.Skip()
 		}
 		conn := newProtocolConnection(t)
-		conn.NodeAssociations["127.0.0.1"] = NewNodeAssociation("synthetic.example", "127.0.0.1")
+		conn.NodeAssociations["synthetic.example"] = NewNodeAssociation("synthetic.example", "127.0.0.1")
 		conn.GetAssociation("127.0.0.1").CPFeatures = []byte{0x10}
 		conn.GetAssociation("127.0.0.1").UPFeatures = append([]byte(nil), conn.featuresOctets...)
 		conn.Handle(wire, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9})

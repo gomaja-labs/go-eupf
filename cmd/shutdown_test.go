@@ -83,7 +83,9 @@ func TestAssociationReleaseWaitUsesLockedSnapshots(t *testing.T) {
 			conn.DeleteAllAssociations()
 		}
 	}()
-	waitForAllAssocReleases(ctx, conn)
+	if err := waitForAllAssocReleases(ctx, conn); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
 	cancel()
 	<-done
 }

@@ -4,7 +4,6 @@
 package core
 
 import (
-	"net"
 	"time"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
@@ -53,9 +52,5 @@ func HandlePfcpHeartbeatResponse(conn *PfcpConnection, msg message.Message, addr
 func SendHeartbeatRequest(conn *PfcpConnection, sequenceID uint32, associationAddr string) error {
 	hbreq := message.NewHeartbeatRequest(sequenceID, append([]*ie.IE{ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)}, conn.profile.HeartbeatRequestAdditionalIEs()...)...)
 	log.Debug().Msgf("Sent Heartbeat Request to: %s", associationAddr)
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(associationAddr))
-	if err != nil {
-		return err
-	}
-	return conn.SendMessageWithTrace(hbreq, udpAddr, true)
+	return conn.sendAssociationRequest(hbreq, associationAddr, true, false)
 }

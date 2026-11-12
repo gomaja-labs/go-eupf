@@ -59,6 +59,7 @@ func (h *ApiHandler) listPfcpAssociationsFull(c *gin.Context) {
 
 // pfcpAssociationRelease requests release of every association.
 // @Summary Release PFCP associations
+// @Description Start bounded UP-initiated release. Associations and sessions remain until CP Release or the advertised grace period expires.
 // @Tags PFCP
 // @Success 204 "No Content"
 // @Router /pfcp_associations/release [post]

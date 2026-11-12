@@ -75,7 +75,10 @@ Bundling requires both UP and CP BUNDL bits from that association's own Setup
 or Update exchange, including UP-initiated Sxa/Sxb (TS 29.244 V20.1.0 clause
 6.5). Every valid session message in a negotiated bundle is processed as if it
 arrived alone, subject to the same replay admission. The UDP datagram bounds
-work; there is no additional message-count or 8192-byte cutoff. Unassociated or
+work; there is no additional message-count or 8192-byte cutoff. Admission
+retains the peer association across a bundle, including deletion of its last
+session; replay entries retain that identity for later retransmissions from an
+additional CP address. Unassociated or
 unnegotiated bundled frames are discarded. Node messages in a bundle are not
 processed: the codec reports invalid bundle framing, which is logged with the
 peer and frame position. No frame boundary is invented after invalid framing.
@@ -139,8 +142,35 @@ SIGTERM and SIGINT stop HTTP listeners and run deferred socket, map, XDP-link,
 SDF-listener and capture cleanup. Normal shutdown exits zero. HTTP shutdown has a
 three-second deadline and force-closes remaining connections; the process gives
 all shutdown work at most 15 seconds and reports deadline expiry as failure.
-Association release is still handled by the existing release hook pending the
-separate release-lifecycle change.
+Shutdown and POST `/pfcp_associations/release` start the same UP-initiated
+procedure (TS 29.244 V20.1.0 clauses 6.2.7.3.1 and 6.2.8). Each CP receives an
+Association Update Request with the release indication and Graceful Release
+Period. The period is `T1 * (N1 + 1)` using `pfcp_request_timeout` and
+`pfcp_request_retries`, rounded up to two-second IE units and limited to 2–8
+seconds. The queued Update retransmits normally. Its acknowledgement or failure
+does not remove the association or sessions. CP Release, or expiry of that
+period, starts rule cleanup. An originated-queue admission failure is logged;
+indication admission is retried while at least two seconds of the same bounded
+local timer remain. Heartbeat failure cannot shorten an initiated release.
+New Setup is refused while the connection is releasing; established sessions
+continue to accept CP changes until cleanup starts.
+
+The UPF always accepts CP Association Release, including retries and unknown
+Node IDs. Cleanup commits each session through the existing rule transaction
+API. A failed session remains owned with its IDs reserved; no release waiter
+reports completion while any rules remain. Cleanup retries after 100, 200, 400,
+then at most 500 milliseconds, for three seconds from the first cleanup attempt.
+Exhaustion logs the affected session IDs and sends a terminal error to the
+supervisor, which exits non-zero after deferred cleanup. No failed session's
+IDs are recycled. During cleanup, session admission to that association stops.
+The release waiter observes locked counts and fatal state. The grace period,
+three-second cleanup allowance and HTTP shutdown fit the process deadline.
+
+Rule maps are not pinned: the only pinned map is the program dispatch array.
+Startup loads fresh rule maps and replaces the dispatch programs. Restart
+therefore does not restore rules from the failed process. The retained tests
+and wire evidence exercise this with synthetic state; no persistent session
+restoration is claimed.
 
 Every originated procedure has one terminal completion: accepted response, peer
 rejection, invalid response, no response after N1, or local cancellation. An

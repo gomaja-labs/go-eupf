@@ -57,6 +57,7 @@ type pendingRequest struct {
 	socket      *net.UDPConn
 	upFeatures  []byte
 	remoteSEID  uint64
+	localSEID   uint64
 	onComplete  func(requestResult)
 	completed   bool
 }
@@ -72,13 +73,13 @@ func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
 	return interval, retries
 }
 func (conn *PfcpConnection) prepareRequest(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn) ([]byte, error) {
-	entity, association := conn.outgoingContext(msg, peer.IP.String())
-	return conn.prepareRequestContext(msg, peer, trace, socket, entity, association)
+	entity, association, localSEID := conn.outgoingContext(msg, peer.IP.String())
+	return conn.prepareRequestContext(msg, peer, trace, socket, entity, association, localSEID)
 }
 
 // prepareRequestContext admits reliable delivery using an already resolved
 // session context. Report producers may call it while holding stateMu.
-func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn, entity string, association *NodeAssociation) ([]byte, error) {
+func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net.UDPAddr, trace bool, socket *net.UDPConn, entity string, association *NodeAssociation, localSEID uint64) ([]byte, error) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -121,6 +122,7 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	}
 	request := state.pending[state.next]
 	request.remoteSEID = msg.SEID()
+	request.localSEID = localSEID
 	request.onComplete = conn.originatorCompletion(request)
 	state.pendingBytes += len(wire)
 	return wire, nil
@@ -253,18 +255,19 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 		case message.MsgTypeHeartbeatRequest:
 			conn.finishProbeLocked(req)
 		case message.MsgTypeSessionReportRequest:
-			for seid, session := range assoc.Sessions {
-				if session.RemoteSEID != req.remoteSEID {
-					continue
-				}
-				if assoc.reportFailures == nil {
-					assoc.reportFailures = make(map[uint64]requestOutcome)
-				}
-				if result.outcome == requestAccepted {
-					delete(assoc.reportFailures, seid)
-				} else {
-					assoc.reportFailures[seid] = result.outcome
-				}
+			// Bind completion to the original UP session, even when the CP
+			// reuses its SEID after deletion (TS 29.244 V20.1.0 clause 6.3.5).
+			session := assoc.Sessions[req.localSEID]
+			if session == nil || session.RemoteSEID != req.remoteSEID {
+				return
+			}
+			if assoc.reportFailures == nil {
+				assoc.reportFailures = make(map[uint64]requestOutcome)
+			}
+			if result.outcome == requestAccepted {
+				delete(assoc.reportFailures, req.localSEID)
+			} else {
+				assoc.reportFailures[req.localSEID] = result.outcome
 			}
 		case message.MsgTypeAssociationUpdateRequest:
 			// Update completion never substitutes for the CP Release procedure (6.2.7.3.1).

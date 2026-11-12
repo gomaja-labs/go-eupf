@@ -21,10 +21,18 @@ func TestReplayCacheHasOneConnectionBudget(t *testing.T) {
 		node := fmt.Sprintf("cp-%d.example", a)
 		peer := &net.UDPAddr{IP: net.IPv4(127, 64, 0, byte(a+1)), Port: 40000}
 		conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(1, ie.NewNodeIDFQDN(node), ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp))), peer)
+	}
+	if conn.GetAssiciationCount() != 16 {
+		t.Fatal("stress fixture did not establish every association")
+	}
+	for a := 0; a < 16; a++ {
+		node := fmt.Sprintf("cp-%d.example", a)
+		peer := &net.UDPAddr{IP: net.IPv4(127, 64, 0, byte(a+1)), Port: 40000}
 		for n := 0; n < 64; n++ {
 			conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(uint32(n+2), ie.NewNodeIDFQDN(node))), peer)
 		}
 	}
+
 	if got := len(conn.transport.responses); got > conn.transactionLimit() {
 		t.Fatalf("connection cached %d outcomes, limit %d", got, conn.transactionLimit())
 	}
@@ -172,5 +180,35 @@ func TestReleaseAllAssociationsAtConnectionReplayBound(t *testing.T) {
 	}
 	if elapsed > time.Second {
 		t.Fatalf("release %v exceeds one-second cleanup budget", elapsed)
+	}
+}
+
+func TestBundleDeletionRetainsAdmissionAndReplayForAdditionalCPAddress(t *testing.T) {
+	conn := newProtocolConnection(t)
+	setupPeer := identityPeer(t, "127.0.0.2", 0)
+	entity := identityPeer(t, "127.0.0.4", 0)
+	identitySetup(t, conn, setupPeer, "cp.example")
+	assoc := conn.associationByID("cp.example")
+	assoc.CPFeatures = []byte{0x10}
+	seid := identityEstablish(t, conn, entity, "cp.example", "127.0.0.4")
+	first := message.NewSessionDeletionRequest(seid, 20)
+	wire, err := message.MarshalDatagram(first, message.NewSessionDeletionRequest(seid, 21))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Handle(wire, entity.LocalAddr().(*net.UDPAddr))
+	for _, want := range []uint8{ie.CauseRequestAccepted, ie.CauseSessionContextNotFound} {
+		response := identityRead(t, entity).(*message.SessionDeletionResponse)
+		if cause, _ := response.Cause.Cause(); cause != want {
+			t.Fatalf("deletion cause %d, want %d", cause, want)
+		}
+	}
+	conn.Handle(wire, entity.LocalAddr().(*net.UDPAddr))
+	for range 2 {
+		_ = identityRead(t, entity)
+	}
+	conn.Handle(protocolWire(t, first), entity.LocalAddr().(*net.UDPAddr))
+	if cause, _ := identityRead(t, entity).(*message.SessionDeletionResponse).Cause.Cause(); cause != ie.CauseRequestAccepted {
+		t.Fatal("deletion replay lost its association after deleting the last session")
 	}
 }

@@ -10,21 +10,28 @@ import "time"
 // Handlers run under its write lock; external readers use AssociationSnapshots.
 // Heartbeat scheduling uses the connection loop, with no per-peer goroutine.
 type NodeAssociation struct {
-	ID                string
-	Addr              string
-	Sessions          map[uint64]*Session
-	RecoveryTimestamp time.Time
-	CPFeatures        []byte
-	endpoint          string
-	setupSource       string
-	UPFeatures        []byte
-	lastOutcomes      map[uint8]requestOutcome
-	reportFailures    map[uint64]requestOutcome
-	sessionEntities   map[uint64]string
-	recoveries        map[string]time.Time
-	nextHeartbeat     time.Time
-	heartbeatInFlight bool
-	failedAt          time.Time
+	ID                 string
+	Addr               string
+	Sessions           map[uint64]*Session
+	RecoveryTimestamp  time.Time
+	CPFeatures         []byte
+	endpoint           string
+	setupSource        string
+	UPFeatures         []byte
+	lastOutcomes       map[uint8]requestOutcome
+	reportFailures     map[uint64]requestOutcome
+	sessionEntities    map[uint64]string
+	recoveries         map[string]time.Time
+	nextHeartbeat      time.Time
+	heartbeatInFlight  bool
+	failedAt           time.Time
+	releaseDeadline    time.Time
+	releaseRequestSent bool
+	releaseRetryAt     time.Time
+	cleanupDeadline    time.Time
+	cleanupNext        time.Time
+	cleanupAttempts    uint32
+	cleanupError       error
 }
 
 func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {

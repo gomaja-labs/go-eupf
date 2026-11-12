@@ -67,6 +67,10 @@ type PfcpConnection struct {
 	setupRetryAt      map[string]time.Time
 	lastSetupOutcome  requestOutcome
 
+	releasing     bool
+	terminalError error
+	failures      chan error
+
 	udpConn                *net.UDPConn
 	pfcpHandlerMap         PfcpHandlerMap
 	NodeAssociations       map[string]*NodeAssociation
@@ -156,6 +160,7 @@ func NewPfcpConnection(
 	return &PfcpConnection{
 		udpConn:               udpConn,
 		done:                  make(chan struct{}),
+		failures:              make(chan error, 1),
 		pfcpHandlerMap:        pfcpHandlers,
 		NodeAssociations:      map[string]*NodeAssociation{},
 		nodeId:                nodeId,
@@ -390,16 +395,33 @@ func (connection *PfcpConnection) SetRemoteNodes(nodes []AssociationConnector) {
 }
 
 func (connection *PfcpConnection) SendAssociationReleaseRequest() {
-	log.Info().Msgf("Send AssociationUpdate with release request for node: %s", connection.localNodeID())
-
-	for _, assoc := range connection.AssociationSnapshots() {
-		err := SendAssociationUpdate(connection, assoc, false, true)
-		if err != nil {
-			log.Warn().Msg(err.Error())
-
-			continue
+	connection.stateMu.Lock()
+	connection.releasing = true
+	// Do not create new UP-initiated associations while releasing this connection.
+	connection.transport.mu.Lock()
+	for seq, req := range connection.transport.pending {
+		if req.typ == message.MsgTypeAssociationSetupRequest {
+			connection.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: errors.New("PFCP connection releasing")})
+			connection.transport.deletePending(seq)
 		}
 	}
+	connection.transport.mu.Unlock()
+	var outgoing []admittedRequest
+	now := time.Now()
+	for _, assoc := range connection.NodeAssociations {
+		request, err := connection.prepareAssociationReleaseLocked(assoc, now, true)
+		if err != nil {
+			log.Warn().Err(err).Str("node", assoc.ID).Msg("Start bounded association release procedure")
+		}
+		if request != nil {
+			outgoing = append(outgoing, *request)
+		}
+	}
+	if len(connection.NodeAssociations) == 0 {
+		connection.releasing = false
+	}
+	connection.stateMu.Unlock()
+	_ = connection.sendAdmitted(outgoing)
 }
 
 func (connection *PfcpConnection) Run() {
@@ -487,7 +509,7 @@ func (connection *PfcpConnection) Close() {
 		connection.transport.mu.Unlock()
 		connection.stateMu.Unlock()
 		_ = socket.Close()
-		connection.DeleteAllAssociations()
+		connection.cleanupBeforeClose()
 	})
 }
 
@@ -600,7 +622,7 @@ func (connection *PfcpConnection) RefreshAssociations() {
 	connection.stateMu.RUnlock()
 	for _, node := range nodes {
 		connection.stateMu.RLock()
-		exists := connection.GetAssociation(node.getAddress()) != nil || time.Now().Before(connection.setupRetryAt[node.getAddress()])
+		exists := connection.releasing || connection.GetAssociation(node.getAddress()) != nil || time.Now().Before(connection.setupRetryAt[node.getAddress()])
 		connection.stateMu.RUnlock()
 		if !exists && !connection.hasOutstanding(message.MsgTypeAssociationSetupRequest, node.getAddress()) {
 			node.sendAssociationSetupRequest(connection)
@@ -611,8 +633,8 @@ func (connection *PfcpConnection) RefreshAssociations() {
 func (connection *PfcpConnection) DeleteAllAssociations() {
 	connection.stateMu.Lock()
 	defer connection.stateMu.Unlock()
-	for addr := range connection.NodeAssociations {
-		connection.deleteAssociation(addr)
+	for _, assoc := range connection.NodeAssociations {
+		connection.deleteAssociation(assoc.ID)
 	}
 }
 
@@ -624,27 +646,8 @@ func (connection *PfcpConnection) DeleteAssociation(addr string) {
 	connection.deleteAssociation(addr)
 }
 func (connection *PfcpConnection) deleteAssociation(addr string) {
-	assoc := connection.GetAssociation(addr)
-	if assoc == nil {
-		return
-	}
-	for id, session := range assoc.Sessions {
-		if err := connection.DeleteSession(session); err != nil {
-			log.Error().Err(err).Uint64("session", id).Msg("Retain association ownership after failed rule cleanup")
-			if assoc.failedAt.IsZero() {
-				assoc.failedAt = time.Now()
-			}
-			continue
-		}
-		delete(assoc.Sessions, id)
-	}
-	if len(assoc.Sessions) == 0 {
-		for key, current := range connection.NodeAssociations {
-			if current == assoc {
-				delete(connection.NodeAssociations, key)
-			}
-		}
-		connection.forgetPeer(assoc.ID)
+	if assoc := connection.GetAssociation(addr); assoc != nil {
+		connection.beginAssociationCleanupLocked(assoc, time.Now())
 	}
 }
 
@@ -742,7 +745,7 @@ func (connection *PfcpConnection) SendReports() {
 					if entity == "" {
 						entity = association.Addr
 					}
-					wire, err := connection.prepareRequestContext(report, peer, session.IsSessionTraced(), socket, entity, association)
+					wire, err := connection.prepareRequestContext(report, peer, session.IsSessionTraced(), socket, entity, association, seid)
 					if err != nil {
 						log.Warn().Err(err).Uint64("session", seid).Uint32("urr", urrid).Msg("Retain unreported usage until report admission succeeds")
 						continue
@@ -781,7 +784,7 @@ func (connection *PfcpConnection) SendReports() {
 					}
 
 					traced := session.IsSessionTraced()
-					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), net.JoinHostPort(session.controlIP(connection).String(), "8805"), traced})
+					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), association.ID, traced})
 				}
 			}
 		}
@@ -938,14 +941,10 @@ func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := conn.sessionPeer(associationAddr, seid)
-	if err == nil {
-		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
-			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
-		}
-	} else {
-		log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
+	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, true); err != nil {
+		log.Info().Err(err).Msg("Failed to send Session Report Request")
 	}
+
 }
 
 func SendSessionReportADC(conn *PfcpConnection, seid uint64, sequenceID uint32, associationAddr string,
@@ -957,14 +956,10 @@ func SendSessionReportADC(conn *PfcpConnection, seid uint64, sequenceID uint32, 
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := conn.sessionPeer(associationAddr, seid)
-	if err == nil {
-		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
-			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
-		}
-	} else {
-		log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
+	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, true); err != nil {
+		log.Info().Err(err).Msg("Failed to send Session Report Request")
 	}
+
 }
 
 func SendAssociationUpdate(
@@ -973,30 +968,19 @@ func SendAssociationUpdate(
 	traced bool,
 	release bool,
 ) error {
+	if release {
+		return conn.startAssociationRelease(assoc.ID, traced)
+	}
 	sequenceID := uint32(0)
 
 	additionalIEs := []*ie.IE{
 		conn.profile.NodeID(conn.localNodeID()), // its Node ID;
 	}
 
-	if release {
-		additionalIEs = append(additionalIEs, ie.NewPFCPAssociationReleaseRequest(1, 0))
-	}
-
 	pfcpMsg := message.NewAssociationUpdateRequest(sequenceID, additionalIEs...)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", conn.peerAddress(assoc.ID))
-	if err != nil {
-		log.Error().Err(err).Msgf("Failed to resolve address for CP node: %s", assoc.ID)
-		return err
-	}
+	return conn.sendAssociationRequest(pfcpMsg, assoc.ID, traced, false)
 
-	if err := conn.SendMessageWithTrace(pfcpMsg, udpAddr, traced); err != nil {
-		log.Error().Err(err).Msgf("Failed to send PFCP message to: %s", assoc.ID)
-		return err
-	}
-
-	return nil
 }
 
 func SendDownlinkNotificationReport(
@@ -1019,14 +1003,10 @@ func SendDownlinkNotificationReport(
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent DLDR Session Report Request to: %s", associationAddr)
-	udpAddr, err := conn.sessionPeer(associationAddr, seid)
-	if err == nil {
-		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
-			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
-		}
-	} else {
-		log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
+	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, true); err != nil {
+		log.Info().Err(err).Msg("Failed to send Session Report Request")
 	}
+
 }
 
 func SendSessionReportSessionRelease(conn *PfcpConnection, seid uint64, sequenceID uint32, associationAddr string, traced bool, pdrList []uint16) {
@@ -1034,14 +1014,10 @@ func SendSessionReportSessionRelease(conn *PfcpConnection, seid uint64, sequence
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
-	udpAddr, err := conn.sessionPeer(associationAddr, seid)
-	if err == nil {
-		if err := conn.SendMessageWithTrace(sessionReport, udpAddr, traced); err != nil {
-			log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
-		}
-	} else {
-		log.Info().Msgf("Failed to send Session Report Request: %s\n", err.Error())
+	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, true); err != nil {
+		log.Info().Err(err).Msg("Failed to send Session Report Request")
 	}
+
 }
 
 type DefaultAssociationConnector struct {
