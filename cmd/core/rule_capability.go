@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -13,6 +15,9 @@ func unsupportedRuleIE(typ ie.IEType) error {
 	return &requestIEError{ie.CauseServiceNotSupported, typ, fmt.Errorf("%s: %w", typ, ebpf.ErrUnsupportedRuleContent)}
 }
 
+// Informative fields admitted below are documented, IE by IE, in
+// docs/rule-capabilities.md. Interface Type labels and RAT statistics metadata
+// do not replace the Source/Destination Interface or request packet handling.
 // rejectUnsupportedFields audits the codec's complete typed view, including
 // newly added standard fields. OtherIEs remain ignored under clauses 7.6.9 and
 // 7.6.10; they contain unknown/unexpected types and extra singular occurrences.
@@ -47,7 +52,7 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectUnsupportedFields(f, "PDRID", "Precedence", "PDI", "OuterHeaderRemoval", "FARID", "QERID", "URRID", "ActivatePredefinedRules"); err != nil {
+		if err := rejectUnsupportedFields(f, "PDRID", "Precedence", "PDI", "OuterHeaderRemoval", "FARID", "QERID", "URRID", "ActivatePredefinedRules", "RATType"); err != nil {
 			return err
 		}
 		if err := validateOuterRemoval(f.OuterHeaderRemoval); err != nil {
@@ -62,7 +67,7 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectUnsupportedFields(f, "PDRID", "Precedence", "PDI", "OuterHeaderRemoval", "FARID", "QERID", "URRID"); err != nil {
+		if err := rejectUnsupportedFields(f, "PDRID", "Precedence", "PDI", "OuterHeaderRemoval", "FARID", "QERID", "URRID", "RATType"); err != nil {
 			return err
 		}
 		if err := validateOuterRemoval(f.OuterHeaderRemoval); err != nil {
@@ -131,7 +136,10 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectUnsupportedFields(f, "URRID", "MeasurementMethod", "ReportingTriggers", "VolumeThreshold"); err != nil {
+		if err := rejectUnsupportedFields(f, "URRID", "MeasurementMethod", "ReportingTriggers", "VolumeThreshold", "MeasurementInformation"); err != nil {
+			return err
+		}
+		if err := validateMeasurementInformation(f.MeasurementInformation); err != nil {
 			return err
 		}
 		return validateURRSubset(f.MeasurementMethod, f.ReportingTriggers, f.VolumeThreshold, true)
@@ -145,7 +153,10 @@ func validateRuleCapability(rule *ie.IE) error {
 		if isNullIE(f.TimeThreshold) {
 			f.TimeThreshold = nil
 		}
-		if err := rejectUnsupportedFields(f, "URRID", "MeasurementMethod", "ReportingTriggers", "VolumeThreshold"); err != nil {
+		if err := rejectUnsupportedFields(f, "URRID", "MeasurementMethod", "ReportingTriggers", "VolumeThreshold", "MeasurementInformation"); err != nil {
+			return err
+		}
+		if err := validateMeasurementInformation(f.MeasurementInformation); err != nil {
 			return err
 		}
 		return validateURRSubset(f.MeasurementMethod, f.ReportingTriggers, f.VolumeThreshold, false)
@@ -174,7 +185,7 @@ func validatePDICapability(pdi *ie.IE) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectUnsupportedFields(f, "SourceInterface", "LocalFTEID", "NetworkInstance", "UEIPAddress", "SDFFilter", "QFI"); err != nil {
+	if err := rejectUnsupportedFields(f, "SourceInterface", "LocalFTEID", "NetworkInstance", "UEIPAddress", "SDFFilter", "QFI", "SourceInterfaceType", "ProtocolDescription"); err != nil {
 		return err
 	}
 	if len(f.QFI) > ebpf.MaxQFIsPerPDR {
@@ -234,7 +245,7 @@ func validateForwardingCapability(fields interface{}, destination, policy *ie.IE
 	if policy != nil {
 		return &requestIEError{ie.CauseInvalidForwardingPolicy, ie.ForwardingPolicy, fmt.Errorf("no forwarding policy is configured")}
 	}
-	if err := rejectUnsupportedFields(fields, "DestinationInterface", "NetworkInstance", "OuterHeaderCreation", "TransportLevelMarking"); err != nil {
+	if err := rejectUnsupportedFields(fields, "DestinationInterface", "NetworkInstance", "OuterHeaderCreation", "TransportLevelMarking", "DestinationInterfaceType", "DataNetworkAccessIdentifier"); err != nil {
 		return err
 	}
 	if destination != nil {
@@ -390,6 +401,104 @@ func validateSessionRuleShapes(conn *PfcpConnection, session *Session) error {
 		}
 		if err != nil {
 			return &ruleFailure{ie.RuleIDTypePDR, id, err}
+		}
+	}
+	return nil
+}
+
+// TS 29.244 V20.1.0 tables 7.5.2.4-1 and 7.5.4.4-1: zero flags keep
+// ordinary post-QoS octet measurement. Every active flag changes measurement.
+func validateMeasurementInformation(field *ie.IE) error {
+	if field == nil || isNullIE(field) {
+		return nil
+	}
+	value, err := field.MeasurementInformation()
+	if err != nil {
+		return err
+	}
+	if value != 0 {
+		return unsupportedRuleIE(ie.MeasurementInformation)
+	}
+	return nil
+}
+
+// validateRuleNetworkInstances applies the single-domain alias admission policy
+// consistently to PDI and FAR provisioning, including modifications.
+// TS 29.244 V20.1.0 tables 7.5.2.2-2, 7.5.2.3-2 and 7.5.4.3-2.
+func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) error {
+	for _, rules := range groups {
+		for _, rule := range rules {
+			var kind uint8
+			var id uint32
+			var instance *ie.IE
+			switch rule.Type {
+			case ie.CreatePDR, ie.UpdatePDR:
+				kind = ie.RuleIDTypePDR
+				var identifier, pdi *ie.IE
+				if rule.Type == ie.CreatePDR {
+					f, err := rule.CreatePDR()
+					if err != nil {
+						return err
+					}
+					identifier, pdi = f.PDRID, f.PDI
+				} else {
+					f, err := rule.UpdatePDR()
+					if err != nil {
+						return err
+					}
+					identifier, pdi = f.PDRID, f.PDI
+				}
+				value, _ := identifier.PDRID()
+				id = uint32(value)
+				if pdi != nil {
+					f, err := pdi.PDI()
+					if err != nil {
+						return err
+					}
+					instance = f.NetworkInstance
+				}
+			case ie.CreateFAR:
+				kind = ie.RuleIDTypeFAR
+				f, err := rule.CreateFAR()
+				if err != nil {
+					return err
+				}
+				id, _ = f.FARID.FARID()
+				if f.ForwardingParameters != nil {
+					v, err := f.ForwardingParameters.ForwardingParameters()
+					if err != nil {
+						return err
+					}
+					instance = v.NetworkInstance
+				}
+			case ie.UpdateFAR:
+				kind = ie.RuleIDTypeFAR
+				f, err := rule.UpdateFAR()
+				if err != nil {
+					return err
+				}
+				id, _ = f.FARID.FARID()
+				if f.UpdateForwardingParameters != nil {
+					v, err := f.UpdateForwardingParameters.UpdateForwardingParameters()
+					if err != nil {
+						return err
+					}
+					instance = v.NetworkInstance
+				}
+			}
+			if instance == nil || isNullIE(instance) {
+				continue
+			}
+			// Network Instance can use name syntax. Decode that explicit wire
+			// representation for the configured human-readable alias policy.
+			name, err := instance.NetworkInstanceHeuristic()
+			if err != nil {
+				log.Warn().Err(err).Msg("Ignore invalid optional Network Instance")
+				continue
+			}
+			if !conn.ValidateNetworkInstance(name) {
+				return &ruleFailure{kind, id, &requestIEError{ie.CauseRuleCreationModificationFailure, ie.NetworkInstance, errNotAllowedNetworkInstance}}
+			}
 		}
 	}
 	return nil

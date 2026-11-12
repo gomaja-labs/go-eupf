@@ -200,7 +200,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 	spdrInfo.NetworkInstance, spdrInfo.SourceInterface = "", 0
 	spdrInfo.PdrInfo.UEIPv4, spdrInfo.PdrInfo.UEIPv6, spdrInfo.PdrInfo.UEIPv6Mask = nil, nil, nil
 	spdrInfo.PdrInfo.SourceInterfacePresent, spdrInfo.PdrInfo.UEDestination = false, false
-	if ne, err := pdi.NetworkInstance.NetworkInstance(); err == nil {
+	if ne, err := pdi.NetworkInstance.NetworkInstanceHeuristic(); err == nil {
 		spdrInfo.NetworkInstance = ne
 	}
 

@@ -698,6 +698,9 @@ func processEstablishmentRequestRules(
 	if err := validateSessionRuleIDs(session, req.CreatePDR, req.CreateFAR, req.CreateQER, req.CreateURR); err != nil {
 		return err
 	}
+	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.CreateFAR); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
@@ -820,6 +823,9 @@ func processModificationRequestRules(
 	if err := validateSessionRuleIDs(session, req.CreatePDR, req.UpdatePDR, req.RemovePDR,
 		req.CreateFAR, req.UpdateFAR, req.RemoveFAR, req.CreateQER, req.UpdateQER, req.RemoveQER,
 		req.CreateURR, req.UpdateURR, req.RemoveURR); err != nil {
+		return err
+	}
+	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.UpdatePDR, req.CreateFAR, req.UpdateFAR); err != nil {
 		return err
 	}
 	mapOperations := conn.mapOperations
@@ -1023,15 +1029,6 @@ func createPDRs(
 		if decodeErr != nil {
 			return decodeErr
 		}
-		pdi, err := fields.PDI.PDI()
-		if err != nil {
-			continue
-		}
-
-		if ne, err := pdi.NetworkInstance.NetworkInstance(); err == nil && !conn.ValidateNetworkInstance(ne) {
-			return errNotAllowedNetworkInstance
-		}
-
 		// PDR should be created last, because we need to reference FARs and QERs global id
 		pdrID, err := fields.PDRID.PDRID()
 		if err != nil {
