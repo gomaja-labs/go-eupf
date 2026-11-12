@@ -36,7 +36,7 @@ func TestCaptureStartupFailure(t *testing.T) {
 	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 		t.Fatalf("startup succeeded after capture creation failed: %s", output)
 	}
-	if !strings.Contains(string(output), "Cannot start packet capture") {
+	if !strings.Contains(string(output), "initialize packet capture") {
 		t.Fatalf("startup failed for a different reason: %v\n%s", err, output)
 	}
 }

@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	kernel "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/gomaja-labs/go-eupf/cmd/api/rest"
 	"github.com/gomaja-labs/go-eupf/cmd/config"
@@ -51,7 +53,7 @@ func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection)
 				if conn == nil {
 					continue
 				}
-				totalAssocs += len(conn.NodeAssociations)
+				totalAssocs += conn.GetAssiciationCount()
 			}
 
 			if totalAssocs == 0 {
@@ -83,11 +85,37 @@ func newStartupDumper(path string, files, size, packets int) (*utils.PacketDumpe
 }
 
 func main() {
-	stopper := make(chan os.Signal, 1)
-	signal.Notify(stopper, os.Interrupt, syscall.SIGTERM)
-	resetAssociationChan := make(chan struct{})
-
 	config.Init()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := supervise(ctx, run, 15*time.Second); err != nil {
+		log.Error().Err(err).Msg("Service failed")
+		os.Exit(1)
+	}
+}
+
+// supervise bounds shutdown including deferred resource cleanup. A timeout is a
+// real failure; normal signal handling lets run return after all defers finish.
+func supervise(ctx context.Context, run func(context.Context) error, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("shutdown deadline exceeded after %s", timeout)
+	}
+}
+
+func run(ctx context.Context) (runErr error) {
+	resetAssociationChan := make(chan struct{}, 1)
 
 	// Warning: inefficient log writing.
 	// As zerolog docs says: "Pretty logging on the console is made possible using the provided (but inefficient) zerolog.ConsoleWriter."
@@ -98,7 +126,7 @@ func main() {
 	}
 
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
-		log.Fatal().Msgf("Can't increase resource limits: %s", err.Error())
+		return fmt.Errorf("increase resource limits: %w", err)
 	}
 
 	bpfObjects := ebpf.NewBpfObjects()
@@ -107,7 +135,7 @@ func main() {
 	bpfObjects.SetQerMapSize(config.Conf.QerMapSize)
 	bpfObjects.SetUrrMapSize(config.Conf.UrrMapSize)
 	if err := bpfObjects.Load(); err != nil {
-		log.Fatal().Msgf("Loading bpf objects failed: %s", err.Error())
+		return fmt.Errorf("load BPF objects: %w", err)
 	}
 
 	defer func() { _ = bpfObjects.Close() }()
@@ -120,7 +148,7 @@ func main() {
 		config.Conf.TraceMaxDumpPackets,
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Cannot start packet capture")
+		return err
 	} else {
 		defer dumper.Close(false)
 		go dumper.ReadTraceMap(bpfObjects.TraceMap)
@@ -157,35 +185,17 @@ func main() {
 	}
 
 	if err := bpfObjects.GlobalConfig.Set(entrypointConfig); err != nil {
-		log.Fatal().Err(err).Msgf("can't set dataplane global config")
+		return fmt.Errorf("set dataplane global config: %w", err)
 	}
 
-	sdfNotifier, _ := ebpf.NewSdfNotifyListener(bpfObjects.SdfNotifyMap)
+	sdfNotifier, err := newStartupSdfListener(bpfObjects.SdfNotifyMap)
+	if err != nil {
+		return err
+	}
 	defer sdfNotifier.Close()
 	go sdfNotifier.ReadEventLoop()
 
 	links := make([]link.Link, 0, len(config.Conf.InterfaceName))
-	for _, ifaceName := range config.Conf.InterfaceName {
-		iface, err := net.InterfaceByName(ifaceName)
-		if err != nil {
-			log.Fatal().Msgf("Lookup network iface %q: %s", ifaceName, err.Error())
-		}
-
-		// Attach the program.
-		l, err := link.AttachXDP(link.XDPOptions{
-			Program:   bpfObjects.UpfIpEntrypointFunc,
-			Interface: iface.Index,
-			Flags:     core.StringToXDPAttachMode(config.Conf.XDPAttachMode),
-		})
-		if err != nil {
-			log.Fatal().Msgf("Could not attach XDP program: %s", err.Error())
-		}
-
-		links = append(links, l)
-
-		log.Info().Msgf("Attached XDP program to iface %q (index %d)", iface.Name, iface.Index)
-	}
-
 	defer func() {
 		for _, l := range links {
 			err := l.Close()
@@ -195,10 +205,31 @@ func main() {
 		}
 	}()
 
+	for _, ifaceName := range config.Conf.InterfaceName {
+		iface, err := net.InterfaceByName(ifaceName)
+		if err != nil {
+			return fmt.Errorf("lookup network interface %q: %w", ifaceName, err)
+		}
+
+		// Attach the program.
+		l, err := link.AttachXDP(link.XDPOptions{
+			Program:   bpfObjects.UpfIpEntrypointFunc,
+			Interface: iface.Index,
+			Flags:     core.StringToXDPAttachMode(config.Conf.XDPAttachMode),
+		})
+		if err != nil {
+			return fmt.Errorf("attach XDP program: %w", err)
+		}
+
+		links = append(links, l)
+
+		log.Info().Msgf("Attached XDP program to iface %q (index %d)", iface.Name, iface.Index)
+	}
+
 	log.Info().Msgf("Initialize resources: UEIP pool (CIDR: \"%s\"), TEID pool (size: %d)", config.Conf.UEIPPool, config.Conf.FTEIDPool)
 	resourceManager, err := service.NewResourceManager(config.Conf.UEIPPool, config.Conf.FTEIDPool)
 	if err != nil {
-		log.Error().Msgf("failed to create ResourceManager - err: %v", err)
+		return fmt.Errorf("create resource manager: %w", err)
 	}
 
 	// Select PFCP profile based on the pfcp_profile config key.
@@ -225,10 +256,10 @@ func main() {
 		connectorFn func(string) (core.AssociationConnector, error)
 	}
 
-	startConn := func(s connSpec) *core.PfcpConnection {
+	startConn := func(s connSpec) (*core.PfcpConnection, error) {
 		conn, err := core.NewPfcpConnection(s.address, s.nodeId, s.n3Ip, s.n9Ip, bpfObjects, resourceManager, dumper, s.sdfNotifyC, profile)
 		if err != nil {
-			log.Fatal().Msgf("Could not create %s connection: %s", s.label, err)
+			return nil, fmt.Errorf("create %s connection: %w", s.label, err)
 		}
 		connectors := make([]core.AssociationConnector, 0, len(s.remoteNodes))
 		for _, rn := range s.remoteNodes {
@@ -241,11 +272,11 @@ func main() {
 		}
 		conn.SetRemoteNodes(connectors)
 		go conn.Run()
-		return conn
+		return conn, nil
 	}
 
 	// Create PFCP (N4) connection
-	pfcpConn := startConn(connSpec{
+	pfcpConn, err := startConn(connSpec{
 		label:       "PFCP",
 		address:     config.Conf.PfcpAddress,
 		nodeId:      config.Conf.PfcpNodeId,
@@ -255,6 +286,9 @@ func main() {
 		remoteNodes: config.Conf.PfcpRemoteNode,
 		connectorFn: profile.N4Connector,
 	})
+	if err != nil {
+		return err
+	}
 	defer pfcpConn.Close()
 
 	// Create Sxa connection (optional — only when sxa_address is configured).
@@ -262,7 +296,7 @@ func main() {
 	// connection entirely rather than binding a UDP socket to an empty address.
 	var sxaConn *core.PfcpConnection
 	if config.Conf.SxaLocalAddress != "" {
-		sxaConn = startConn(connSpec{
+		sxaConn, err = startConn(connSpec{
 			label:       "Sxa",
 			address:     config.Conf.SxaLocalAddress,
 			nodeId:      config.Conf.SxaLocalNodeId,
@@ -272,6 +306,9 @@ func main() {
 			remoteNodes: config.Conf.SxaRemoteNode,
 			connectorFn: profile.SxaConnector,
 		})
+		if err != nil {
+			return err
+		}
 		defer sxaConn.Close()
 	} else {
 		log.Info().Msg("Sxa connection skipped (sxa_address not configured)")
@@ -280,7 +317,7 @@ func main() {
 	// Create Sxb connection (optional — only when sxb_address is configured).
 	var sxbConn *core.PfcpConnection
 	if config.Conf.SxbLocalAddress != "" {
-		sxbConn = startConn(connSpec{
+		sxbConn, err = startConn(connSpec{
 			label:       "Sxb",
 			address:     config.Conf.SxbLocalAddress,
 			nodeId:      config.Conf.SxbLocalNodeId,
@@ -290,6 +327,9 @@ func main() {
 			remoteNodes: config.Conf.SxbRemoteNode,
 			connectorFn: profile.SxbConnector,
 		})
+		if err != nil {
+			return err
+		}
 		defer sxbConn.Close()
 	} else {
 		log.Info().Msg("Sxb connection skipped (sxb_address not configured)")
@@ -334,28 +374,20 @@ func main() {
 	metricsEngine := h.InitMetricsRoute()
 
 	apiSrv := server.New(config.Conf.ApiAddress, engine)
+
 	metricsSrv := server.New(config.Conf.MetricsAddress, metricsEngine)
 
-	// Start api servers
-	go func() {
-		if err := apiSrv.Run(); err != nil {
-			log.Fatal().Msgf("Could not start api server: %s", err.Error())
+	serverErrors := make(chan error, 2)
+	go func() { serverErrors <- apiSrv.Run() }()
+	go func() { serverErrors <- metricsSrv.Run() }()
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := errors.Join(apiSrv.Stop(shutdown), metricsSrv.Stop(shutdown)); err != nil {
+			log.Error().Err(err).Msg("HTTP shutdown failed")
+			runErr = errors.Join(runErr, err)
 		}
 	}()
-
-	// Start metrics servers
-	go func() {
-		if err := metricsSrv.Run(); err != nil {
-			log.Fatal().Msgf("Could not start metrics server: %s", err.Error())
-		}
-	}()
-
-	// Print the contents of the BPF hash map (source IP address -> packet count).
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	assocReleaseFunc := func() {
 		// Request release and clear associations. safeReleaseConn is a no-op
@@ -371,32 +403,25 @@ func main() {
 
 	for {
 		select {
-		case <-ticker.C:
-			// s, err := FormatMapContents(bpfObjects.UpfXdpObjects.UpfPipeline)
-			// if err != nil {
-			// 	log.Printf("Error reading map: %s", err)
-			// 	continue
-			// }
-			// log.Printf("Pipeline map contents:\n%s", s)
-		case <-stopper:
+		case err := <-serverErrors:
+			if err != nil {
+				return fmt.Errorf("HTTP server: %w", err)
+			}
+		case <-ctx.Done():
 			log.Info().Msg("OS signal received. Initiating graceful shutdown...")
-
+			// Keep association release in one hook for the release-lifecycle follow-up.
 			assocReleaseFunc()
-
-			gtpPathManager.Stop()
-
-			if err := apiSrv.Stop(ctx); err != nil {
-				log.Error().Err(err).Msg("Error while stopping API server")
-			}
-			if err := metricsSrv.Stop(ctx); err != nil {
-				log.Error().Err(err).Msg("Error while stopping metrics server")
-			}
-
-			log.Info().Msg("Service has been shut down successfully.")
-
-			return
+			return nil
 		case <-resetAssociationChan:
 			assocReleaseFunc()
 		}
 	}
+}
+
+func newStartupSdfListener(m *kernel.Map) (*ebpf.SdfNotifyListener, error) {
+	listener, err := ebpf.NewSdfNotifyListener(m)
+	if err != nil {
+		return nil, fmt.Errorf("initialize SDF notification listener: %w", err)
+	}
+	return listener, nil
 }

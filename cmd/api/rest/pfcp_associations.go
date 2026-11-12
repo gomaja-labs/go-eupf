@@ -63,7 +63,12 @@ func (h *ApiHandler) listPfcpAssociationsFull(c *gin.Context) {
 // @Success 204 "No Content"
 // @Router /pfcp_associations/release [get]
 func (h *ApiHandler) pfcpAssociationRelease(c *gin.Context) {
-	h.associationReleaseChan <- struct{}{}
+	select {
+	case h.associationReleaseChan <- struct{}{}:
+	default:
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "association release unavailable or already pending"})
+		return
+	}
 
 	c.Status(http.StatusNoContent)
 }
