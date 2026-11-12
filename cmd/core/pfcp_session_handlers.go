@@ -50,7 +50,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), isTraced, nil
 	}
 
-	localSEID := association.NewLocalSEID()
+	localSEID := conn.newLocalSEID()
 	session := NewSession(localSEID, remoteSEID.SEID, imsi, msisdn, isTraced)
 	printSessionEstablishmentRequest(req, conn.profile)
 

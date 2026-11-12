@@ -51,6 +51,7 @@ type PfcpConnection struct {
 	done      chan struct{}
 
 	stateMu           sync.RWMutex // Owns all associations, sessions and their indexes.
+	nextSessionID     uint64       // UPF-wide SEID allocator, also owned by stateMu.
 	transport         transportState
 	requestTimeout    time.Duration
 	requestRetries    uint32

@@ -12,7 +12,6 @@ import "time"
 type NodeAssociation struct {
 	ID                string
 	Addr              string
-	NextSessionID     uint64
 	Sessions          map[uint64]*Session
 	RecoveryTimestamp time.Time
 	CPFeatures        []byte
@@ -25,9 +24,30 @@ type NodeAssociation struct {
 }
 
 func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {
-	return &NodeAssociation{ID: remoteNodeID, Addr: addr, NextSessionID: 1, Sessions: make(map[uint64]*Session), sessionEntities: make(map[uint64]string), recoveries: make(map[string]time.Time)}
+	return &NodeAssociation{ID: remoteNodeID, Addr: addr, Sessions: make(map[uint64]*Session), sessionEntities: make(map[uint64]string), recoveries: make(map[string]time.Time)}
 }
-func (association *NodeAssociation) NewLocalSEID() uint64 {
-	association.NextSessionID++
-	return association.NextSessionID
+
+// newLocalSEID runs under stateMu, like the session registry it consults.
+// TS 29.244 V20.1.0 clause 5.6.2: a SEID identifies a session at the UPF's
+// address, independently of the CP peer that owns the session.
+func (conn *PfcpConnection) newLocalSEID() uint64 {
+	if conn.nextSessionID == 0 {
+		conn.nextSessionID = 1
+	}
+	for {
+		conn.nextSessionID++
+		if conn.nextSessionID == 0 {
+			continue
+		}
+		occupied := false
+		for _, association := range conn.NodeAssociations {
+			if _, ok := association.Sessions[conn.nextSessionID]; ok {
+				occupied = true
+				break
+			}
+		}
+		if !occupied {
+			return conn.nextSessionID
+		}
+	}
 }

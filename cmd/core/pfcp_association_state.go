@@ -90,9 +90,6 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 					fresh.RecoveryTimestamp = old.RecoveryTimestamp
 				}
 				fresh.sessionEntities[seid] = entity
-				if seid > fresh.NextSessionID {
-					fresh.NextSessionID = seid
-				}
 				retained = true
 			} else {
 				conn.DeleteSession(session)
