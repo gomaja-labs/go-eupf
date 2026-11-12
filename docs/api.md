@@ -212,7 +212,7 @@ Method | URL                              | Description                         
 ------ | -------------------------------- | --------------------------------------------------------------------------- | --------------------------------
 `GET`  | `/api/v1/pfcp_associations`      | Lists the PFCP associations. Returns a list of `NodeAssociationDescription` | `/api/v1/pfcp_associations`
 `GET`  | `/api/v1/pfcp_associations/full` | Lists the full PFCP associations. Returns objects of `NodeAssociation`      | `/api/v1/pfcp_associations/full`
-`POST` | `/api/v1/pfcp_associations/release` | Calls for PFCP Association Release Request for all established associations. Returns nothing      | `/api/v1/pfcp_associations/release`
+`POST` | `/api/v1/pfcp_associations/release` | Starts the UP-initiated release of every association; associations and sessions stay until the CP releases them or the grace period ends ([PFCP transport](pfcp-transport.md)). Returns 204 when started, 503 when a release is already pending | `/api/v1/pfcp_associations/release`
 
 ### - PFCP sessions
 
@@ -254,7 +254,7 @@ The API listens on loopback by default. A non-loopback bind requires `UPF_API_TO
 curl -H "Authorization: Bearer $UPF_API_TOKEN" http://127.0.0.1:8080/api/v1/config
 ```
 
-An empty session result currently serializes as JSON `null`. Session deletion takes exactly one query key (`imsi`, `msisdn` or `id`) and returns a JSON message/error object. Trace creation returns empty HTTP 201; a trace lookup with no matches returns empty HTTP 404. Association release returns empty HTTP 204. Configuration edits return HTTP 500 when the runtime edit is applied but the selected configuration file cannot be written.
+An empty session result currently serializes as JSON `null`. Session deletion takes exactly one query key (`imsi`, `msisdn` or `id`) and returns a JSON message/error object. Trace creation returns empty HTTP 201; a trace lookup with no matches returns empty HTTP 404. Association release returns empty HTTP 204 once the release has started. Configuration edits return HTTP 500 when the runtime edit is applied but the selected configuration file cannot be written.
 
 To change XDP attach mode, first submit `interface_name: []` with the current mode to detach all links, then submit the desired interfaces and mode. Changing the mode while links are active returns HTTP 409.
 
