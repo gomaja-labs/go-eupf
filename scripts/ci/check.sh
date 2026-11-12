@@ -20,9 +20,11 @@ test)
 	go generate ./cmd/...
 	go build ./...
 	go vet ./...
-	go test -exec sudo ./... -count=1
-	go test -exec sudo -race -count=1 ./cmd/core/... ./cmd/api/... ./cmd/config/...
 	(cd scripts/enb-load-test/enb-emulator && go build ./... && go test ./... -count=1 && go vet ./...)
+	status=0
+	go test -exec sudo ./... -count=1 || status=1
+	go test -exec sudo -race -count=1 ./cmd/core/... ./cmd/api/... ./cmd/config/... || status=1
+	exit "$status"
 	;;
 lint)
 	go tool actionlint
@@ -32,8 +34,8 @@ lint)
 	go mod tidy -diff
 	(cd scripts/enb-load-test/enb-emulator && go mod tidy -diff)
 	go tool staticcheck ./...
-	golangci-lint run ./...
 	(cd scripts/enb-load-test/enb-emulator && go vet ./... && golangci-lint run ./...)
+	golangci-lint run ./...
 	;;
 smoke)
 	sudo mount -t bpf bpf /sys/fs/bpf
