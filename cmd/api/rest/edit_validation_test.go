@@ -31,8 +31,8 @@ func validEditConfig() config.UpfConfig {
 	}
 }
 
-// R1-05 (all REST bindings): every 200 edit is persisted; the persisted values
-// must still pass the validation config.Init applies at the next start.
+// Every accepted edit of every REST binding is persisted, and the persisted
+// values must still pass the validation config.Init applies at the next start.
 func TestEditsKeepStartupValidity(t *testing.T) {
 	baseline := validEditConfig()
 	if err := baseline.Validate(); err != nil {
@@ -76,8 +76,8 @@ func TestEditsKeepStartupValidity(t *testing.T) {
 	}
 }
 
-// R1-05: a 200 runtime edit must not persist a configuration that the startup
-// validator rejects (the next start exits in config.Init).
+// An accepted runtime edit must not persist a configuration that the startup
+// validator rejects (the next start would exit in config.Init).
 func TestTimerEditKeepsStartupValidity(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfg := validEditConfig()
@@ -104,7 +104,7 @@ func TestTimerEditKeepsStartupValidity(t *testing.T) {
 	}
 }
 
-// R1-07: an edit that fails must not leave the PFCP endpoint half-applied.
+// An edit that fails must not leave the PFCP endpoint half-applied.
 func TestPFCPEndpointEditIsAtomic(t *testing.T) {
 	t.Chdir(t.TempDir())
 	old := config.Conf
