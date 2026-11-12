@@ -2,9 +2,10 @@ package core
 
 import (
 	"encoding/hex"
-	"github.com/gomaja-labs/go-pfcp/ie"
 	"reflect"
 	"testing"
+
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 func TestHuaweiParseOuterHeaderCreationFields(t *testing.T) {
