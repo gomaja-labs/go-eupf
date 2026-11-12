@@ -242,4 +242,4 @@ cd {repo_root}
 go generate ./cmd/...
 ```
 
-This runs `swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go` (see the `go:generate` directive in `cmd/main.go`).
+This runs `go tool swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go` (see the `go:generate` directive in `cmd/main.go`).

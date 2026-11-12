@@ -1,6 +1,8 @@
 //go:build wireinject
 // +build wireinject
 
+//go:generate go tool wire
+
 package injection
 
 import (

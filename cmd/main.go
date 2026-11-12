@@ -25,7 +25,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-//go:generate swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go
+//go:generate go tool swag init --parseDependency --parseInternal --parseDepth 1 -g api/rest/handler.go
 
 func waitForAllAssocReleases(ctx context.Context, conns ...*core.PfcpConnection) {
 	const (

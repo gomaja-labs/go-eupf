@@ -1,5 +1,5 @@
 module test_proj
 
-go 1.24.4
+go 1.26.0
 
-require github.com/gopacket/gopacket v1.3.1
+require github.com/gopacket/gopacket v1.7.7
