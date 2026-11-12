@@ -98,6 +98,9 @@ func TestProtocolDecodeErrors(t *testing.T) {
 		// TS 29.244 V20.1.0 clauses 7.6.2, 7.6.3, 7.6.4, 7.6.6-7.6.8.
 		{"unsupported-version", unsupported, message.MsgTypeVersionNotSupportedResponse, 0, 0},
 		{"one-octet-unsupported-version", []byte{0x40}, message.MsgTypeVersionNotSupportedResponse, 0, 0},
+		{"missing-heartbeat-timestamp", protocolWire(t, message.NewHeartbeatRequest(0x123456)), 0, 0, 0},
+		{"short-heartbeat-timestamp", protocolWire(t, message.NewHeartbeatRequest(0x123456, ie.New(ie.RecoveryTimeStamp, []byte{1}))), 0, 0, 0},
+		{"missing-heartbeat-response-timestamp", protocolWire(t, message.NewHeartbeatResponse(0x123456)), 0, 0, 0},
 		{"incomplete-header", []byte{0x20, 5, 0, 4}, 0, 0, 0},
 		{"unknown-type", []byte{0x20, 200, 0, 4, 0, 0, 1, 0}, 0, 0, 0},
 		{"missing-node", setup(stamp), message.MsgTypeAssociationSetupResponse, ie.CauseMandatoryIEMissing, ie.NodeID},
@@ -517,5 +520,72 @@ func TestProtocolExtendablePDRID(t *testing.T) {
 	}
 	if session.PDRs[1].Teid != 10 || response.SEID() != 22 || response.Sequence() != 91 {
 		t.Fatal("extended ID changed rule or response header")
+	}
+}
+
+func TestProtocolMalformedSessionUsesPeerSEID(t *testing.T) {
+	conn := newProtocolConnection(t)
+	association := NewNodeAssociation("synthetic.example", "127.0.0.1")
+	association.Sessions[11] = NewSession(11, 22, "", "", false)
+	conn.NodeAssociations["127.0.0.1"] = association
+	wire := append(protocolWire(t, message.NewSessionModificationRequest(11, 94)), 0, byte(ie.UpdatePDR), 0, 8, 0)
+	wire[2], wire[3] = byte((len(wire)-4)>>8), byte(len(wire)-4)
+	// TS 29.244 V20.1.0 clauses 7.2.2.4.1 and 7.6.7: reject with the known peer endpoint identifier.
+	reply := exchangeProtocolDatagram(t, conn, wire)
+	response, ok := reply.(*message.SessionModificationResponse)
+	if !ok {
+		t.Fatalf("response %T", reply)
+	}
+	cause, err := response.Cause.Cause()
+	if err != nil || cause != ie.CauseInvalidLength {
+		t.Fatalf("cause %d: %v", cause, err)
+	}
+	if response.SEID() != 22 || response.Sequence() != 94 {
+		t.Fatalf("header SEID=%d sequence=%d", response.SEID(), response.Sequence())
+	}
+}
+
+func TestProtocolSessionEstablishmentRequirements(t *testing.T) {
+	tests := []struct {
+		name        string
+		node, fseid *ie.IE
+		pdr, far    bool
+		cause       uint8
+		offending   ie.IEType
+		peer        uint64
+	}{
+		{"node", nil, ie.NewFSEID(22, net.IPv4(127, 0, 0, 1), nil), true, true, 66, ie.NodeID, 22},
+		{"fseid", ie.NewNodeIDFQDN("synthetic.example"), nil, true, true, 66, ie.FSEID, 0},
+		{"incorrect-fseid", ie.NewNodeIDFQDN("synthetic.example"), ie.New(ie.FSEID, []byte{2}), true, true, 69, ie.FSEID, 0},
+		{"pdr-list", ie.NewNodeIDFQDN("synthetic.example"), ie.NewFSEID(22, net.IPv4(127, 0, 0, 1), nil), false, true, 66, ie.CreatePDR, 22},
+		{"far-list", ie.NewNodeIDFQDN("synthetic.example"), ie.NewFSEID(22, net.IPv4(127, 0, 0, 1), nil), true, false, 66, ie.CreateFAR, 22},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			fields := []*ie.IE{tt.node, tt.fseid}
+			if tt.pdr {
+				fields = append(fields, ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(0))))
+			}
+			if tt.far {
+				fields = append(fields, ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(1)))
+			}
+			reply := exchangeProtocolDatagram(t, conn, protocolWire(t, message.NewSessionEstablishmentRequest(0, 97, fields...)))
+			response, ok := reply.(*message.SessionEstablishmentResponse)
+			if !ok {
+				t.Fatalf("response %T", reply)
+			}
+			cause, err := response.Cause.Cause()
+			if err != nil || cause != tt.cause {
+				t.Fatalf("cause %d: %v", cause, err)
+			}
+			offending, err := response.OffendingIE.OffendingIE()
+			if err != nil || offending != tt.offending {
+				t.Fatalf("offending %d: %v", offending, err)
+			}
+			if response.SEID() != tt.peer || response.Sequence() != 97 || len(conn.NodeAssociations) != 0 {
+				t.Fatal("wrong rejection header or mutated association")
+			}
+		})
 	}
 }

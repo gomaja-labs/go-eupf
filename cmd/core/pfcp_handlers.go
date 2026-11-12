@@ -42,7 +42,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 				if !decode.TypeUnknown {
 					offending = ie.NewOffendingIE(decode.Type)
 				}
-				response := conn.errorResponse(failure.Header.Type+1, 0, failure.Header.Sequence(), ie.CauseInvalidLength, offending)
+				response := conn.errorResponse(failure.Header.Type+1, conn.peerSessionSEID(failure.Header.SEID, addr.IP.String()), failure.Header.Sequence(), ie.CauseInvalidLength, offending)
 				if response != nil {
 					if err := conn.SendMessage(response, addr); err != nil {
 						results = append(results, err)

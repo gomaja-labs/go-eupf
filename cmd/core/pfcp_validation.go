@@ -281,8 +281,12 @@ func (conn *PfcpConnection) peerSEID(request message.Message, addr string) uint6
 		return 0
 	}
 	// TS 29.244 V20.1.0 clauses 7.2.2.4.1 and 7.2.2.4.2: the response uses the peer's SEID.
+	return conn.peerSessionSEID(request.SEID(), addr)
+}
+
+func (conn *PfcpConnection) peerSessionSEID(localSEID uint64, addr string) uint64 {
 	if association := conn.GetAssociation(addr); association != nil {
-		if session := association.Sessions[request.SEID()]; session != nil {
+		if session := association.Sessions[localSEID]; session != nil {
 			return session.RemoteSEID
 		}
 	}
