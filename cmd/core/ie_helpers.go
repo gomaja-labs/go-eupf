@@ -10,11 +10,7 @@ func DecodeDigitsFromBytes(buffer []byte) string {
 		decoded[2*i], decoded[2*i+1] = hexDigit(b&0x0F), hexDigit((b&0xF0)>>4)
 	}
 
-	digits := string(decoded)
-	if digits[len(digits)-1] == 'f' {
-		return digits[:len(digits)-1]
-	}
-	return digits
+	return strings.TrimSuffix(string(decoded), "f")
 }
 
 func hexDigit(nibble byte) byte {
