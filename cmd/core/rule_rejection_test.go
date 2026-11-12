@@ -35,7 +35,7 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 			}
 			response := reply.(*message.SessionEstablishmentResponse)
 			cause, err := response.Cause.Cause()
-			wantCause := uint8(ie.CauseRuleCreationModificationFailure)
+			wantCause := ie.CauseRuleCreationModificationFailure
 			if tt.name == "unsupported-sdf" {
 				wantCause = ie.CauseServiceNotSupported
 			}

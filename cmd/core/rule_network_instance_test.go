@@ -31,7 +31,7 @@ func TestNetworkInstanceAliasesAndAdmission(t *testing.T) {
 					t.Fatal(err)
 				}
 				cause, _ := reply.(*message.SessionEstablishmentResponse).Cause.Cause()
-				want := uint8(ie.CauseRequestAccepted)
+				want := ie.CauseRequestAccepted
 				if name == "unconfigured" {
 					want = ie.CauseRuleCreationModificationFailure
 				}

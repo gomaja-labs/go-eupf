@@ -111,7 +111,7 @@ func TestRuleTransactionUsesFinalBucketCapacity(t *testing.T) {
 
 func TestRuleTransactionPublishesIPv4DownlinkKey(t *testing.T) {
 	b := loadDatapath(t)
-	for _, ip := range []net.IP{net.IP{203, 0, 113, 17}, net.ParseIP("203.0.113.17")} {
+	for _, ip := range []net.IP{{203, 0, 113, 17}, net.ParseIP("203.0.113.17")} {
 		tx, err := b.BeginRuleTransaction(77)
 		if err != nil {
 			t.Fatal(err)
