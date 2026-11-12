@@ -75,13 +75,15 @@ type Qer struct {
 }
 
 type UpfConfig struct {
-	PfcpPeerAllowList     []string `mapstructure:"pfcp_peer_allow_list" json:"pfcp_peer_allow_list"`
-	PfcpRequestTimeout    uint32   `mapstructure:"pfcp_request_timeout" json:"pfcp_request_timeout"`
-	PfcpRequestRetries    uint32   `mapstructure:"pfcp_request_retries" json:"pfcp_request_retries"`
-	PfcpResponseRetention uint32   `mapstructure:"pfcp_response_retention" json:"pfcp_response_retention"`
-	PfcpMaxTransactions   uint32   `mapstructure:"pfcp_max_transactions" json:"pfcp_max_transactions"`
-	PfcpMaxAssociations   uint32   `mapstructure:"pfcp_max_associations" json:"pfcp_max_associations"`
-	HeartbeatFailureGrace uint32   `mapstructure:"heartbeat_failure_grace" json:"heartbeat_failure_grace"`
+	PfcpPeerAllowList         []string `mapstructure:"pfcp_peer_allow_list" json:"pfcp_peer_allow_list"`
+	PfcpRequestTimeout        uint32   `mapstructure:"pfcp_request_timeout" json:"pfcp_request_timeout"`
+	PfcpRequestRetries        uint32   `mapstructure:"pfcp_request_retries" json:"pfcp_request_retries"`
+	PfcpResponseRetention     uint32   `mapstructure:"pfcp_response_retention" json:"pfcp_response_retention"`
+	PfcpMaxReplayEntries      uint32   `mapstructure:"pfcp_max_replay_entries" json:"pfcp_max_replay_entries"`
+	PfcpMaxOriginatedRequests uint32   `mapstructure:"pfcp_max_originated_requests" json:"pfcp_max_originated_requests"`
+	PfcpReplayMemoryMiB       uint32   `mapstructure:"pfcp_replay_memory_mib" json:"pfcp_replay_memory_mib"`
+	PfcpMaxAssociations       uint32   `mapstructure:"pfcp_max_associations" json:"pfcp_max_associations"`
+	HeartbeatFailureGrace     uint32   `mapstructure:"heartbeat_failure_grace" json:"heartbeat_failure_grace"`
 
 	InterfaceName           []string       `mapstructure:"interface_name" json:"interface_name"`
 	XDPAttachMode           string         `mapstructure:"xdp_attach_mode" validate:"oneof=generic native offload" json:"xdp_attach_mode"`
@@ -208,7 +210,9 @@ func defineFlags() {
 	pflag.Uint32("pfcp-request-timeout", 5, "PFCP T1 timeout in seconds")
 	pflag.Uint32("pfcp-request-retries", 3, "PFCP N1 retransmissions after the initial request")
 	pflag.Uint32("pfcp-response-retention", 60, "Duplicate PFCP request response retention in seconds")
-	pflag.Uint32("pfcp-max-transactions", 4096, "Maximum outstanding requests and cached responses per PFCP connection")
+	pflag.Uint32("pfcp-max-replay-entries", 131072, "Maximum retained request outcomes per PFCP connection")
+	pflag.Uint32("pfcp-max-originated-requests", 4096, "Maximum outstanding originated requests per PFCP connection")
+	pflag.Uint32("pfcp-replay-memory-mib", 128, "Replay cache accounting budget in MiB per PFCP connection")
 	pflag.Uint32("pfcp-max-associations", 1024, "Maximum associations per PFCP connection")
 	pflag.Uint32("heartbeat-failure-grace", 0, "Additional unreachable seconds after exhausting heartbeat retries before session deletion")
 	pflag.Uint32("hbretries", 3, "Number of heartbeat retries")
@@ -313,7 +317,9 @@ func initCommonConfig() error {
 	_ = commonConfigV.BindPFlag("pfcp_request_timeout", pflag.Lookup("pfcp-request-timeout"))
 	_ = commonConfigV.BindPFlag("pfcp_request_retries", pflag.Lookup("pfcp-request-retries"))
 	_ = commonConfigV.BindPFlag("pfcp_response_retention", pflag.Lookup("pfcp-response-retention"))
-	_ = commonConfigV.BindPFlag("pfcp_max_transactions", pflag.Lookup("pfcp-max-transactions"))
+	_ = commonConfigV.BindPFlag("pfcp_max_replay_entries", pflag.Lookup("pfcp-max-replay-entries"))
+	_ = commonConfigV.BindPFlag("pfcp_max_originated_requests", pflag.Lookup("pfcp-max-originated-requests"))
+	_ = commonConfigV.BindPFlag("pfcp_replay_memory_mib", pflag.Lookup("pfcp-replay-memory-mib"))
 	_ = commonConfigV.BindPFlag("pfcp_max_associations", pflag.Lookup("pfcp-max-associations"))
 	_ = commonConfigV.BindPFlag("heartbeat_failure_grace", pflag.Lookup("heartbeat-failure-grace"))
 	_ = commonConfigV.BindPFlag("heartbeat_retries", pflag.Lookup("hbretries"))

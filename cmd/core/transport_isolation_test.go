@@ -162,20 +162,20 @@ func TestUnnegotiatedBundleProducesNoResponse(t *testing.T) {
 	}
 }
 
-func TestResponseBudgetsAndMinimumReplayWindow(t *testing.T) {
+func TestResponseBudgetsProtectConfiguredRetention(t *testing.T) {
 	conn := newProtocolConnection(t)
-	conn.maxTransactions = 1
+	conn.maxReplayEntries = 1
 	key := requestKey{peer: "127.0.0.1:8805", sequence: 1, typ: 5}
 	conn.cacheReply(key, [32]byte{1}, []byte{1})
 	created := conn.transport.responseExpiry.Front().Value.(*responseIndex).created
 	next := requestKey{peer: "127.0.0.1:9999", sequence: 2, typ: 5}
-	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(minimumReplayWindow-time.Nanosecond)); err == nil {
+	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(conn.responseRetention-time.Nanosecond)); err == nil {
 		t.Fatal("evicted within minimum replay window")
 	}
 	if _, _, err := conn.cachedReplyAt(requestKey{peer: "127.0.0.2:8805", sequence: 2, typ: 5}, [32]byte{2}, created); err == nil {
 		t.Fatal("another association bypassed the protected global bound")
 	}
-	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(minimumReplayWindow)); err != nil {
+	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(conn.responseRetention)); err != nil {
 		t.Fatal(err)
 	}
 	if len(conn.transport.responses) != 0 {

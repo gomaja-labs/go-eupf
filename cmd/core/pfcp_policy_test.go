@@ -89,8 +89,8 @@ func TestTransportPolicyAndHeartbeatGrace(t *testing.T) {
 	prunesBefore := counterValue(t, PfcpAssociationPrunes)
 	timeoutsBefore := counterValue(t, PfcpRequestTimeouts.WithLabelValues("Heartbeat Request"))
 	retriesBefore := counterValue(t, PfcpRequestRetransmissions.WithLabelValues("Heartbeat Request"))
-	conn := policyConnection(t, config.UpfConfig{PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxTransactions: 128, PfcpMaxAssociations: 16, HeartbeatTimeout: 1, HeartbeatRetries: 1, HeartbeatInterval: 1, HeartbeatFailureGrace: 3})
-	if conn.requestTimeout != 2*time.Second || conn.requestRetries != 4 || conn.responseRetention != 30*time.Second || conn.maxTransactions != 128 || conn.maxAssociations != 16 || conn.heartbeatGrace != 3*time.Second {
+	conn := policyConnection(t, config.UpfConfig{PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxReplayEntries: 128, PfcpMaxAssociations: 16, HeartbeatTimeout: 1, HeartbeatRetries: 1, HeartbeatInterval: 1, HeartbeatFailureGrace: 3})
+	if conn.requestTimeout != 2*time.Second || conn.requestRetries != 4 || conn.responseRetention != 30*time.Second || conn.maxReplayEntries != 128 || conn.maxAssociations != 16 || conn.heartbeatGrace != 3*time.Second {
 		t.Fatal("configuration not applied to transport")
 	}
 	peer := transactionPeer(t)

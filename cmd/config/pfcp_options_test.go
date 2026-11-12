@@ -10,7 +10,7 @@ import (
 func TestPFCPOptionsDecodeAndValidate(t *testing.T) {
 	v := viper.New()
 	v.SetConfigType("yaml")
-	err := v.ReadConfig(strings.NewReader("pfcp_peer_allow_list: [192.0.2.0/24, '2001:db8::1']\npfcp_request_timeout: 2\npfcp_request_retries: 4\npfcp_response_retention: 30\npfcp_max_transactions: 128\npfcp_max_associations: 16\nheartbeat_failure_grace: 15\n"))
+	err := v.ReadConfig(strings.NewReader("pfcp_peer_allow_list: [192.0.2.0/24, '2001:db8::1']\npfcp_request_timeout: 2\npfcp_request_retries: 4\npfcp_response_retention: 30\npfcp_max_replay_entries: 128\npfcp_max_associations: 16\nheartbeat_failure_grace: 15\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestPFCPOptionsDecodeAndValidate(t *testing.T) {
 	if err := config.ValidatePFCP(); err != nil {
 		t.Fatal(err)
 	}
-	if len(config.PfcpPeerAllowList) != 2 || config.PfcpRequestTimeout != 2 || config.PfcpRequestRetries != 4 || config.PfcpResponseRetention != 30 || config.PfcpMaxTransactions != 128 || config.PfcpMaxAssociations != 16 || config.HeartbeatFailureGrace != 15 {
+	if len(config.PfcpPeerAllowList) != 2 || config.PfcpRequestTimeout != 2 || config.PfcpRequestRetries != 4 || config.PfcpResponseRetention != 30 || config.PfcpMaxReplayEntries != 128 || config.PfcpMaxAssociations != 16 || config.HeartbeatFailureGrace != 15 {
 		t.Fatal("incorrect decoded PFCP options")
 	}
 }
@@ -40,7 +40,12 @@ func TestPFCPOptionBounds(t *testing.T) {
 		{"exact-retention", UpfConfig{PfcpRequestTimeout: 5, PfcpRequestRetries: 3, PfcpResponseRetention: 20}, true},
 		{"retry-bound", UpfConfig{PfcpRequestRetries: 101}, false},
 		{"timeout-bound", UpfConfig{PfcpRequestTimeout: 3601}, false},
-		{"capacity-bound", UpfConfig{PfcpMaxTransactions: 65537}, false},
+		{"originated-bound", UpfConfig{PfcpMaxOriginatedRequests: 65537}, false},
+		{"memory-too-small", UpfConfig{PfcpReplayMemoryMiB: 15}, false},
+		{"memory-too-large", UpfConfig{PfcpReplayMemoryMiB: 1025}, false},
+		{"memory-minimum", UpfConfig{PfcpReplayMemoryMiB: 16}, true},
+		{"memory-maximum", UpfConfig{PfcpReplayMemoryMiB: 1024}, true},
+		{"capacity-bound", UpfConfig{PfcpMaxReplayEntries: 1048577}, false},
 		{"association-bound", UpfConfig{PfcpMaxAssociations: 65537}, false},
 		{"grace-bound", UpfConfig{HeartbeatFailureGrace: 86401}, false},
 	} {

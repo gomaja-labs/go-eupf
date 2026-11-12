@@ -50,25 +50,27 @@ type PfcpConnection struct {
 	closeOnce sync.Once
 	done      chan struct{}
 
-	stateMu           sync.RWMutex // Owns all associations, sessions and their indexes.
-	nextSessionID     uint64       // UPF-wide SEID allocator, also owned by stateMu.
-	transport         transportState
-	requestTimeout    time.Duration
-	requestRetries    uint32
-	heartbeatTimeout  time.Duration
-	heartbeatRetries  uint32
-	responseRetention time.Duration
-	maxTransactions   uint32
-	maxAssociations   uint32
-	allowedPeers      []netip.Prefix
-	heartbeatEvery    time.Duration
-	setupEvery        time.Duration
-	heartbeatGrace    time.Duration
-	setupRetryAt      map[string]time.Time
-	connectorNodes    map[string]string
-	addressIndex      map[string]map[*NodeAssociation]int
-	responseWait      <-chan error
-	reportCleanup     []reportCleanup
+	stateMu               sync.RWMutex // Owns all associations, sessions and their indexes.
+	nextSessionID         uint64       // UPF-wide SEID allocator, also owned by stateMu.
+	transport             transportState
+	requestTimeout        time.Duration
+	requestRetries        uint32
+	heartbeatTimeout      time.Duration
+	heartbeatRetries      uint32
+	responseRetention     time.Duration
+	maxReplayEntries      uint32
+	maxOriginatedRequests uint32
+	replayMemoryMiB       uint32
+	maxAssociations       uint32
+	allowedPeers          []netip.Prefix
+	heartbeatEvery        time.Duration
+	setupEvery            time.Duration
+	heartbeatGrace        time.Duration
+	setupRetryAt          map[string]time.Time
+	connectorNodes        map[string]string
+	addressIndex          map[string]map[*NodeAssociation]int
+	responseWait          <-chan error
+	reportCleanup         []reportCleanup
 
 	release       *AssociationRelease
 	releasing     bool
@@ -183,7 +185,7 @@ func NewPfcpConnection(
 		PCCRulesNameLinkURRID: pccRulesNameLinkURRID,
 		profile:               profile,
 		requestTimeout:        defaultDuration(config.Conf.PfcpRequestTimeout, 5), requestRetries: config.Conf.PfcpRequestRetries,
-		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxTransactions: config.Conf.PfcpMaxTransactions, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
+		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxReplayEntries: config.Conf.PfcpMaxReplayEntries, maxOriginatedRequests: config.Conf.PfcpMaxOriginatedRequests, replayMemoryMiB: config.Conf.PfcpReplayMemoryMiB, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
 		heartbeatEvery: time.Duration(config.Conf.HeartbeatInterval) * time.Second,
 		setupEvery:     defaultDuration(config.Conf.AssociationSetupTimeout, 5),

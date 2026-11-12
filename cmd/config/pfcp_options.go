@@ -43,14 +43,19 @@ func (c *UpfConfig) ValidatePFCP() error {
 		"pfcp_request_timeout": {c.PfcpRequestTimeout, 3600}, "pfcp_request_retries": {c.PfcpRequestRetries, 100},
 		"heartbeat_timeout": {c.HeartbeatTimeout, 3600}, "heartbeat_retries": {c.HeartbeatRetries, 100},
 		"heartbeat_interval": {c.HeartbeatInterval, 3600}, "heartbeat_failure_grace": {c.HeartbeatFailureGrace, 86400},
-		"pfcp_response_retention": {c.PfcpResponseRetention, 86400}, "pfcp_max_transactions": {c.PfcpMaxTransactions, 65536},
-		"pfcp_max_associations": {c.PfcpMaxAssociations, 65536},
+		"pfcp_response_retention": {c.PfcpResponseRetention, 86400}, "pfcp_max_replay_entries": {c.PfcpMaxReplayEntries, 1048576},
+		"pfcp_max_originated_requests": {c.PfcpMaxOriginatedRequests, 65536},
+		"pfcp_replay_memory_mib":       {c.PfcpReplayMemoryMiB, 1024},
+		"pfcp_max_associations":        {c.PfcpMaxAssociations, 65536},
 	} {
 		if bound.value > bound.max {
 			return fmt.Errorf("%s must not exceed %d", key, bound.max)
 		}
 	}
 
+	if c.PfcpReplayMemoryMiB != 0 && c.PfcpReplayMemoryMiB < 16 {
+		return fmt.Errorf("pfcp_replay_memory_mib must be between 16 and 1024")
+	}
 	timeout := c.PfcpRequestTimeout
 	if timeout == 0 {
 		timeout = 5

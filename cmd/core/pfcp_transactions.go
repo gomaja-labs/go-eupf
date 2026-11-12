@@ -102,7 +102,7 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	if socket != conn.socket() {
 		return nil, fmt.Errorf("PFCP local endpoint changed")
 	}
-	if len(state.pending) >= conn.transactionLimit() || state.pendingBytes+msg.MarshalLen() > 16<<20 {
+	if len(state.pending) >= conn.originatedRequestLimit() || state.pendingBytes+msg.MarshalLen() > 16<<20 {
 		return nil, errTransactionCapacity
 	}
 	// Sequence numbers are unique across the entire local endpoint, including
@@ -138,10 +138,22 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	return wire, nil
 }
 func (conn *PfcpConnection) transactionLimit() int {
-	if conn.maxTransactions == 0 {
+	if conn.maxReplayEntries == 0 {
+		return 131072
+	}
+	return int(conn.maxReplayEntries)
+}
+func (conn *PfcpConnection) originatedRequestLimit() int {
+	if conn.maxOriginatedRequests == 0 {
 		return 4096
 	}
-	return int(conn.maxTransactions)
+	return int(conn.maxOriginatedRequests)
+}
+func (conn *PfcpConnection) replayByteLimit() int {
+	if conn.replayMemoryMiB == 0 {
+		return 128 << 20
+	}
+	return int(conn.replayMemoryMiB) << 20
 }
 
 // matchResponse removes only a response for the same remote endpoint, sequence
@@ -321,14 +333,9 @@ func responseResult(msg message.Message, err error) requestResult {
 	return result
 }
 
-// minimumReplayWindow is local policy, not a peer-advertised N1/T1. TS 29.244
-// V20.1.0 clause 6.4 specifies retransmission but no numeric retention window.
-const minimumReplayWindow = 20 * time.Second
-
-// One connection-wide accounting bound includes encoded responses plus a
-// conservative metadata charge per entry; associations never multiply it.
-const responseByteBudget = 16 << 20
-const responseMetadataBytes = 1024
+// TS 29.244 V20.1.0 clause 6.4: every outcome remains protected for
+// the entire operator-configured peer retransmission window.
+const responseMetadataBytes = 640
 const responseReservation = 65535 + responseMetadataBytes + 512
 
 type responseBudget struct {
@@ -391,49 +398,23 @@ func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now t
 	if owner == "" {
 		return nil, false, nil
 	}
-	for len(state.responses) >= conn.transactionLimit() || state.bytes+responseReservation > responseByteBudget {
-		victim := conn.replayVictimLocked(owner, now)
-		if victim == nil {
-			return nil, true, errTransactionCapacity
-		}
-		state.removeResponse(victim)
+	// Fair shares use associations actually holding entries, including a new
+	// entrant. There is no eviction of unexpired outcomes (clause 6.4).
+	holders := len(state.responseBudgets)
+	if state.responseBudgets[owner] == nil {
+		holders++
+	}
+	holders = max(1, holders)
+	share := (conn.transactionLimit() + holders - 1) / holders
+	byteShare := conn.replayByteLimit() / holders
+	budget := state.responseBudgets[owner]
+	saturated := len(state.responses) >= conn.transactionLimit() || state.bytes+responseReservation > conn.replayByteLimit()
+	unfair := holders > 1 && budget != nil && (budget.entries.Len() >= share || budget.bytes >= byteShare)
+	if saturated || unfair {
+		PfcpReplayDrops.Inc()
+		return nil, true, errTransactionCapacity
 	}
 	return nil, false, nil
-}
-
-// An association below both fair shares can reclaim eligible old entries from
-// the association most above its share. Otherwise it can replace only its own
-// old entries. Protected entries always win over new work (clause 6.4).
-func (conn *PfcpConnection) replayVictimLocked(owner string, now time.Time) *responseIndex {
-	state := &conn.transport
-	peers := len(conn.NodeAssociations)
-	if conn.associationByID(owner) == nil {
-		peers++
-	}
-	peers = max(1, peers)
-	entryShare := max(1, (conn.transactionLimit()+peers-1)/peers)
-	byteShare := responseByteBudget / peers
-	own := state.responseBudgets[owner]
-	below := own == nil || own.entries.Len() < entryShare && own.bytes < byteShare
-	var victim *responseIndex
-	greatest := float64(0)
-	for id, budget := range state.responseBudgets {
-		if id != owner && !below {
-			continue
-		}
-		e := budget.entries.Front().Value.(*responseIndex)
-		if now.Sub(e.created) < minimumReplayWindow {
-			continue
-		}
-		pressure := max(float64(budget.entries.Len())/float64(entryShare), float64(budget.bytes)/float64(byteShare))
-		if id != owner && pressure <= 1 {
-			continue
-		}
-		if victim == nil || pressure > greatest || pressure == greatest && e.created.Before(victim.created) {
-			victim, greatest = e, pressure
-		}
-	}
-	return victim
 }
 
 // The caller holds stateMu across admission, execution and insertion. Reserve
@@ -472,6 +453,9 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	}
 	now := time.Now()
 	cost := len(wire) + len(key.peer) + len(entity) + responseMetadataBytes
+	if wire == nil {
+		cost = responseReservation
+	}
 	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: cost}
 	e.element = budget.entries.PushBack(e)
 	e.expiryElement = state.responseExpiry.PushBack(e)

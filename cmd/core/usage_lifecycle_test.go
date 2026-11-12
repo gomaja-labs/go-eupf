@@ -66,7 +66,7 @@ func TestUsagePollPreservesUnreportedOctets(t *testing.T) {
 func TestUsageReportCapacityKeepsUnreportedUsage(t *testing.T) {
 	maps := &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20}}
 	conn, peer := PreparePfcpConnectionWithMock(t, maps, config.UpfConfig{})
-	conn.maxTransactions = 1
+	conn.maxOriginatedRequests = 1
 	conn.transport.pending = map[uint32]*pendingRequest{1: {}}
 	s := NewSession(2, 42, "", "", false)
 	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.1")

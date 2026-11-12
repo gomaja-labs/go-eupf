@@ -121,7 +121,7 @@ func TestSequenceWrapSkipsOutstanding(t *testing.T) {
 }
 func TestResponseCacheBoundsAndExpiry(t *testing.T) {
 	conn := newProtocolConnection(t)
-	conn.maxTransactions = 1
+	conn.maxReplayEntries = 1
 	conn.responseRetention = time.Second
 	key := requestKey{peer: "127.0.0.1:8805", sequence: 1, typ: 5}
 	digest := [32]byte{1}
@@ -146,7 +146,7 @@ func TestResponseCacheBoundsAndExpiry(t *testing.T) {
 
 func TestResponseCacheCapacityRejectsWithoutExecuting(t *testing.T) {
 	conn := newProtocolConnection(t)
-	conn.maxTransactions = 1
+	conn.maxReplayEntries = 1
 	peer := transactionPeer(t)
 	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
@@ -203,7 +203,7 @@ func TestExpiredHeartbeatCannotPruneReplacement(t *testing.T) {
 
 func TestHeartbeatAnsweredWhenResponseCacheFull(t *testing.T) {
 	conn := newProtocolConnection(t)
-	conn.maxTransactions = 1
+	conn.maxReplayEntries = 1
 	peer := transactionPeer(t)
 	conn.cacheReply(requestKey{peer: "192.0.2.1:8805", sequence: 1, typ: message.MsgTypeAssociationSetupRequest}, [32]byte{1}, []byte{1})
 	conn.Handle(protocolWire(t, message.NewHeartbeatRequest(4, ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp))), peer.LocalAddr().(*net.UDPAddr))
@@ -262,6 +262,7 @@ func TestPendingEncodedByteBudget(t *testing.T) {
 }
 func TestResponseCacheEncodedByteBudget(t *testing.T) {
 	conn := newProtocolConnection(t)
+	conn.replayMemoryMiB = 16
 	peer := transactionPeer(t)
 	associationSetup(t, conn, "127.0.0.1", 100)
 	calls := 0
@@ -273,7 +274,7 @@ func TestResponseCacheEncodedByteBudget(t *testing.T) {
 		conn.Handle(protocolWire(t, message.NewAssociationUpdateRequest(uint32(i+1), ie.NewNodeIDFQDN("synthetic.example"))), peer.LocalAddr().(*net.UDPAddr))
 		_ = peer.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
 		if _, _, err := peer.ReadFromUDP(make([]byte, 65535)); err != nil {
-			if calls != i || conn.transport.bytes > responseByteBudget {
+			if calls != i || conn.transport.bytes > conn.replayByteLimit() {
 				t.Fatal("cache executed beyond its byte budget")
 			}
 			return

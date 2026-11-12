@@ -89,6 +89,54 @@ func TestUPInitiatedSetupPreservesEstablishedSessions(t *testing.T) {
 	}
 }
 
+func TestSlowSuccessfulCleanupRemainsNonfatal(t *testing.T) {
+	pipelineQuiet(t)
+	old := config.Conf
+	config.Conf = config.UpfConfig{}
+	t.Cleanup(func() { config.Conf = old })
+	resources, err := service.NewResourceManager("10.60.0.0/16", 65535)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, resources, nil, nil, DefaultProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Close)
+	cp := identityPeer(t, "127.0.0.2", 0)
+	pipelineSetup(t, conn, cp, ie.NewNodeIDFQDN("cp.example"), 1)
+	assoc := conn.associationByID("cp.example")
+	probe := NewSession(1, 1, "", "", false)
+	conn.stateMu.Lock()
+	start := time.Now()
+	if err := conn.DeleteSession(probe); err != nil {
+		t.Fatal(err)
+	}
+	per := time.Since(start)
+	conn.stateMu.Unlock()
+	sessions := int(4*AssociationCleanupTimeout/per) + 10
+	if sessions > 20000 {
+		sessions = 20000
+	}
+	for i := 0; i < sessions; i++ {
+		s := NewSession(uint64(1000+i), uint64(1000+i), "", "", false)
+		s.CPFSEIDIPv4 = net.ParseIP("127.0.0.2").To4()
+		assoc.Sessions[s.LocalSEID] = s
+	}
+	start = time.Now()
+	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(5, ie.NewNodeIDFQDN("cp.example"))), cp.LocalAddr().(*net.UDPAddr))
+	held := time.Since(start)
+	reply := pipelineRead(t, cp, time.Second)
+	conn.stateMu.RLock()
+	remaining, failed := len(assoc.Sessions), assoc.cleanupError
+	conn.stateMu.RUnlock()
+	t.Logf("one DeleteSession = %v; %d sessions; CP Release handler held stateMu %v; response=%v; sessions left=%d; any deletion error=%v; FatalError=%v",
+		per, sessions, held.Round(time.Millisecond), reply != nil, remaining, failed, conn.FatalError())
+	if failed == nil && conn.FatalError() != nil {
+		t.Errorf("no session deletion failed, yet cleanup was declared fatal after %v (process exits non-zero)", AssociationCleanupTimeout)
+	}
+}
+
 func TestHeartbeatCostIndependentOfSessionCount(t *testing.T) {
 	pipelineQuiet(t)
 	for _, n := range []int{0, 10000, 65535} {
@@ -112,6 +160,53 @@ func TestHeartbeatCostIndependentOfSessionCount(t *testing.T) {
 		t.Logf("sessions=%d: %v per unassociated Heartbeat Request (%d answered); saturation at about %.0f requests/s",
 			n, per, answered, float64(time.Second)/float64(per))
 		conn.Close()
+	}
+}
+
+func TestReplayRetentionProtectsDelayedRetransmissions(t *testing.T) {
+	pipelineQuiet(t)
+	conn := identityConnection(t)
+	conn.responseRetention = 60 * time.Second
+	conn.maxReplayEntries = 4
+	executions := 0
+	inner := HandlePfcpSessionDeletionRequest
+	conn.pfcpHandlerMap = PfcpHandlerMap{}
+	for k, v := range pfcpHandlers {
+		conn.pfcpHandlerMap[k] = v
+	}
+	conn.pfcpHandlerMap[message.MsgTypeSessionDeletionRequest] = func(c *PfcpConnection, m message.Message, addr string) (message.Message, bool, error) {
+		if m.Sequence() == 2 {
+			executions++
+		}
+		return inner(c, m, addr)
+	}
+	a := identityPeer(t, "127.70.0.1", 0)
+	b := identityPeer(t, "127.70.0.2", 0)
+	pipelineSetup(t, conn, a, ie.NewNodeIDFQDN("a.example"), 1)
+	pipelineSetup(t, conn, b, ie.NewNodeIDFQDN("b.example"), 1)
+	original := protocolWire(t, message.NewSessionDeletionRequest(42, 2))
+	conn.Handle(original, a.LocalAddr().(*net.UDPAddr))
+	conn.Handle(protocolWire(t, message.NewSessionDeletionRequest(43, 3)), a.LocalAddr().(*net.UDPAddr))
+	pipelineDrain(a)
+	pipelineDrain(b)
+	conn.transport.mu.Lock()
+	for e := conn.transport.responseExpiry.Front(); e != nil; e = e.Next() {
+		index := e.Value.(*responseIndex)
+		age := 25 * time.Second
+		if index.key.typ == message.MsgTypeAssociationSetupRequest {
+			age = 61 * time.Second
+		}
+		index.created, index.expires = index.created.Add(-age), index.expires.Add(-age)
+	}
+	conn.transport.mu.Unlock()
+	conn.maxReplayEntries = 2 // two outcomes fill the connection-wide budget
+	conn.Handle(protocolWire(t, message.NewSessionDeletionRequest(44, 4)), b.LocalAddr().(*net.UDPAddr))
+	pipelineDrain(b)
+	conn.Handle(original, a.LocalAddr().(*net.UDPAddr)) // the CP's retransmission, 25 s after the original
+	pipelineDrain(a)
+	t.Logf("retention %v, protected window %v: the 25 s old request executed %d times", conn.responseRetention, conn.responseRetention, executions)
+	if executions != 1 {
+		t.Errorf("retransmission inside the configured retention executed again")
 	}
 }
 
@@ -214,53 +309,6 @@ func TestAddressReferencesFollowSessionChanges(t *testing.T) {
 	}
 	if conn.GetAssociation("127.0.0.7") != assoc {
 		t.Fatal("deletion removed another session's address")
-	}
-}
-func TestSlowSuccessfulCleanupRemainsNonfatal(t *testing.T) {
-	pipelineQuiet(t)
-	old := config.Conf
-	config.Conf = config.UpfConfig{}
-	t.Cleanup(func() { config.Conf = old })
-	resources, err := service.NewResourceManager("10.60.0.0/16", 65535)
-	if err != nil {
-		t.Fatal(err)
-	}
-	conn, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, resources, nil, nil, DefaultProfile{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(conn.Close)
-	cp := identityPeer(t, "127.0.0.2", 0)
-	pipelineSetup(t, conn, cp, ie.NewNodeIDFQDN("cp.example"), 1)
-	assoc := conn.associationByID("cp.example")
-	probe := NewSession(1, 1, "", "", false)
-	conn.stateMu.Lock()
-	start := time.Now()
-	if err := conn.DeleteSession(probe); err != nil {
-		t.Fatal(err)
-	}
-	per := time.Since(start)
-	conn.stateMu.Unlock()
-	sessions := int(4*AssociationCleanupTimeout/per) + 10
-	if sessions > 20000 {
-		sessions = 20000
-	}
-	for i := 0; i < sessions; i++ {
-		s := NewSession(uint64(1000+i), uint64(1000+i), "", "", false)
-		s.CPFSEIDIPv4 = net.ParseIP("127.0.0.2").To4()
-		assoc.Sessions[s.LocalSEID] = s
-	}
-	start = time.Now()
-	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(5, ie.NewNodeIDFQDN("cp.example"))), cp.LocalAddr().(*net.UDPAddr))
-	held := time.Since(start)
-	reply := pipelineRead(t, cp, time.Second)
-	conn.stateMu.RLock()
-	remaining, failed := len(assoc.Sessions), assoc.cleanupError
-	conn.stateMu.RUnlock()
-	t.Logf("one DeleteSession = %v; %d sessions; CP Release handler held stateMu %v; response=%v; sessions left=%d; any deletion error=%v; FatalError=%v",
-		per, sessions, held.Round(time.Millisecond), reply != nil, remaining, failed, conn.FatalError())
-	if failed == nil && conn.FatalError() != nil {
-		t.Errorf("no session deletion failed, yet cleanup was declared fatal after %v (process exits non-zero)", AssociationCleanupTimeout)
 	}
 }
 
