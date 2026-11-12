@@ -42,7 +42,7 @@ func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, err
 
 		freeIPs := make([]net.IP, 0, 1024)
 		for ip := ipGenerator.Next(); ip != nil; ip = ipGenerator.Next() {
-			freeIPs = append(freeIPs, net.IP(ip))
+			freeIPs = append(freeIPs, ip)
 		}
 
 		ipam = IPAM{
@@ -77,11 +77,17 @@ func (ipam *IPAM) AllocateIP(key uint64) (net.IP, error) {
 	ipam.Lock()
 	defer ipam.Unlock()
 
+	// Keep the session's existing address when several PDRs request it.
+	// TS 29.244 V20.1.0 clause 5.21.3.1.
+	if ip, ok := ipam.busyIPs[key]; ok {
+		return append(net.IP(nil), ip...), nil
+	}
+
 	if len(ipam.freeIPs) > 0 {
 		ip := ipam.freeIPs[0]
 		ipam.freeIPs = ipam.freeIPs[1:]
 		ipam.busyIPs[key] = ip
-		return ip, nil
+		return append(net.IP(nil), ip...), nil
 	} else {
 		return nil, errors.New("no free ip available")
 	}
@@ -90,6 +96,12 @@ func (ipam *IPAM) AllocateIP(key uint64) (net.IP, error) {
 func (ipam *FTEIDM) AllocateTEID(seID uint64, pdrID uint32) (uint32, error) {
 	ipam.Lock()
 	defer ipam.Unlock()
+
+	// A retry for an already allocated PDR must not consume another F-TEID.
+	// TS 29.244 V20.1.0 clause 5.5.3.
+	if teid, ok := ipam.busyTEIDs[seID][pdrID]; ok {
+		return teid, nil
+	}
 
 	if len(ipam.freeTEIDs) > 0 {
 		teid := ipam.freeTEIDs[0]
