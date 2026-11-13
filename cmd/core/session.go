@@ -17,18 +17,19 @@ var (
 )
 
 type Session struct {
-	LocalSEID   uint64
-	RemoteSEID  uint64
-	CPFSEIDIPv4 net.IP // TS 29.244 V20.1.0 clause 4.3.2: session request destination.
-	CPFSEIDIPv6 net.IP
-	IMSI        string
-	MSISDN      string
-	PDRs        map[uint32]SPDRInfo
-	FARs        map[uint32]SFarInfo
-	QERs        map[uint32]SQerInfo
-	URRs        map[uint32]SUrrInfo
-	Traced      bool
-	Is5G        bool
+	urrGeneration uint64
+	LocalSEID     uint64
+	RemoteSEID    uint64
+	CPFSEIDIPv4   net.IP // TS 29.244 V20.1.0 clause 4.3.2: session request destination.
+	CPFSEIDIPv6   net.IP
+	IMSI          string
+	MSISDN        string
+	PDRs          map[uint32]SPDRInfo
+	FARs          map[uint32]SFarInfo
+	QERs          map[uint32]SQerInfo
+	URRs          map[uint32]SUrrInfo
+	Traced        bool
+	Is5G          bool
 }
 
 func NewSession(localSEID, remoteSEID uint64, IMSI, MSISDN string, traced bool) *Session {
@@ -83,6 +84,9 @@ type SQerInfo struct {
 }
 
 type SUrrInfo struct {
+	// Generation identifies one Create URR lifetime, across counter-slot swaps.
+	// TS 29.244 V20.1.0 clause 5.2.2.3.1 retains dissociated URRs.
+	Generation                           uint64
 	UnreportedUplink, UnreportedDownlink uint64
 	UrrInfo                              ebpf.UrrInfo
 	GlobalId                             uint32
@@ -142,9 +146,11 @@ func (s *Session) RemoveQer(id uint32) (SQerInfo, error) {
 }
 
 func (s *Session) NewUrr(id uint32, internalId uint32, urrInfo ebpf.UrrInfo) {
+	s.urrGeneration++
 	s.URRs[id] = SUrrInfo{
-		UrrInfo:  urrInfo,
-		GlobalId: internalId,
+		Generation: s.urrGeneration,
+		UrrInfo:    urrInfo,
+		GlobalId:   internalId,
 	}
 }
 
