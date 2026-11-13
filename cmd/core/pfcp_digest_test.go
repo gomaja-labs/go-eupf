@@ -54,11 +54,38 @@ func TestStandaloneReplayStillIgnoresSpareHeaderBits(t *testing.T) {
 	conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
 	_ = identityRead(t, cp)
 	wire[0] |= 0x18
+	conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
+	_ = identityRead(t, cp)
+	if executions != 1 {
+		t.Fatal("ignored header flag bits changed replay identity")
+	}
+	wire[0] &^= 0x18
 	wire[15] = 0xff // MP is zero: this entire octet is spare.
 	conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
 	_ = identityRead(t, cp)
 	if executions != 1 {
 		t.Fatal("ignored header bits changed replay identity")
+	}
+}
+
+func TestNodeReplayIgnoresSpareOctet(t *testing.T) {
+	conn := newProtocolConnection(t)
+	cp := transactionPeer(t)
+	assoc := NewNodeAssociation("digest.example", cp.LocalAddr().(*net.UDPAddr).IP.String())
+	conn.NodeAssociations[assoc.ID] = assoc
+	executions := 0
+	conn.pfcpHandlerMap = PfcpHandlerMap{message.MsgTypeAssociationUpdateRequest: func(_ *PfcpConnection, msg message.Message, _ string) (message.Message, bool, error) {
+		executions++
+		return message.NewAssociationUpdateResponse(msg.Sequence(), ie.NewNodeIDFQDN("up.example"), ie.NewCause(ie.CauseRequestAccepted)), false, nil
+	}}
+	wire := protocolWire(t, message.NewAssociationUpdateRequest(1, ie.NewNodeIDFQDN(assoc.ID)))
+	conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
+	_ = identityRead(t, cp)
+	wire[7] = 0xff
+	conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
+	_ = identityRead(t, cp)
+	if executions != 1 {
+		t.Fatal("node header's spare octet changed replay identity")
 	}
 }
 

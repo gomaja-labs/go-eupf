@@ -97,3 +97,38 @@ func TestReplacementAndRestartAnswerBeforeRuleCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestReplacementKeepsIDsReservedThroughDeferredReclamation(t *testing.T) {
+	conn := newProtocolConnection(t)
+	plane := &delayedUsagePlane{holdRetirement: true}
+	conn.mapOperations = plane
+	resources, err := service.NewResourceManager("192.0.2.0/30", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.ResourceManager = resources
+	if err := resources.FTEIDM.ReserveTEID(11, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	cp := identityPeer(t, "127.0.0.25", 0)
+	identitySetup(t, conn, cp, "reclaim.example")
+	conn.associationByID("reclaim.example").Sessions[11] = NewSession(11, 77, "", "", false)
+	conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(2, ie.NewNodeIDFQDN("reclaim.example"), ie.NewRecoveryTimeStamp(time.Now()))), cp.LocalAddr().(*net.UDPAddr))
+	_ = identityRead(t, cp)
+	conn.serviceHeartbeats(time.Now())
+	if len(conn.retiredAssociations) != 0 {
+		t.Fatal("context cleanup did not publish")
+	}
+	if err := resources.FTEIDM.ReserveTEID(99, 1, 1); !errors.Is(err, service.ErrResourceCollision) {
+		t.Fatal("logical cleanup freed the TEID before reclamation")
+	}
+	if plane.transaction.reclaim == nil {
+		t.Fatal("no reclamation callback")
+	}
+	if err := plane.transaction.reclaim(); err != nil {
+		t.Fatal(err)
+	}
+	if err := resources.FTEIDM.ReserveTEID(99, 1, 1); err != nil {
+		t.Fatalf("completed reclamation retained TEID: %v", err)
+	}
+}
