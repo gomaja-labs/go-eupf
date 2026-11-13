@@ -102,11 +102,13 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 	for peer, old := range conn.NodeAssociations {
 		if old.ID == id {
 			delete(conn.NodeAssociations, peer)
-			conn.forgetPeerExceptSetup(old.ID)
 		}
 	}
 	conn.NodeAssociations[id] = fresh
 	conn.indexAssociation(fresh, 1)
+	if replaces {
+		conn.forgetPeerExceptSetup(id, fresh)
+	}
 	// PSREI confirms that the requested retention operation succeeded, including
 	// a request for an empty set of existing sessions.
 	return retained || (replaces && retention != nil), nil
@@ -230,16 +232,24 @@ func (conn *PfcpConnection) heartbeatFailed(addr string, expected ...*NodeAssoci
 		}
 	}
 }
-func (conn *PfcpConnection) forgetPeer(addr string) { conn.forgetPeerTransactions(addr, false, "") }
-func (conn *PfcpConnection) forgetPeerExceptSetup(addr string) {
-	conn.forgetPeerTransactions(addr, true, "")
+func (conn *PfcpConnection) forgetPeer(addr string) {
+	conn.forgetPeerTransactions(addr, false, "", nil)
 }
-func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, entity string) {
+func (conn *PfcpConnection) forgetPeerExceptSetup(addr string, replacement *NodeAssociation) {
+	conn.forgetPeerTransactions(addr, true, "", replacement)
+}
+func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, entity string, replacement *NodeAssociation) {
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for seq, request := range state.pending {
 		if request.associationID() == id && (entity == "" || request.entity == entity) {
+			// Clause 6.2.6.2.2 retains the whole session. Cancellation must
+			// return pending usage to its retained URR, not discard it merely
+			// because the enclosing association object has been replaced.
+			if replacement != nil && request.typ == message.MsgTypeSessionReportRequest && replacement.Sessions[request.localSEID] != nil {
+				request.association = replacement
+			}
 			conn.completeRequestLocked(request, requestResult{outcome: requestCanceled, err: errors.New("PFCP association context invalidated")})
 			state.deletePending(seq)
 		}
@@ -408,7 +418,7 @@ func (conn *PfcpConnection) rememberSessionEntity(request, response message.Mess
 }
 
 func (conn *PfcpConnection) forgetEntityTransactions(addr, entity string) {
-	conn.forgetPeerTransactions(addr, false, entity)
+	conn.forgetPeerTransactions(addr, false, entity, nil)
 }
 func (conn *PfcpConnection) incomingEntity(msg message.Message, peer string) string {
 	switch request := msg.(type) {

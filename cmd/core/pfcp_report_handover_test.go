@@ -104,7 +104,7 @@ func TestFailedReportFollowsCurrentCPFSEID(t *testing.T) {
 						if second.Sequence() == first.Sequence() || second.SEID() != newSEID {
 							t.Fatal("new request did not get current SEID and a new sequence")
 						}
-						first.Header.SEID, first.Header.SequenceNumber = second.SEID(), second.Sequence()
+						first.Header.SEID, first.SequenceNumber = second.SEID(), second.Sequence()
 						if !bytes.Equal(protocolWire(t, first), protocolWire(t, second)) {
 							t.Fatal("re-originated report changed information")
 						}
@@ -192,5 +192,38 @@ func TestFailedUsageReportSurvivesLastPDRDissociation(t *testing.T) {
 	volume, err := fields.VolumeMeasurement.VolumeMeasurement()
 	if err != nil || volume.UplinkVolume != 20 {
 		t.Fatalf("retained URR's next usage %v: %v", volume, err)
+	}
+}
+
+func TestAssociationRetentionPreservesPendingUsageDebt(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.mapOperations = &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20}}
+	cp := identityPeer(t, "127.0.0.25", 0)
+	entity := identityPeer(t, "127.0.0.26", 8805)
+	identitySetup(t, conn, cp, "retention.example")
+	s := NewSession(11, 77, "", "", false)
+	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.26")
+	s.NewUrr(9, 1, ebpf.UrrInfo{VolumeTrigger: true, VolumeThreshold: 10})
+	conn.associationByID("retention.example").Sessions[11] = s
+	conn.SendReports()
+	_ = identityRead(t, entity)
+	conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(900, ie.NewNodeIDFQDN("retention.example"), ie.NewRecoveryTimeStamp(time.Now()), ie.NewPFCPSessionRetentionInformation())), cp.LocalAddr().(*net.UDPAddr))
+	response := identityRead(t, cp).(*message.AssociationSetupResponse)
+	if !response.PFCPASRspFlags.HasPSREI() {
+		t.Fatal("requested sessions were not retained")
+	}
+	current := conn.associationByID("retention.example").Sessions[11]
+	if current != s || current.URRs[9].UnreportedUplink != 20 {
+		t.Fatal("association replacement discarded pending octets of a retained URR")
+	}
+	conn.SendReports()
+	next := identityRead(t, entity).(*message.SessionReportRequest)
+	fields, err := next.UsageReport[0].UsageReportWithinSessionReportRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	volume, err := fields.VolumeMeasurement.VolumeMeasurement()
+	if err != nil || volume.UplinkVolume != 20 {
+		t.Fatalf("retained usage %v: %v", volume, err)
 	}
 }

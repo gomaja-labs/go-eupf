@@ -298,7 +298,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		conn.completeRequestLocked(completed, responseResult(incomingMsg, handlerErr))
 	}
 	conn.stateMu.Unlock()
-	if completed != nil {
+	if completed != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest {
 		conn.flushReportRetries()
 	}
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
