@@ -6,6 +6,7 @@ package core
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -152,17 +153,15 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		return nil
 	} // Clause 7.6.4: discard unknown types before creating labels.
 	PfcpMessageRx.WithLabelValues(incomingMsg.MessageTypeName()).Inc()
-	// Canonical standalone framing makes a bundled retransmission independent of
-	// its siblings; retained IE ordering/content still distinguishes requests.
-	requestWire := make([]byte, incomingMsg.MarshalLen())
-	if err := incomingMsg.MarshalTo(requestWire); err != nil {
-		conn.stateMu.Lock()
-		conn.completeRequestLocked(completed, requestResult{outcome: requestInvalid, err: err})
-		conn.stateMu.Unlock()
-		return err
+	var digest [32]byte
+	if incomingMsg.IsRequest() {
+		var err error
+		digest, err = requestDigest(incomingMsg, buf)
+		if err != nil {
+			return err
+		}
 	}
 	key := requestKey{peer: addr.String(), sequence: incomingMsg.Sequence(), typ: incomingMsg.MessageType()}
-	digest := sha256.Sum256(requestWire)
 	startTime := time.Now()
 	conn.stateMu.Lock()
 	if conn.isClosed() {
@@ -315,6 +314,37 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		handlerErr = errors.Join(handlerErr, conn.sendEncoded(wire, outgoing.MessageType(), addr, trace))
 	}
 	return handlerErr
+}
+
+// A normal standalone datagram already has canonical framing. Hash its received
+// bytes without allocating another IE tree encoding. Bundles and ignored header
+// bits still use the codec to obtain canonical standalone framing (TS 29.244
+// V20.1.0 clauses 6.4, 6.5 and 7.2.2.1 through 7.2.2.4.1).
+func requestDigest(msg message.Message, wire []byte) ([32]byte, error) {
+	if canonicalStandaloneHeader(wire) {
+		return sha256.Sum256(wire), nil
+	}
+	encoded := make([]byte, msg.MarshalLen())
+	if err := msg.MarshalTo(encoded); err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(encoded), nil
+}
+
+func canonicalStandaloneHeader(wire []byte) bool {
+	if len(wire) < 8 || wire[0]>>5 != 1 || wire[0]&0x1c != 0 || int(binary.BigEndian.Uint16(wire[2:4]))+4 != len(wire) {
+		return false
+	}
+	if wire[0]&1 == 0 {
+		return wire[0]&2 == 0 && wire[7] == 0
+	}
+	if len(wire) < 16 {
+		return false
+	}
+	if wire[0]&2 != 0 {
+		return wire[15]&0x0f == 0
+	}
+	return wire[15] == 0
 }
 
 func setBit(n uint8, pos uint) uint8 {
