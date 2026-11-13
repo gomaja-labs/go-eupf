@@ -21,8 +21,9 @@ func downlinkFixture(t *testing.T, is5G bool) (*PfcpConnection, *NodeAssociation
 	session.Is5G = is5G
 	session.CPFSEIDIPv4 = net.ParseIP("127.0.0.92")
 	session.downlink = newDownlinkNotifications(8)
-	session.FARs[1] = SFarInfo{FarInfo: ebpf.FarInfo{Action: 12, BufferSessionID: 11, BufferCookie: 7}}
-	session.FARs[2] = SFarInfo{FarInfo: ebpf.FarInfo{Action: 12, BufferSessionID: 11, BufferCookie: 8, BufferLane: 1}}
+	barID := uint8(0)
+	session.FARs[1] = SFarInfo{BARID: &barID, FarInfo: ebpf.FarInfo{Action: 12, BufferSessionID: 11, BufferCookie: 7}}
+	session.FARs[2] = SFarInfo{BARID: &barID, FarInfo: ebpf.FarInfo{Action: 12, BufferSessionID: 11, BufferCookie: 8, BufferLane: 1}}
 	assoc.Sessions[11] = session
 	conn.NodeAssociations[assoc.ID] = assoc
 	conn.downlinkSessions = map[uint64]*NodeAssociation{11: assoc}

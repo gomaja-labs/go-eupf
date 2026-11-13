@@ -16,10 +16,14 @@ import (
 
 type downlinkFARState struct {
 	cookie uint64
+	epoch  uint64
+	bar    bool
 	flows  uint64
 	absent bool
 }
 type downlinkNotice struct {
+	epoch      uint64
+	bar        bool
 	farID      uint32
 	cookie     uint64
 	pdrID      uint16
@@ -35,6 +39,7 @@ type downlinkNotifications struct {
 	durationRevision uint64
 	extendedUntil    time.Time
 	infinite         bool
+	suppressBefore   time.Time
 }
 type reportedDownlink struct{ notice downlinkNotice }
 
@@ -71,20 +76,69 @@ func (conn *PfcpConnection) noteDownlinkPacketLocked(session *Session, farID uin
 		return
 	}
 	conn.applyDownlinkDurationLocked(session, arrived)
-	if state.infinite || !state.extendedUntil.IsZero() && arrived.Before(state.extendedUntil) {
+	associated := downlinkBARAssociated(session, far)
+	if associated && (state.infinite || !state.extendedUntil.IsZero() && arrived.Before(state.extendedUntil) || !state.suppressBefore.IsZero() && arrived.Before(state.suppressBefore)) {
 		return
 	}
 	qfi, present := record.QFI, session.Is5G && record.QFIPresent
 	flow := state.fars[farID]
 	if flow.cookie != record.Cookie {
-		flow = downlinkFARState{cookie: record.Cookie}
+		flow = downlinkFARState{cookie: record.Cookie, epoch: 1, bar: associated}
+	} else if flow.bar != associated {
+		if !conn.resetDownlinkFAR(&flow) {
+			return
+		}
+		flow.bar = associated
 	}
 	if flow.contains(qfi, present) || len(state.pending) == cap(state.pending) {
 		return
 	}
 	flow.set(qfi, present, true)
 	state.fars[farID] = flow
-	state.pending = append(state.pending, downlinkNotice{farID: farID, cookie: record.Cookie, pdrID: uint16(record.PDRID), qfi: qfi, qfiPresent: present, arrived: arrived})
+	state.pending = append(state.pending, downlinkNotice{farID: farID, cookie: record.Cookie, pdrID: uint16(record.PDRID), qfi: qfi, qfiPresent: present, arrived: arrived, epoch: flow.epoch, bar: associated})
+}
+
+func downlinkBARAssociated(session *Session, far SFarInfo) bool {
+	return session.bar != nil && far.BARID != nil && *far.BARID == session.bar.id
+}
+func (conn *PfcpConnection) resetDownlinkFAR(flow *downlinkFARState) bool {
+	if flow.epoch == math.MaxUint64 {
+		conn.terminalError = errors.New("downlink FAR notification epoch exhausted")
+		return false
+	}
+	flow.epoch++
+	flow.flows, flow.absent = 0, false
+	return true
+}
+func (conn *PfcpConnection) resetBARNotifications(state *downlinkNotifications) {
+	for id, flow := range state.fars {
+		if flow.bar {
+			if !conn.resetDownlinkFAR(&flow) {
+				state.stopped = true
+			}
+			state.fars[id] = flow
+		}
+	}
+	conn.clearBARPending(state)
+}
+func (conn *PfcpConnection) clearBARPending(state *downlinkNotifications) {
+	kept := state.pending[:0]
+	for _, notice := range state.pending {
+		if !notice.bar {
+			kept = append(kept, notice)
+		}
+	}
+	clear(state.pending[len(kept):])
+	state.pending = kept
+}
+func markSuppressionEnd(state *downlinkNotifications, now time.Time) {
+	until := now
+	if !state.extendedUntil.IsZero() && state.extendedUntil.Before(until) {
+		until = state.extendedUntil
+	}
+	if state.suppressBefore.Before(until) {
+		state.suppressBefore = until
+	}
 }
 
 // TS 29.244 V20.1.0 clause 5.2.4.2: extended buffering suppresses
@@ -96,18 +150,19 @@ func (conn *PfcpConnection) applyDownlinkDurationLocked(session *Session, now ti
 	}
 	if session.bar == nil {
 		if state.durationRevision != 0 || state.infinite || !state.extendedUntil.IsZero() {
-			conn.advanceDownlinkGenerationLocked(state)
+			markSuppressionEnd(state, now)
+			conn.resetBARNotifications(state)
 			state.durationRevision = 0
 			state.extendedUntil = time.Time{}
 			state.infinite = false
-			clear(state.fars)
-			clear(state.pending)
-			state.pending = state.pending[:0]
 		}
 		return
 	}
 	if state.durationRevision != session.bar.durationRevision {
 		wasActive := state.infinite || !state.extendedUntil.IsZero()
+		if wasActive {
+			markSuppressionEnd(state, now)
+		}
 		state.durationRevision = session.bar.durationRevision
 		state.extendedUntil = time.Time{}
 		state.infinite = false
@@ -116,27 +171,24 @@ func (conn *PfcpConnection) applyDownlinkDurationLocked(session *Session, now ti
 			if !state.infinite {
 				state.extendedUntil = now.Add(session.bar.duration)
 			}
-			clear(state.pending)
-			state.pending = state.pending[:0]
+			conn.clearBARPending(state)
 		} else if wasActive || session.bar.durationPresent {
-			conn.endDownlinkDurationLocked(session)
+			conn.endDownlinkDurationLocked(session, now)
 		}
 	}
 	if !state.extendedUntil.IsZero() && !now.Before(state.extendedUntil) {
-		conn.endDownlinkDurationLocked(session)
+		conn.endDownlinkDurationLocked(session, now)
 	}
 }
 
 // Stop applying and remove the extended-only parameters when buffering ends;
 // a later first eligible packet may notify again (clause 5.2.4.2).
-func (conn *PfcpConnection) endDownlinkDurationLocked(session *Session) {
+func (conn *PfcpConnection) endDownlinkDurationLocked(session *Session, now time.Time) {
 	state := session.downlink
-	conn.advanceDownlinkGenerationLocked(state)
+	markSuppressionEnd(state, now)
+	conn.resetBARNotifications(state)
 	state.extendedUntil = time.Time{}
 	state.infinite = false
-	clear(state.fars)
-	clear(state.pending)
-	state.pending = state.pending[:0]
 	if session.bar == nil {
 		state.durationRevision = 0
 		return
@@ -168,11 +220,11 @@ func (conn *PfcpConnection) serviceDownlinkNotifications(now time.Time) {
 		state.pending = state.pending[:0]
 		for _, notice := range pending {
 			far, ok := session.FARs[notice.farID]
-			if !ok || far.FarInfo.BufferCookie != notice.cookie || far.FarInfo.Action&12 != 12 {
+			if !ok || far.FarInfo.BufferCookie != notice.cookie || far.FarInfo.Action&12 != 12 || state.fars[notice.farID].epoch != notice.epoch {
 				continue
 			}
 			delay := time.Duration(0)
-			if !session.Is5G && session.bar != nil {
+			if !session.Is5G && downlinkBARAssociated(session, far) {
 				delay = session.bar.notificationDelay
 			}
 			if now.Before(notice.arrived.Add(delay)) {
@@ -213,7 +265,7 @@ func (conn *PfcpConnection) downlinkNotificationCurrent(request *pendingRequest,
 	}
 	flow, ok := state.fars[bound.notice.farID]
 	far, exists := session.FARs[bound.notice.farID]
-	return ok && exists && flow.cookie == bound.notice.cookie && far.FarInfo.BufferCookie == bound.notice.cookie && far.FarInfo.Action&12 == 12
+	return ok && exists && flow.cookie == bound.notice.cookie && flow.epoch == bound.notice.epoch && far.FarInfo.BufferCookie == bound.notice.cookie && far.FarInfo.Action&12 == 12
 }
 
 func (conn *PfcpConnection) completeDownlinkNotificationLocked(request *pendingRequest, session *Session, result requestResult) bool {
