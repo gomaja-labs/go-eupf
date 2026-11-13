@@ -56,7 +56,7 @@ def server(request, evidence):
         output = (directory / (request.node.name.replace("/", "_") + suffix + ".log")).open("w")
         started_ns = time.time_ns()
         process = subprocess.Popen([
-            binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "16",
+            binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "64",
             "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
             "--n3addr", "127.0.0.1", "--aaddr", "127.0.0.1:18080",
             "--maddr", "127.0.0.1:19090", "--teidpool", "32", "--restoration-period", "1", "--hbtimeout", "5", "--hbinterval", "60", "--loglvl", "debug",
