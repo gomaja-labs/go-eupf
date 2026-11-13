@@ -25,6 +25,7 @@ var errTransactionCapacity = errors.New("PFCP transaction capacity exhausted")
 // create a goroutine or timer for each request. TS 29.244 V20.1.0 clause 6.4.
 type transportState struct {
 	replay          *service.ReplayBudget
+	replayEndpoint  uint64
 	mu              sync.Mutex
 	next            uint32
 	pending         map[uint32]*pendingRequest
@@ -412,7 +413,7 @@ func (l *responseList) remove(e *responseIndex, expiry bool) {
 // unlink each entry in O(1). The retention interval is constant per connection,
 // so insertion order is also expiration order. No stale accounting remains.
 func (state *transportState) removeResponse(e *responseIndex) {
-	state.replay.Change(e.budget.host, -1, -e.size)
+	state.replay.Change(state.replayOwner(e.budget.host), -1, -e.size)
 	state.unlinkResponse(e)
 }
 func (state *transportState) unlinkResponse(e *responseIndex) {
@@ -459,7 +460,8 @@ func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now t
 	if owner == "" {
 		return nil, false, nil
 	}
-	if !conn.replayBudgetLocked().Reserve(owner, responseReservation, conn.transactionLimit(), conn.replayByteLimit()) {
+	replay := conn.replayBudgetLocked()
+	if state.replayEndpoint == 0 || !replay.Reserve(state.replayOwner(owner), responseReservation, conn.transactionLimit(), conn.replayByteLimit()) {
 		PfcpReplayDrops.Inc()
 		return nil, true, errTransactionCapacity
 	}
@@ -508,7 +510,7 @@ func (conn *PfcpConnection) cacheReplyLocked(key requestKey, wire []byte, entity
 	}
 	if old, ok := state.responses[key]; ok {
 		delta := cost - old.size
-		budgetAccount.Change(owner, 0, delta)
+		budgetAccount.Change(state.replayOwner(owner), 0, delta)
 		state.bytes += delta
 		old.budget.bytes += delta
 		old.wire, old.entity, old.created, old.expires, old.size = wire, entity, now, now.Add(ttl), cost
@@ -517,7 +519,7 @@ func (conn *PfcpConnection) cacheReplyLocked(key requestKey, wire []byte, entity
 		return
 	}
 	if !reserved {
-		budgetAccount.Change(owner, 1, cost)
+		budgetAccount.Change(state.replayOwner(owner), 1, cost)
 	}
 	budget := state.responseBudgets[owner]
 	if budget == nil {
@@ -540,8 +542,13 @@ func (conn *PfcpConnection) replayBudgetLocked() *service.ReplayBudget {
 		} else {
 			state.replay = &service.ReplayBudget{}
 		}
+		state.replayEndpoint = state.replay.NewEndpoint()
 	}
 	return state.replay
+}
+
+func (state *transportState) replayOwner(nodeID string) service.ReplayOwner {
+	return service.ReplayOwner{Endpoint: state.replayEndpoint, NodeID: nodeID}
 }
 
 func (conn *PfcpConnection) discardReply(key requestKey, digest [32]byte) {

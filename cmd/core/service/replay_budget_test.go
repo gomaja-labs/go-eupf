@@ -16,7 +16,7 @@ func TestReplayReservationsCannotOverbookConcurrentEndpoints(t *testing.T) {
 		done.Add(1)
 		go func() {
 			defer done.Done()
-			owner := fmt.Sprint(n)
+			owner := ReplayOwner{Endpoint: 1, NodeID: fmt.Sprint(n)}
 			ok := budget.Reserve(owner, 65536, 64, 64*65536)
 			results <- ok
 			<-release
@@ -41,28 +41,39 @@ func TestReplayReservationsCannotOverbookConcurrentEndpoints(t *testing.T) {
 func TestReplayFairSharesIncludeEveryEndpoint(t *testing.T) {
 	var budget ReplayBudget
 	for range 4 {
-		if !budget.Reserve("heavy", 1024, 12, 1<<20) {
+		if !budget.Reserve(ReplayOwner{Endpoint: 1, NodeID: "heavy"}, 1024, 12, 1<<20) {
 			t.Fatal("initial share denied")
 		}
 	}
-	if !budget.Reserve("light", 1024, 12, 1<<20) {
+	if !budget.Reserve(ReplayOwner{Endpoint: 2, NodeID: "light"}, 1024, 12, 1<<20) {
 		t.Fatal("new association denied available capacity")
 	}
 	for range 2 {
-		if !budget.Reserve("heavy", 1024, 12, 1<<20) {
+		if !budget.Reserve(ReplayOwner{Endpoint: 1, NodeID: "heavy"}, 1024, 12, 1<<20) {
 			t.Fatal("heavy association denied its share")
 		}
 	}
-	if budget.Reserve("heavy", 1024, 12, 1<<20) {
+	if budget.Reserve(ReplayOwner{Endpoint: 1, NodeID: "heavy"}, 1024, 12, 1<<20) {
 		t.Fatal("heavy association exceeded its shared fair share")
 	}
-	if !budget.Reserve("later", 1024, 12, 1<<20) {
+	if !budget.Reserve(ReplayOwner{Endpoint: 3, NodeID: "later"}, 1024, 12, 1<<20) {
 		t.Fatal("later endpoint denied available capacity")
 	}
-	if budget.Reserve("heavy", 1024, 12, 1<<20) {
+	if budget.Reserve(ReplayOwner{Endpoint: 1, NodeID: "heavy"}, 1024, 12, 1<<20) {
 		t.Fatal("new endpoint failed to reduce the heavy association's share")
 	}
-	if !budget.Reserve("light", 1024, 12, 1<<20) {
+	if !budget.Reserve(ReplayOwner{Endpoint: 2, NodeID: "light"}, 1024, 12, 1<<20) {
 		t.Fatal("below-share association denied available capacity")
+	}
+}
+
+func TestReplayEndpointIdentitiesNeverWrap(t *testing.T) {
+	var budget ReplayBudget
+	if budget.NewEndpoint() != 1 || budget.NewEndpoint() != 2 {
+		t.Fatal("endpoint identities collided")
+	}
+	budget.nextEndpoint = ^uint64(0) - 1
+	if budget.NewEndpoint() != ^uint64(0) || budget.NewEndpoint() != 0 || budget.NewEndpoint() != 0 {
+		t.Fatal("exhausted endpoint identities wrapped")
 	}
 }
