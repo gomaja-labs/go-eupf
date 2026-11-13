@@ -25,8 +25,8 @@ func (c *UpfConfig) PFCPMemoryPlan(limit, baseline int64) (softLimit int64, err 
 	if sessions == 0 {
 		sessions = 65535
 	}
-	// Real eBPF publication plus PFCP state retained 11.6 KiB/session for
-	// four PDRs, three FARs, one QER and two URRs (8192 synthetic sessions).
+	// Real eBPF publication plus PFCP state retained 12.1 KiB/session for
+	// four PDRs, three FARs, two QERs and two URRs (8192 synthetic sessions).
 	// Round live state to 16 KiB and reserve it twice for GC and replacement.
 	sessionMemory := int64(sessions) * (32 << 10)
 	needed := baseline + 2*budget*mib + sessionMemory + originated + transient
