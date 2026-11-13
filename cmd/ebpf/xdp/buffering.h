@@ -19,7 +19,14 @@ struct buffer_far {
     __u64 completed;
     __u32 mode;
     __u32 ready;
+    __u32 preparing;
+    __u32 reserved;
 };
+
+static __always_inline void buffer_maybe_forward(struct buffer_far *far) {
+    if (far->mode==BUFFER_DRAIN && far->ready && !far->preparing && far->produced==far->completed)
+        far->mode=BUFFER_FORWARD;
+}
 
 // One lock shares the BAR packet bound across all FARs/QoS flows of a session.
 // TS 29.244 V20.1.0 clauses 5.2.4.1 and 8.2.30.
@@ -101,6 +108,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
         far->mode=mode;
         far->ready=0;
         far->produced=far->completed=0;
+        far->preparing=0;
         action=XDP_DROP;
     } else if (cookie && far->cookie==cookie) {
         if (!operation) {
@@ -126,14 +134,14 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
             far->mode=mode;
             far->ready=ready;
             action=XDP_DROP;
-        } else if (operation==6 && far->produced==far->completed &&
+        } else if (operation==6 && !far->preparing && far->produced==far->completed &&
             (far->mode==BUFFER_DISCARD || far->mode==BUFFER_FORWARD)) {
             far->cookie=far->produced=far->completed=0;
             far->mode=far->ready=0;
             action=XDP_DROP;
         }
-        if (far->mode==BUFFER_DRAIN && far->ready && far->produced==far->completed)
-            far->mode=BUFFER_FORWARD;
+        buffer_maybe_forward(far);
+        command->sequence=far->preparing;
         command->mode=far->mode;
         command->ready=far->ready;
         command->outstanding=anchor->outstanding;
@@ -186,16 +194,21 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     bpf_spin_lock(&anchor->lock);
     struct buffer_far *state=&anchor->far[lane];
     if (state->cookie==cookie) {
-        if (state->mode==BUFFER_DRAIN && state->ready && state->produced==state->completed)
-            state->mode=BUFFER_FORWARD;
+        buffer_maybe_forward(state);
         direct=state->mode==BUFFER_FORWARD;
-        eligible=state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN;
+        eligible=(state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) && state->preparing!=~0U;
+        if (eligible) state->preparing++;
     }
     bpf_spin_unlock(&anchor->lock);
     if (direct) return BUFFER_DIRECT;
     if (!eligible) return XDP_DROP;
     struct buffer_pending *pending=bpf_map_lookup_elem(&buffer_pending_packet,&key);
-    if (!pending) return XDP_DROP;
+    if (!pending) {
+        bpf_spin_lock(&anchor->lock);
+        if (state->cookie==cookie && state->preparing) { state->preparing--; buffer_maybe_forward(state); }
+        bpf_spin_unlock(&anchor->lock);
+        return XDP_DROP;
+    }
     pending->session_id=id;
     pending->cookie=cookie;
     pending->lane=lane;
@@ -215,11 +228,26 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     // IPv4/UDP/GTP envelope. Keep only a bounded scalar cursor across tail calls.
     __u32 offset=14;
     if (ctx->gtp) {
-        if (!ctx->ip4 || (const char *)(ctx->ip4+1)>ctx->data_end) return XDP_DROP;
+        if (!ctx->ip4 || (const char *)(ctx->ip4+1)>ctx->data_end) {
+            bpf_spin_lock(&anchor->lock);
+            if (state->cookie==cookie && state->preparing) { state->preparing--; buffer_maybe_forward(state); }
+            bpf_spin_unlock(&anchor->lock);
+            return XDP_DROP;
+        }
         offset+=ctx->ip4->ihl*4+8+ctx->gtp_header_length;
     }
     pending->ppi_offset=offset<BUFFER_FRAME_SIZE-1 ? offset : ~0U;
     return UPF_BUFFER_PACKET;
+}
+
+static __always_inline void buffer_prepare_failed(struct buffer_anchor *anchor, __u64 lane, __u64 cookie) {
+    bpf_spin_lock(&anchor->lock);
+    struct buffer_far *far=&anchor->far[lane];
+    if (far->cookie==cookie && far->preparing) {
+        far->preparing--;
+        buffer_maybe_forward(far);
+    }
+    bpf_spin_unlock(&anchor->lock);
 }
 
 // Fixed slots are copied before sequence assignment. Reservation/copy failures
@@ -240,18 +268,19 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
     if (!anchor) return XDP_DROP;
     __u64 raw_length=(__u64)ctx->data_end-ctx->data;
-    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) return XDP_DROP;
+    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
     __u32 length=raw_length;
     asm volatile("" : "+r"(length));
     length &= 0xfff;
-    if (length<14 || length>BUFFER_FRAME_SIZE) return XDP_DROP;
+    if (length<14 || length>BUFFER_FRAME_SIZE) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
     struct buffer_record *record=bpf_ringbuf_reserve(&buffer_events,sizeof(*record),0);
-    if (!record) return XDP_DROP;
+    if (!record) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
     volatile __u64 *words=(void *)record->packet;
 #pragma clang loop unroll(full)
     for (int i=0;i<BUFFER_FRAME_SIZE/8;i++) words[i]=0;
     if (bpf_probe_read_kernel(record->packet,length,(void *)(long)ctx->data)) {
         bpf_ringbuf_discard(record,0);
+        buffer_prepare_failed(anchor,lane,cookie);
         return XDP_DROP;
     }
     record->session_id=id;
@@ -282,11 +311,15 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     int admitted=0;
     bpf_spin_lock(&anchor->lock);
     struct buffer_far *state=&anchor->far[lane];
-    if (state->cookie==cookie && (state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) &&
-        state->produced!=~0ULL && anchor->outstanding<anchor->limit) {
-        record->sequence=++state->produced;
-        anchor->outstanding++;
-        admitted=1;
+    if (state->cookie==cookie && state->preparing) {
+        state->preparing--;
+        if ((state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) &&
+            state->produced!=~0ULL && anchor->outstanding<anchor->limit) {
+            record->sequence=++state->produced;
+            anchor->outstanding++;
+            admitted=1;
+        }
+        buffer_maybe_forward(state);
     }
     bpf_spin_unlock(&anchor->lock);
     if (!admitted) { bpf_ringbuf_discard(record,0); return XDP_DROP; }

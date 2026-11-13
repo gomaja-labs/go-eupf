@@ -218,7 +218,7 @@ func TestBufferAdmissionSequencesConcurrentProducers(t *testing.T) {
 		}
 	}
 	command, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
-	if err != nil || command.Produced != count || command.Outstanding != count {
+	if err != nil || command.Produced != count || command.Outstanding != count || command.Preparing != 0 {
 		t.Fatalf("concurrent accounting=%+v error=%v", command, err)
 	}
 }
@@ -250,7 +250,7 @@ func TestBufferReservationFailureCannotStrandASequence(t *testing.T) {
 		}
 	}
 	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
-	if err != nil || state.Produced == 0 || state.Produced >= 2300 || state.Outstanding != uint32(state.Produced) {
+	if err != nil || state.Produced == 0 || state.Produced >= 2300 || state.Outstanding != uint32(state.Produced) || state.Preparing != 0 {
 		t.Fatalf("ring did not reach its finite bound: %+v error=%v", state, err)
 	}
 	for sequence := uint64(1); sequence <= state.Produced; sequence++ {
@@ -368,5 +368,34 @@ func TestBufferJournalRestoresModeWithoutRestoringLiveCounters(t *testing.T) {
 	state, err = b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
 	if err != nil || state.Mode != BufferHold || state.Produced != 1 || state.Completed != 1 || state.Outstanding != 0 {
 		t.Fatalf("rollback overwrote live counters: %+v error=%v", state, err)
+	}
+}
+
+func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.CreateBufferAnchor(42, 2, []BufferLane{{Index: 0, Cookie: 7, Mode: BufferHold}}); err != nil {
+		t.Fatal(err)
+	}
+	// Synthetic producer paused between eligibility and the copy continuation.
+	// The anchor's first lane has its preparing count after the 32-byte state.
+	raw, err := b.BufferAnchors.LookupBytes(uint64(42))
+	if err != nil || len(raw) < 52 {
+		t.Fatalf("anchor: %v", err)
+	}
+	binary.LittleEndian.PutUint32(raw[48:], 1)
+	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
+		t.Fatal(err)
+	}
+	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1})
+	if err != nil || state.Mode != BufferDrain {
+		t.Fatalf("prepared producer was bypassed: mode=%d error=%v", state.Mode, err)
+	}
+	binary.LittleEndian.PutUint32(raw[48:], 0)
+	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
+		t.Fatal(err)
+	}
+	state, err = b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1})
+	if err != nil || state.Mode != BufferForward {
+		t.Fatalf("finished producers did not release barrier: mode=%d error=%v", state.Mode, err)
 	}
 }

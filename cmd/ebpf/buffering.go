@@ -34,6 +34,7 @@ const (
 type bufferFar struct {
 	Cookie, Produced, Completed uint64
 	Mode, Ready                 uint32
+	Preparing, Reserved         uint32
 }
 type bufferAnchor struct {
 	Lock, Outstanding, Limit, Reserved uint32
@@ -72,6 +73,7 @@ type BufferCommand struct {
 	SessionID, Cookie, Sequence                      uint64
 	Lane, Operation, Mode, Ready, Limit, Outstanding uint32
 	Produced, Completed                              uint64
+	Preparing                                        uint32
 }
 
 // BufferControl uses a private program to serialize with producer admission.
@@ -101,6 +103,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	command.Outstanding = binary.LittleEndian.Uint32(output[44:])
 	command.Produced = binary.LittleEndian.Uint64(output[48:])
 	command.Completed = binary.LittleEndian.Uint64(output[56:])
+	command.Preparing = uint32(binary.LittleEndian.Uint64(output[16:]))
 	return command, nil
 }
 
