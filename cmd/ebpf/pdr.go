@@ -310,7 +310,6 @@ type UrrInfo struct {
 	DownlinkVolume  uint64
 	VolumeThreshold uint64
 	VolumeTrigger   bool
-	VolumeReported  bool
 }
 
 func (bpfObjects *BpfObjects) NewUrr(urrInfo UrrInfo) (uint32, error) {

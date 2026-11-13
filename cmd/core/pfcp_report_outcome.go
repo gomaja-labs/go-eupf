@@ -82,7 +82,6 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 		}
 		urr.UnreportedUplink += usage.uplink
 		urr.UnreportedDownlink += usage.downlink
-		urr.UrrInfo.VolumeReported = false
 		session.URRs[usage.id] = urr
 	}
 }

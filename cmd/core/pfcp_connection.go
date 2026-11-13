@@ -777,7 +777,10 @@ func (connection *PfcpConnection) SendReports() {
 				uplink := newReport.UplinkVolume - urr.UrrInfo.UplinkVolume + urr.UnreportedUplink
 				downlink := newReport.DownlinkVolume - urr.UrrInfo.DownlinkVolume + urr.UnreportedDownlink
 
-				if urr.UrrInfo.VolumeTrigger && !urr.UrrInfo.VolumeReported && urr.UrrInfo.VolumeThreshold > 0 && uplink+downlink >= urr.UrrInfo.VolumeThreshold {
+				// TS 29.244 V20.1.0 clause 5.2.2.3.1: every VOLTH report
+				// starts another window using the provisioned threshold. Failed
+				// delivery restores the admitted octets (clause 6.3.5.2).
+				if urr.UrrInfo.VolumeTrigger && urr.UrrInfo.VolumeThreshold > 0 && uplink+downlink >= urr.UrrInfo.VolumeThreshold {
 					report := message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, urr.ReportSeqNumber, uplink, downlink)...)
 					peer, err := net.ResolveUDPAddr("udp", net.JoinHostPort(session.controlIP(connection).String(), "8805"))
 					if err != nil {
@@ -799,7 +802,6 @@ func (connection *PfcpConnection) SendReports() {
 					urr.ReportSeqNumber++
 					urr.UrrInfo.UplinkVolume = newReport.UplinkVolume
 					urr.UrrInfo.DownlinkVolume = newReport.DownlinkVolume
-					urr.UrrInfo.VolumeReported = true
 					session.URRs[urrid] = urr
 				}
 

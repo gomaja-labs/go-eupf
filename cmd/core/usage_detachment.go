@@ -56,7 +56,6 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 				urr.ReportSeqNumber++
 				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
 				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
-				urr.UrrInfo.VolumeReported = false
 				session.URRs[id] = urr
 				return nil
 			},
@@ -84,7 +83,6 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 				}
 				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
 				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
-				urr.UrrInfo.VolumeReported = false
 				session.URRs[id] = urr
 				return nil
 			},

@@ -718,7 +718,6 @@ func updateUrr(info *ebpf.UrrInfo, rule *ie.IE) {
 			info.VolumeThreshold = 0
 		} else if value, err := volume.VolumeThreshold(); err == nil {
 			info.VolumeThreshold = value.TotalVolume
-			info.VolumeReported = false
 		}
 	}
 }

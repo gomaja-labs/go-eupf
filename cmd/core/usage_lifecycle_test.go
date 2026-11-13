@@ -78,7 +78,7 @@ func TestUsageReportCapacityKeepsUnreportedUsage(t *testing.T) {
 	}
 }
 
-func TestUsageThresholdKeepsConfigurationAndRearmsExplicitly(t *testing.T) {
+func TestUsageThresholdReappliesForEveryMeasurementWindow(t *testing.T) {
 	conn := newProtocolConnection(t)
 	maps := &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20}}
 	conn.mapOperations = maps
@@ -93,15 +93,22 @@ func TestUsageThresholdKeepsConfigurationAndRearmsExplicitly(t *testing.T) {
 	}
 	maps.urr.UplinkVolume = 30
 	conn.SendReports()
-	if len(conn.transport.pending) != 1 {
-		t.Fatal("threshold reported twice without reconfiguration")
-	}
-	configured := s.URRs[11]
-	updateUrr(&configured.UrrInfo, ie.NewUpdateURR(ie.NewURRID(11), ie.NewVolumeThreshold(1, 10, 0, 0)))
-	s.URRs[11] = configured
-	conn.SendReports()
 	if len(conn.transport.pending) != 2 || s.URRs[11].ReportSeqNumber != 2 {
-		t.Fatal("new threshold did not rearm reporting")
+		t.Fatal("next threshold window did not report without reconfiguration")
+	}
+	conn.SendReports()
+	if len(conn.transport.pending) != 2 {
+		t.Fatal("unchanged counters generated duplicate usage")
+	}
+	maps.urr.UplinkVolume = 39
+	conn.SendReports()
+	if len(conn.transport.pending) != 2 {
+		t.Fatal("usage below the next threshold generated a report")
+	}
+	maps.urr.UplinkVolume = 40
+	conn.SendReports()
+	if len(conn.transport.pending) != 3 || s.URRs[11].ReportSeqNumber != 3 {
+		t.Fatal("third threshold window did not report")
 	}
 }
 

@@ -53,9 +53,6 @@ func TestFailedUsageReportIsIncludedInNextReport(t *testing.T) {
 				}
 			}
 			maps.urr.UplinkVolume = 35
-			urr := session.URRs[9]
-			urr.UrrInfo.VolumeReported = false
-			session.URRs[9] = urr
 			conn.SendReports()
 			next := identityRead(t, cp).(*message.SessionReportRequest)
 			fields, err := next.UsageReport[0].UsageReportWithinSessionReportRequest()
