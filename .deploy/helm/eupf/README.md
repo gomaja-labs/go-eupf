@@ -44,7 +44,7 @@ List-valued parameters (e.g. `UPF_INTERFACE_NAME`) are comma-separated strings.
 
 The chart sets `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
 
-eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash/trie storage grows as rules are installed. Both are charged to the container's memory cgroup. The process includes the observed startup charge and a reserve for growing PDR maps when deriving its Go soft memory limit and rejects a hard limit that cannot fit the configured capacity.
+eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash maps hold small slot descriptors and IPv6 trie storage grows as rules are installed; the shared PDR bucket array is preallocated with four times each hash map's capacity plus slot zero. Both are charged to the container's memory cgroup. The process includes the observed startup charge and a reserve for growing PDR maps plus 32 KiB per configured session for measured live state and GC when deriving its Go soft memory limit and rejects a hard limit that cannot fit the configured capacity.
 
 The default memory floor at the chart's map capacities is `2 * 128 MiB replay + max(64 MiB, observed startup/map charge + growing-map reserve) + 48 MiB originated queues + 32 MiB transient headroom`, or 400 MiB. The replay budget is shared across N4, Sxa and Sxb. Raise map capacities and the memory limit together; forwarding load, rule populations and kernel allocation costs need their own measurements. See [PFCP transport](../../../docs/pfcp-transport.md) for the fixed-workload measurements and operational limits.
 
@@ -57,6 +57,7 @@ config:
     config.yml: |
       interface_name: eth0
       max_sessions: 1024
+      restoration_period: 60
       api_address: :8080
       pfcp_address: :8805
       metrics_address: :9090
@@ -84,3 +85,5 @@ Set `cli.enabled=true` to add the published `ghcr.io/gomaja-labs/go-eupf-cli:mai
 The application image defaults to `ghcr.io/gomaja-labs/go-eupf:main`; `image.tag` overrides it. The UI image has its own tag and defaults to `main` independently. ConfigMap examples use `config.enabled=true`, so chart ENV defaults cannot override their interface and address settings. REST edits cannot persist into a read-only ConfigMap; update values and roll out the deployment instead.
 
 The API token is read at process startup. Restart the workload after changing the token Secret so both eUPF and CLI containers reload the same value.
+
+`restoration_period` defaults to 60 seconds (0–86400) and is exposed as `UPF_RESTORATION_PERIOD` in environment mode. Only automatic UE IPv4 allocation waits for restoration; zero permits immediate reuse of unrestored predecessor UE IPv4 addresses. Automatic TEIDs use recovery-timestamp generations and remain available immediately. See [PFCP transport](../../../docs/pfcp-transport.md) for sizing measurements and generation limits.

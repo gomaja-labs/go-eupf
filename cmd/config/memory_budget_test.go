@@ -7,7 +7,7 @@ import (
 )
 
 func TestMemoryBudgetIncludesSharedReplayAndKernelBaseline(t *testing.T) {
-	c := UpfConfig{}
+	c := UpfConfig{MaxSessions: 1024}
 	if _, err := c.PFCPMemoryPlan(128*mib, 25*mib); err == nil {
 		t.Fatal("accepted chart limit smaller than replay plus baseline")
 	}
@@ -42,5 +42,22 @@ func TestCgroupMemoryLimits(t *testing.T) {
 				t.Fatalf("limit %d current %d: %v", limit, current, err)
 			}
 		})
+	}
+}
+
+func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
+	for _, sessions := range []uint32{1, 1024, 65535, 1 << 20} {
+		c := UpfConfig{MaxSessions: sessions}
+		needed := 400*mib + int64(sessions)*32768
+		if _, err := c.PFCPMemoryPlan(needed-1, 0); err == nil {
+			t.Fatalf("sessions %d: omitted per-session memory", sessions)
+		}
+		if soft, err := c.PFCPMemoryPlan(needed, 0); err != nil || soft != needed-96*mib {
+			t.Fatalf("sessions %d soft %d: %v", sessions, soft, err)
+		}
+	}
+	c := UpfConfig{}
+	if _, err := c.PFCPMemoryPlan(512*mib, 0); err == nil {
+		t.Fatal("unset sessions did not use standalone default")
 	}
 }

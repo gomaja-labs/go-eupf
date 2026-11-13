@@ -313,13 +313,19 @@ ingress:
 
 # One process-wide replay budget serves N4, Sxa and Sxb. At 2000 cacheable
 # requests/s * 60 s: 120000 entries fit 131072 entries / 128 MiB accounting.
-# Memory floor: 2 * 128 MiB replay (GC) + max(64 MiB startup/maps, observed
-# cgroup baseline plus growing-map reserve) + 3 * 16 MiB originated queues
-# + 32 MiB transient = 400 MiB.
-# 512 MiB leaves 112 MiB headroom at the chart's 1024-session map sizes. The process derives
-# its Go soft limit from the cgroup limit, excluding baseline/kernel charges.
-# The 125 s / 2000 requests/s fixture used about 0.32 CPU and peaked at
-# 131 MiB cgroup charge with all three endpoints; forwarding needs separate sizing.
+# Memory floor: 2 * 128 MiB replay (GC) + max(64 MiB, observed loaded cgroup
+# charge + growing-map reserve) + 32 KiB * max_sessions (live state and GC)
+# + 3 * 16 MiB originated queues + 32 MiB transient = at least 432 MiB.
+# At 1024 sessions the combined process measured 49.6 MiB loaded charge plus
+# 23 MiB growing-map reserve: a 440.6 MiB floor, leaving 71.4 MiB in 512 MiB.
+# The full map-only kernel charge was 46.1 MiB. The PDR array's transaction/grace
+# headroom alone adds 14.625 MiB beyond one slot per key across both hash maps.
+# At the standalone 65535-session default the measured plan needs 5.625 GiB;
+# provision at least 6 GiB plus workload headroom when raising the capacity.
+# The process resolves its own cgroup and ancestor limits to derive a Go soft limit.
+# The 125 s / 2000 requests/s fixture charged about 0.39 CPU cores and peaked at
+# 162.5 MiB in the cgroup with all three endpoints and three live sessions.
+# Other session/rule populations and forwarding load need separate sizing.
 resources:
   limits:
     cpu: "1"
