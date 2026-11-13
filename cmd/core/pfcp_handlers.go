@@ -279,6 +279,8 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		}
 		if current != nil && activeAssociation(conn.associationByID(current.ID)) == current {
 			conn.cacheReply(key, digest, wire, entity, current.ID)
+		} else {
+			conn.discardReply(key, digest)
 		}
 	}
 

@@ -23,6 +23,7 @@ var ErrResourceCollision = errors.New("resource belongs to another session")
 var ErrResourceExhausted = errors.New("resource pool exhausted")
 
 type ResourceManager struct {
+	replay        ReplayBudget
 	nextSEID      atomic.Uint64
 	shuttingDown  atomic.Bool
 	transactionMu sync.Mutex

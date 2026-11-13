@@ -119,6 +119,7 @@ func TestReplayFairShareNeverEvictsUnexpiredOutcomes(t *testing.T) {
 	if _, found, err := conn.cachedReplyAt(next, [32]byte{}, created.Add(61*time.Second), "light"); found || err != nil {
 		t.Fatal("expired entries blocked capacity")
 	}
+	conn.discardReply(next, [32]byte{}) // Release the newly admitted reservation.
 	if len(conn.transport.responses) != 0 || conn.transport.bytes != 0 {
 		t.Fatal("expiry leaked accounting")
 	}

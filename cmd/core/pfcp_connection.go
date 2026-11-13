@@ -259,10 +259,7 @@ func (connection *PfcpConnection) updateEndpoint(pfcpAddress, pfcpNodeId string,
 			connection.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: net.ErrClosed})
 		}
 		clear(connection.transport.pending)
-		clear(connection.transport.responses)
-		clear(connection.transport.responseBudgets)
-		connection.transport.responseExpiry.Init()
-		connection.transport.bytes = 0
+		connection.transport.clearResponses()
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
 		connection.nodeAddrV4 = replacement.LocalAddr().(*net.UDPAddr).AddrPort()
@@ -543,10 +540,7 @@ func (connection *PfcpConnection) Close() {
 			connection.completeRequestLocked(req, requestResult{outcome: requestCanceled, err: net.ErrClosed})
 		}
 		clear(connection.transport.pending)
-		clear(connection.transport.responses)
-		clear(connection.transport.responseBudgets)
-		connection.transport.responseExpiry.Init()
-		connection.transport.bytes = 0
+		connection.transport.clearResponses()
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
 		connection.stateMu.Unlock()

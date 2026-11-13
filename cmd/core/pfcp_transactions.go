@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"net"
 	"net/netip"
 	"sync"
@@ -23,6 +24,7 @@ var errTransactionCapacity = errors.New("PFCP transaction capacity exhausted")
 // under mu. The connection receive loop calls serviceTransactions; it does not
 // create a goroutine or timer for each request. TS 29.244 V20.1.0 clause 6.4.
 type transportState struct {
+	replay          *service.ReplayBudget
 	mu              sync.Mutex
 	next            uint32
 	pending         map[uint32]*pendingRequest
@@ -357,6 +359,10 @@ type responseIndex struct {
 // unlink each entry in O(1). The retention interval is constant per connection,
 // so insertion order is also expiration order. No stale accounting remains.
 func (state *transportState) removeResponse(e *responseIndex) {
+	state.replay.Change(e.budget.host, -1, -e.size)
+	state.unlinkResponse(e)
+}
+func (state *transportState) unlinkResponse(e *responseIndex) {
 	state.bytes -= e.size
 	delete(state.responses, e.key)
 	state.responseExpiry.Remove(e.expiryElement)
@@ -400,22 +406,13 @@ func (conn *PfcpConnection) cachedReplyAt(key requestKey, digest [32]byte, now t
 	if owner == "" {
 		return nil, false, nil
 	}
-	// Fair shares use associations actually holding entries, including a new
-	// entrant. There is no eviction of unexpired outcomes (clause 6.4).
-	holders := len(state.responseBudgets)
-	if state.responseBudgets[owner] == nil {
-		holders++
-	}
-	holders = max(1, holders)
-	share := (conn.transactionLimit() + holders - 1) / holders
-	byteShare := conn.replayByteLimit() / holders
-	budget := state.responseBudgets[owner]
-	saturated := len(state.responses) >= conn.transactionLimit() || state.bytes+responseReservation > conn.replayByteLimit()
-	unfair := holders > 1 && budget != nil && (budget.entries.Len() >= share || budget.bytes >= byteShare)
-	if saturated || unfair {
+	if !conn.replayBudgetLocked().Reserve(owner, responseReservation, conn.transactionLimit(), conn.replayByteLimit()) {
 		PfcpReplayDrops.Inc()
 		return nil, true, errTransactionCapacity
 	}
+	// Reserve before executing: independent endpoints cannot overbook the shared
+	// budget while another endpoint is building its response.
+	conn.cacheReplyLocked(key, nil, "", owner, true)
 	return nil, false, nil
 }
 
@@ -426,16 +423,7 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.responses == nil {
-		state.responses = make(map[requestKey]cachedResponse)
-	}
-	if state.responseBudgets == nil {
-		state.responseBudgets = make(map[string]*responseBudget)
-	}
 	key.digest = digest
-	if old, ok := state.responses[key]; ok {
-		state.removeResponse(old.index)
-	}
 	owner := responseOwner(key, nil)
 	entity := ""
 	if len(context) > 0 {
@@ -443,6 +431,28 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 	}
 	if len(context) > 1 {
 		owner = context[1]
+	}
+	conn.cacheReplyLocked(key, wire, entity, owner, false)
+}
+
+func (conn *PfcpConnection) cacheReplyLocked(key requestKey, wire []byte, entity, owner string, reserved bool) {
+	state := &conn.transport
+	budgetAccount := conn.replayBudgetLocked()
+	if state.responses == nil {
+		state.responses = make(map[requestKey]cachedResponse)
+	}
+	if state.responseBudgets == nil {
+		state.responseBudgets = make(map[string]*responseBudget)
+	}
+	cost := len(wire) + len(key.peer) + len(entity) + responseMetadataBytes
+	if wire == nil {
+		cost = responseReservation
+	}
+	if old, ok := state.responses[key]; ok {
+		budgetAccount.Change(owner, 0, cost-old.index.size)
+		state.unlinkResponse(old.index)
+	} else if !reserved {
+		budgetAccount.Change(owner, 1, cost)
 	}
 	budget := state.responseBudgets[owner]
 	if budget == nil {
@@ -454,16 +464,39 @@ func (conn *PfcpConnection) cacheReply(key requestKey, digest [32]byte, wire []b
 		ttl = time.Minute
 	}
 	now := time.Now()
-	cost := len(wire) + len(key.peer) + len(entity) + responseMetadataBytes
-	if wire == nil {
-		cost = responseReservation
-	}
 	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: cost}
 	e.element = budget.entries.PushBack(e)
 	e.expiryElement = state.responseExpiry.PushBack(e)
 	budget.bytes += cost
 	state.responses[key] = cachedResponse{wire: wire, expires: e.expires, entity: entity, index: e}
 	state.bytes += cost
+}
+
+func (conn *PfcpConnection) replayBudgetLocked() *service.ReplayBudget {
+	state := &conn.transport
+	if state.replay == nil {
+		if conn.ResourceManager != nil {
+			state.replay = conn.ResourceManager.ReplayBudget()
+		} else {
+			state.replay = &service.ReplayBudget{}
+		}
+	}
+	return state.replay
+}
+
+func (conn *PfcpConnection) discardReply(key requestKey, digest [32]byte) {
+	conn.transport.mu.Lock()
+	defer conn.transport.mu.Unlock()
+	key.digest = digest
+	if entry, ok := conn.transport.responses[key]; ok {
+		conn.transport.removeResponse(entry.index)
+	}
+}
+
+func (state *transportState) clearResponses() {
+	for _, entry := range state.responses {
+		state.removeResponse(entry.index)
+	}
 }
 
 func defaultDuration(seconds, fallback uint32) time.Duration {

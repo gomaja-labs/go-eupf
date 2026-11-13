@@ -178,6 +178,7 @@ func TestResponseBudgetsProtectConfiguredRetention(t *testing.T) {
 	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(conn.responseRetention)); err != nil {
 		t.Fatal(err)
 	}
+	conn.discardReply(next, [32]byte{2})
 	if len(conn.transport.responses) != 0 {
 		t.Fatal("oldest eligible response was not evicted")
 	}
