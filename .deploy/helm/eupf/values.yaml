@@ -103,6 +103,7 @@ config:
   data: {}
     # config.yml: |
     #   interface_name: eth0
+    #   max_sessions: 1024
     #   api_address: :8080
     #   pfcp_address: :8805
     #   metrics_address: :9090
@@ -311,10 +312,10 @@ ingress:
 # Memory floor: 2 * 128 MiB replay (GC) + max(64 MiB startup/maps, observed
 # cgroup baseline plus growing-map reserve) + 3 * 16 MiB originated queues
 # + 32 MiB transient = 400 MiB.
-# 512 MiB leaves 112 MiB headroom at default map sizes. The process derives
+# 512 MiB leaves 112 MiB headroom at the chart's 1024-session map sizes. The process derives
 # its Go soft limit from the cgroup limit, excluding baseline/kernel charges.
-# The 125 s / 2000 requests/s fixture used about 0.33 CPU and peaked at
-# 132 MiB cgroup charge with all three endpoints; forwarding needs separate sizing.
+# The 125 s / 2000 requests/s fixture used about 0.32 CPU and peaked at
+# 131 MiB cgroup charge with all three endpoints; forwarding needs separate sizing.
 resources:
   limits:
     cpu: "1"

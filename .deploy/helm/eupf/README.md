@@ -42,7 +42,11 @@ List-valued parameters (e.g. `UPF_INTERFACE_NAME`) are comma-separated strings.
 
 ### Sessions and memory
 
-eUPF sizes its eBPF maps from `max_sessions`: two PDR, FAR and URR entries and one QER entry per session, allocated at startup and charged to the pod's memory. eUPF's own default is 65535 sessions, whose maps need about 115 MiB (a working set of about 140 MiB with the process, measured on a kind cluster); the chart's default memory limit is 128 Mi, so `defaultEnv` sets `UPF_MAX_SESSIONS: "1024"`, a working set of about 30 MiB. For production, raise `max_sessions` and `resources.limits.memory` together: about 1.8 MiB per 1024 sessions on top of the process's ~30 MiB, plus headroom; in ConfigMap mode set `max_sessions` in `config.data`, because the default `UPF_*` variables are not injected there.
+The chart sets `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
+
+eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash/trie storage grows as rules are installed. Both are charged to the container's memory cgroup. The process includes the observed startup charge and a reserve for growing PDR maps when deriving its Go soft memory limit and rejects a hard limit that cannot fit the configured capacity.
+
+The default memory floor at the chart's map capacities is `2 * 128 MiB replay + max(64 MiB, observed startup/map charge + growing-map reserve) + 48 MiB originated queues + 32 MiB transient headroom`, or 400 MiB. The replay budget is shared across N4, Sxa and Sxb. Raise map capacities and the memory limit together; forwarding load, rule populations and kernel allocation costs need their own measurements. See [PFCP transport](../../../docs/pfcp-transport.md) for the fixed-workload measurements and operational limits.
 
 ### ConfigMap mode (`config.enabled: true`)
 
@@ -52,6 +56,7 @@ config:
   data:
     config.yml: |
       interface_name: eth0
+      max_sessions: 1024
       api_address: :8080
       pfcp_address: :8805
       metrics_address: :9090
