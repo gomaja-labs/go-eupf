@@ -109,3 +109,42 @@ func TestGeneratedHandoverMarkerCarriesOneMappedFlow(t *testing.T) {
 		t.Fatal("wrong old tunnel source port")
 	}
 }
+
+func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
+	for _, tc := range []struct {
+		name                                            string
+		label                                           uint8
+		present, deletion, inactive, wantQFI, wantError bool
+	}{
+		{name: "zero QFI", label: ie.TGPPInterfaceTypeN3ForDataForwarding, present: true, wantQFI: true},
+		{name: "absent QFI", label: ie.TGPPInterfaceTypeN9DataForwarding, wantError: true},
+		{name: "EPS output", label: ie.TGPPInterfaceTypeN3ForDataForwarding, deletion: true},
+		{name: "ordinary old tunnel", label: ie.TGPPInterfaceTypeN33GPPAccess, present: true},
+		{name: "inactive forwarding tunnel", label: ie.TGPPInterfaceTypeN9DataForwarding, inactive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSession(1, 2, "", "", false)
+			fid := uint32(1)
+			f := SFarInfo{InterfaceType: tc.label, InterfaceTypePresent: true}
+			if !tc.inactive {
+				p := SPDRInfo{PdrID: 1, FARID: &fid, QERIDs: []uint32{1}}
+				if tc.deletion {
+					p.PdrInfo.GtpExtensionHeaderDeletion = 1
+				}
+				s.PutPDR(1, p)
+			}
+			s.NewQer(1, 1, ebpf.QerInfo{QFIPresent: tc.present, Qfi: 0})
+			qfi, present, active, err := handoverMarkerQFI(s, fid, f)
+			if (err != nil) != tc.wantError || qfi != 0 || present != tc.wantQFI || active == tc.inactive {
+				t.Fatalf("qfi=%d present=%t active=%t err=%v", qfi, present, active, err)
+			}
+			if tc.wantError {
+				fields := ruleFailureIEs(err)
+				cause, _ := fields[0].Cause()
+				if cause != ie.CauseConditionalIEMissing {
+					t.Fatalf("cause %d", cause)
+				}
+			}
+		})
+	}
+}
