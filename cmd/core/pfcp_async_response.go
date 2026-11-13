@@ -11,8 +11,9 @@ import (
 
 type usageResponse struct {
 	message.Message
-	ready    <-chan error
-	finalize func()
+	ready       <-chan error
+	finalize    func()
+	waitStarted time.Time
 }
 
 func (conn *PfcpConnection) deferredUsageResponse(msg message.Message, finalize func()) message.Message {
@@ -20,7 +21,7 @@ func (conn *PfcpConnection) deferredUsageResponse(msg message.Message, finalize 
 		finalize()
 		return msg
 	}
-	result := &usageResponse{Message: msg, ready: conn.responseWait, finalize: finalize}
+	result := &usageResponse{Message: msg, ready: conn.responseWait, finalize: finalize, waitStarted: time.Now()}
 	conn.responseWait = nil
 	return result
 }
@@ -35,6 +36,7 @@ func (conn *PfcpConnection) completeUsageResponse(response *usageResponse, key r
 		return
 	case err = <-response.ready:
 	}
+	PfcpFinalUsageWait.WithLabelValues(message.MessageTypeName(key.typ)).Observe(time.Since(response.waitStarted).Seconds())
 	msg := response.Message
 	if err != nil {
 		log.Error().Err(err).Uint64("seid", msg.SEID()).Msg("Final usage unavailable after bounded data-plane recovery")
