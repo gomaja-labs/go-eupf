@@ -365,4 +365,20 @@ func TestEndMarkerSourceReadFailureRejectsPathSwitch(t *testing.T) {
 	if batch != nil || !errors.Is(err, sentinel) {
 		t.Fatalf("source failure admitted path switch: batch=%v err=%v", batch, err)
 	}
+	associationSetup(t, conn, "127.0.0.1", 1)
+	conn.GetAssociation("127.0.0.1").Sessions[1] = old
+	before := old.FARs[1]
+	request = message.NewSessionModificationRequest(1, 2, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(
+		ie.NewOuterHeaderCreation(0x100, 201, "127.0.0.30", "", 0, 0, 0), ie.NewPFCPSMReqFlags(2))))
+	reply, _, handlerErr := HandlePfcpSessionModificationRequest(conn, request, "127.0.0.1")
+	if handlerErr != nil {
+		t.Fatal(handlerErr)
+	}
+	cause, err := reply.(*message.SessionModificationResponse).Cause.Cause()
+	if err != nil || cause != ie.CauseSystemFailure {
+		t.Fatalf("source I/O failure cause=%d err=%v, want System failure", cause, err)
+	}
+	if conn.GetAssociation("127.0.0.1").Sessions[1].FARs[1] != before {
+		t.Fatal("source read failure committed a path switch")
+	}
 }

@@ -290,7 +290,9 @@ func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SF
 	var sources []net.IP
 	n3, n9, err := conn.mapOperations.TunnelSourceAddresses()
 	if err != nil {
-		return nil, err
+		// TS 29.244 V20.1.0 table 8.2.1-1: a local data-plane
+		// read failure is System failure, not an invalid requested rule.
+		return nil, &requestIEError{ie.CauseSystemFailure, 0, err}
 	}
 	if native {
 		sources = append(sources, n3)
