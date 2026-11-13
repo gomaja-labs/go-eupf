@@ -8,8 +8,17 @@ import (
 )
 
 type pdrImage struct {
-	value *IpEntrypointPdrInfo
-	slot  uint32
+	value           *IpEntrypointPdrInfo
+	slot            uint32
+	hasNotification bool
+}
+
+func publicationImage(value *IpEntrypointPdrInfo, slot uint32) pdrImage {
+	image := pdrImage{value: value, slot: slot}
+	for _, entry := range value.Entries[:value.Count] {
+		image.hasNotification = image.hasNotification || entry.Notify != 0
+	}
+	return image
 }
 
 type pdrMutationKey struct {
@@ -32,9 +41,17 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		return draft, nil
 	}
 	// These unpinned maps start empty and every control-plane writer uses this
-	// journal. Keep immutable undo images rather than copying the large kernel
-	// bucket on every request. Diagnostic readers still copy the actual map.
+	// journal. Configuration images avoid copying the large kernel bucket on
+	// ordinary requests. Notification flags are packet-mutated, so snapshot those
+	// buckets before constructing an undo image. Diagnostic readers copy the map.
 	image, present := tx.objects.ruleImages[k]
+	if present && image.hasNotification {
+		var snapshot IpEntrypointPdrInfo
+		if err := tx.objects.lookupPDR(m, key, &snapshot, false); err != nil {
+			return nil, fmt.Errorf("snapshot PDR notification state: %w", err)
+		}
+		image.value = &snapshot
+	}
 	draft := &pdrMutation{pdrMutationKey: k, owner: tx.sessionID, previous: image.value, previousSlot: image.slot, present: present}
 	if present {
 		bucket := image.value
@@ -124,9 +141,8 @@ func (tx *ruleTransaction) publishPDRs() error {
 			var value IpEntrypointPdrInfo
 			value.SessionId, value.Count = draft.owner, uint32(len(draft.entries))
 			copy(value.Entries[:], draft.entries)
-			// PDR values are immutable to packet readers. The transaction's
-			// immutable publication image is the exact undo image under
-			// ruleMutex; rereading the large kernel bucket adds no information.
+			// Configuration fields come from the publication image; mutable
+			// notification flags were captured when the draft was created.
 			if tx.beforeWrite != nil {
 				if err := tx.beforeWrite(); err != nil {
 					return err
@@ -181,7 +197,7 @@ func (tx *ruleTransaction) publishPDRs() error {
 				}
 				if err == nil {
 					if original.present {
-						tx.objects.ruleImages[original.pdrMutationKey] = pdrImage{original.previous, original.previousSlot}
+						tx.objects.ruleImages[original.pdrMutationKey] = publicationImage(original.previous, original.previousSlot)
 						tx.objects.recordPDRKey(original.m, original.key, original.previous.SessionId, original.previous.Count > 0)
 					} else {
 						delete(tx.objects.ruleImages, original.pdrMutationKey)
@@ -193,7 +209,7 @@ func (tx *ruleTransaction) publishPDRs() error {
 			if remove {
 				delete(tx.objects.ruleImages, draft.pdrMutationKey)
 			} else {
-				tx.objects.ruleImages[draft.pdrMutationKey] = pdrImage{&value, publishedSlot}
+				tx.objects.ruleImages[draft.pdrMutationKey] = publicationImage(&value, publishedSlot)
 			}
 			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {

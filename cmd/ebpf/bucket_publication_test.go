@@ -3,11 +3,13 @@
 package ebpf
 
 import (
+	"net"
 	"sync"
 	"testing"
 	"time"
 
 	cilium "github.com/cilium/ebpf"
+	"github.com/gopacket/gopacket/layers"
 )
 
 func pdrLookupTest(b *BpfObjects, m *cilium.Map) func(interface{}, interface{}) error {
@@ -213,5 +215,45 @@ func TestConfigurationWritesRequireFreshSlots(t *testing.T) {
 	}
 	if err := tx.UpdateFar(id, FarInfo{Action: 1}); err == nil {
 		t.Error("rewrote an initialized configuration version")
+	}
+}
+
+func TestPDRImageRollbackPreservesNotificationState(t *testing.T) {
+	b := loadDatapath(t)
+	ip := net.ParseIP("2001:db8::2")
+	info := PdrInfo{SessionID: 9, PdrID: 1, FarId: 3, NotifyFlag: true}
+	if err := b.PutPdrDownlink(ip, info); err != nil {
+		t.Fatal(err)
+	}
+	runDatapath(t, b, ethernetDatapath(t, layers.EthernetTypeIPv6, udpDatapath(t, true)))
+	before, err := b.LookupDownlinkPDR(ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Entries[0].Notify != 2 {
+		t.Fatal("packet did not consume the notification flag")
+	}
+	controller, err := b.BeginRuleTransaction(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := controller.(*ruleTransaction)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	info.FarId = 2
+	if err := tx.PutPdrDownlink(ip, info); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.publishPDRs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := b.LookupDownlinkPDR(ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Entries[0].Notify != 2 {
+		t.Fatal("rollback rearmed the consumed notification")
 	}
 }
