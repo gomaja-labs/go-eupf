@@ -23,6 +23,9 @@ type UpfConfig struct {
 	PfcpResponseRetention     uint32   `json:"pfcp_response_retention" yaml:"pfcp_response_retention"`
 	PfcpMaxReplayEntries      uint32   `json:"pfcp_max_replay_entries" yaml:"pfcp_max_replay_entries"`
 	PfcpMaxOriginatedRequests uint32   `json:"pfcp_max_originated_requests" yaml:"pfcp_max_originated_requests"`
+	BufferPackets             uint32   `json:"buffer_packets" yaml:"buffer_packets"`
+	BufferPerSession          uint32   `json:"buffer_per_session" yaml:"buffer_per_session"`
+	BufferRetentionSeconds    uint32   `json:"buffer_retention_seconds" yaml:"buffer_retention_seconds"`
 	PfcpReplayMemoryMiB       uint32   `json:"pfcp_replay_memory_mib" yaml:"pfcp_replay_memory_mib"`
 	// RestorationPeriod holds automatic UE IPv4 allocation and suppresses
 	// unknown-tunnel Error Indications for this many seconds after startup.

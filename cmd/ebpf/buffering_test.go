@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	cilium "github.com/cilium/ebpf"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 )
@@ -45,6 +46,9 @@ func TestBufferAdmissionRecordsProcessedDownlink(t *testing.T) {
 	record, err := reader.Read()
 	if err != nil {
 		t.Fatalf("BUFF|NOCP produced no admission record: %v", err)
+	}
+	if len(reader.record.RawSample) != 64+BufferFrameSize {
+		t.Fatalf("fixed ring slot=%d expected=%d", len(reader.record.RawSample), 64+BufferFrameSize)
 	}
 	if record.SessionID != 42 || record.Cookie != 7 || record.Sequence != 1 || record.PDRID != 9 || !record.Notify || !record.QFIPresent || record.QFI != 0 || record.Kind != 1 {
 		t.Fatalf("incorrect admission metadata: %+v", record)
@@ -401,5 +405,40 @@ func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
 	state, err = b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1})
 	if err != nil || state.Mode != BufferForward {
 		t.Fatalf("finished producers did not release barrier: mode=%d error=%v", state.Mode, err)
+	}
+}
+
+func TestBufferPreparedProducerRechecksTheSharedCapacity(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.CreateBufferAnchor(42, 1, []BufferLane{{Index: 0, Cookie: 7, Mode: BufferHold}}); err != nil {
+		t.Fatal(err)
+	}
+	var anchor bufferAnchor
+	if err := b.BufferAnchors.Lookup(uint64(42), &anchor); err != nil {
+		t.Fatal(err)
+	}
+	anchor.Outstanding = 1
+	anchor.FAR[0].Produced, anchor.FAR[0].Preparing, anchor.FAR[0].Downlink = 1, 1, 1
+	if err := b.BufferAnchors.Put(uint64(42), &anchor); err != nil {
+		t.Fatal(err)
+	}
+	cpus, err := cilium.PossibleCPU()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := make([]IpEntrypointBufferPending, cpus)
+	for i := range pending {
+		pending[i] = IpEntrypointBufferPending{SessionId: 42, Cookie: 7, Kind: 1, Downlink: 1}
+	}
+	if err := b.BufferPendingPacket.Put(uint32(0), pending); err != nil {
+		t.Fatal(err)
+	}
+	action, _, err := b.UpfBufferAdmissionFunc.Test(bufferedFrame(t, 2, 100))
+	if err != nil || action != 1 {
+		t.Fatalf("prepared continuation: %d %v", action, err)
+	}
+	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
+	if err != nil || state.Produced != 1 || state.Outstanding != 1 || state.Preparing != 0 {
+		t.Fatalf("prepared producer exceeded capacity: %+v %v", state, err)
 	}
 }

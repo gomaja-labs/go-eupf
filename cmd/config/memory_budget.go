@@ -11,6 +11,9 @@ const mib = int64(1 << 20)
 // The minimum baseline covers the default 1024-session maps and startup peak;
 // a larger observed charge increases it rather than being hidden by that floor.
 func (c *UpfConfig) PFCPMemoryPlan(limit, baseline int64) (softLimit int64, err error) {
+	if err := c.ValidateBuffering(); err != nil {
+		return 0, err
+	}
 	if limit <= 0 {
 		return 0, nil
 	}
@@ -29,9 +32,10 @@ func (c *UpfConfig) PFCPMemoryPlan(limit, baseline int64) (softLimit int64, err 
 	// four PDRs, three FARs, two QERs and two URRs (8192 synthetic sessions).
 	// Round live state to 16 KiB and reserve it twice for GC and replacement.
 	sessionMemory := int64(sessions) * (32 << 10)
-	needed := baseline + 2*budget*mib + sessionMemory + originated + transient
+	buffers, windows := c.BufferMemoryReserve(), c.UsageWindowMemoryReserve()
+	needed := baseline + 2*budget*mib + sessionMemory + originated + transient + buffers + windows
 	if limit < needed {
-		return 0, fmt.Errorf("container memory limit %d bytes cannot fit PFCP replay, sessions and startup/map baseline: need at least %d bytes (baseline %d, session reserve %d)", limit, needed, baseline, sessionMemory)
+		return 0, fmt.Errorf("container memory limit %d bytes cannot fit replay, sessions, buffers and startup/map baseline: need at least %d bytes (baseline %d, sessions %d, buffers %d, usage windows %d)", limit, needed, baseline, sessionMemory, buffers, windows)
 	}
 	return limit - baseline - transient, nil
 }

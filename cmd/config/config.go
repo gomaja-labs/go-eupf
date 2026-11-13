@@ -75,6 +75,9 @@ type Qer struct {
 }
 
 type UpfConfig struct {
+	BufferPackets             uint32   `mapstructure:"buffer_packets" json:"buffer_packets"`
+	BufferPerSession          uint32   `mapstructure:"buffer_per_session" json:"buffer_per_session"`
+	BufferRetentionSeconds    uint32   `mapstructure:"buffer_retention_seconds" json:"buffer_retention_seconds"`
 	PfcpPeerAllowList         []string `mapstructure:"pfcp_peer_allow_list" json:"pfcp_peer_allow_list"`
 	PfcpRequestTimeout        uint32   `mapstructure:"pfcp_request_timeout" json:"pfcp_request_timeout"`
 	PfcpRequestRetries        uint32   `mapstructure:"pfcp_request_retries" json:"pfcp_request_retries"`
@@ -214,6 +217,9 @@ func defineFlags() {
 	pflag.Uint32("pfcp-max-replay-entries", 131072, "Maximum retained request outcomes across the UPF process")
 	pflag.Uint32("pfcp-max-originated-requests", 4096, "Maximum outstanding originated requests per PFCP connection")
 	pflag.Uint32("pfcp-replay-memory-mib", 128, "Process-wide replay cache accounting budget in MiB")
+	pflag.Uint32("buffer-packets", 4096, "Process-wide reserved buffering packet capacity")
+	pflag.Uint32("buffer-per-session", 4, "Packet capacity reserved for each buffering session")
+	pflag.Uint32("buffer-retention-seconds", 30, "Ordinary packet buffering and output retry retention in seconds")
 	pflag.Uint32("pfcp-max-associations", 1024, "Maximum associations per PFCP connection")
 	pflag.Uint32("heartbeat-failure-grace", 0, "Additional unreachable seconds after exhausting heartbeat retries before session deletion")
 	pflag.Uint32("hbretries", 3, "Number of heartbeat retries")
@@ -322,6 +328,9 @@ func initCommonConfig() error {
 	_ = commonConfigV.BindPFlag("pfcp_max_replay_entries", pflag.Lookup("pfcp-max-replay-entries"))
 	_ = commonConfigV.BindPFlag("pfcp_max_originated_requests", pflag.Lookup("pfcp-max-originated-requests"))
 	_ = commonConfigV.BindPFlag("pfcp_replay_memory_mib", pflag.Lookup("pfcp-replay-memory-mib"))
+	_ = commonConfigV.BindPFlag("buffer_packets", pflag.Lookup("buffer-packets"))
+	_ = commonConfigV.BindPFlag("buffer_per_session", pflag.Lookup("buffer-per-session"))
+	_ = commonConfigV.BindPFlag("buffer_retention_seconds", pflag.Lookup("buffer-retention-seconds"))
 	_ = commonConfigV.BindPFlag("restoration_period", pflag.Lookup("restoration-period"))
 	_ = commonConfigV.BindPFlag("pfcp_max_associations", pflag.Lookup("pfcp-max-associations"))
 	_ = commonConfigV.BindPFlag("heartbeat_failure_grace", pflag.Lookup("heartbeat-failure-grace"))
@@ -406,6 +415,9 @@ func (c *UpfConfig) Validate() error {
 		return fmt.Errorf("gtp_echo_interval must be at least 60 seconds (TS 29.281 V19.2.0 clause 7.2.1)")
 	}
 	if err := c.ValidatePFCP(); err != nil {
+		return err
+	}
+	if err := c.ValidateBuffering(); err != nil {
 		return err
 	}
 	v := validator.New()

@@ -10,6 +10,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+
 	cilium "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 )
@@ -18,7 +20,7 @@ import (
 const BufferFarLanes = 128
 
 // BufferFrameSize is the current fixed ring payload class.
-const BufferFrameSize = 2048
+const BufferFrameSize = config.BufferFrameBytes
 
 const (
 	// BufferHold admits packets while a FAR requests buffering.

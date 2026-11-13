@@ -42,13 +42,13 @@ List-valued parameters (e.g. `UPF_INTERFACE_NAME`) are comma-separated strings.
 
 ### Sessions and memory
 
-The chart sets the shared session admission limit `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
+The chart sets the shared session admission limit `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` and `pfcp_replay_memory_mib: 64` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
 
 eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash maps hold small slot descriptors and IPv6 trie storage grows as rules are installed; the shared PDR bucket array is preallocated with four times each hash map's capacity plus slot zero. Both are charged to the container's memory cgroup. The process measures the loaded cgroup charge and reserves growing-map capacity before checking whether the hard limit fits the configured replay, session and queue budgets.
 
-The startup memory floor is `2 * pfcp_replay_memory_mib + B + 32 KiB * max_sessions + 48 MiB originated queues + 32 MiB transient headroom`, where `B = max(64 MiB, observed loaded cgroup charge + growing-map reserve)`. With 128 MiB replay, 1024 sessions and the minimum `B`, the floor is 432 MiB; a larger measured baseline raises it. The replay budget is shared across N4, Sxa and Sxb. The 32 KiB per-session term reserves live state and GC headroom.
+The startup memory floor is `2 * pfcp_replay_memory_mib + B + 32 KiB * max_sessions + 48 MiB originated queues + 32 MiB transient headroom + H + W`, where `B = max(64 MiB, observed loaded cgroup charge + growing-map reserve)`. The kernel packet ring and buffering anchors contribute to `B`. `H` reserves the fixed payload pool, descriptors and buffering lifetime metadata; `W` reserves per-URR measurement-window state. With the chart's 64 MiB replay budget, 1024 sessions, 4096 packets and four packets per buffering reservation, `H = 138 MiB`, `W = 0.25 MiB`, and the minimum floor is 442.25 MiB. A larger measured baseline raises it. The replay budget is shared across N4, Sxa and Sxb; the standalone replay default remains 128 MiB. See [PFCP transport](../../../docs/pfcp-transport.md) for the exact terms and evidence limits.
 
-After this admission check, the automatic Go soft limit is `container hard limit - B - 32 MiB transient headroom`. The replay, session and originated-queue budgets fit within that soft limit; the full startup floor is not subtracted from it. A smaller explicit `GOMEMLIMIT` is honored only when it still fits those budgets. Without a visible cgroup hard limit, startup applies neither an automatic Go soft limit nor this refusal check. Raise map capacities and the memory limit together; forwarding load, rule populations and kernel allocation costs need their own measurements. See [PFCP transport](../../../docs/pfcp-transport.md) for the fixed-workload measurements and operational limits.
+After this admission check, the automatic Go soft limit is `container hard limit - B - 32 MiB transient headroom`. The replay, session, buffer, URR-window and originated-queue budgets fit within that soft limit; the full startup floor is not subtracted from it. A smaller explicit `GOMEMLIMIT` is honored only when it still fits those budgets. Without a visible cgroup hard limit, startup applies neither an automatic Go soft limit nor this refusal check. Raise map capacities and the memory limit together; forwarding load, rule populations and kernel allocation costs need their own measurements. See [PFCP transport](../../../docs/pfcp-transport.md) for the fixed-workload measurements and operational limits.
 
 ### ConfigMap mode (`config.enabled: true`)
 
@@ -59,6 +59,10 @@ config:
     config.yml: |
       interface_name: eth0
       max_sessions: 1024
+      pfcp_replay_memory_mib: 64
+      buffer_packets: 4096
+      buffer_per_session: 4
+      buffer_retention_seconds: 30
       restoration_period: 60
       api_address: :8080
       pfcp_address: :8805

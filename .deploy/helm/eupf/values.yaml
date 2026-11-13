@@ -79,6 +79,10 @@ defaultEnv:
   # maps at the size the limit was set for. Raise both together for production.
   # Shared admission limit, including empty and retiring session contexts.
   UPF_MAX_SESSIONS: "1024"
+  UPF_PFCP_REPLAY_MEMORY_MIB: "64"
+  UPF_BUFFER_PACKETS: "4096"
+  UPF_BUFFER_PER_SESSION: "4"
+  UPF_BUFFER_RETENTION_SECONDS: "30"
   # Session restoration period; only automatic UE IPv4 allocation waits.
   # Zero permits immediate reuse of unrestored predecessor UE IPv4 addresses.
   UPF_RESTORATION_PERIOD: "60"
@@ -108,6 +112,10 @@ config:
     # config.yml: |
     #   interface_name: eth0
     #   max_sessions: 1024
+    #   pfcp_replay_memory_mib: 64
+    #   buffer_packets: 4096
+    #   buffer_per_session: 4
+    #   buffer_retention_seconds: 30
     #   # Holds automatic UE IPv4 allocation and suppresses unknown-tunnel Error Indications.
     #   restoration_period: 60
     #   api_address: :8080
@@ -313,21 +321,18 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
-# One process-wide replay budget serves N4, Sxa and Sxb. At 2000 cacheable
-# requests/s * 60 s: 120000 entries fit 131072 entries / 128 MiB accounting.
-# Memory floor: 2 * 128 MiB replay (GC) + max(64 MiB, observed loaded cgroup
-# charge + growing-map reserve) + 32 KiB * max_sessions (live state and GC)
-# + 3 * 16 MiB originated queues + 32 MiB transient = at least 432 MiB.
-# At 1024 sessions the combined process measured 52.2 MiB loaded charge plus
-# 23 MiB growing-map reserve: a 443.2 MiB floor, leaving 68.8 MiB in 512 MiB.
-# The full map-only kernel charge was 46.1 MiB. The PDR array's transaction/grace
-# headroom alone adds 14.625 MiB beyond one slot per key across both hash maps.
-# At the standalone 65535-session default the measured plan needs 5.624 GiB;
-# provision at least 6 GiB plus workload headroom when raising the capacity.
-# The process resolves its own cgroup and ancestor limits to derive a Go soft limit.
-# The 125 s / 2000 requests/s fixture charged about 0.43 CPU cores and peaked at
-# 185.6 MiB in the cgroup with all three endpoints and 1024 live sessions.
-# Other session/rule populations and forwarding load need separate sizing.
+# Memory floor: 2 * 64 MiB replay + B + 32 KiB * max_sessions
+# + 48 MiB originated queues + 32 MiB transient + H + W.
+# B=max(64 MiB, observed loaded cgroup charge + growing-map reserve);
+# it includes the loaded 4 MiB packet ring and buffering anchor map.
+# H=buffer_packets * (2048 + 2*256) bytes + 2*64 KiB per buffering
+# reservation (at most min(max_sessions, 1024, buffer_packets/buffer_per_session)).
+# W=128 bytes per configured URR map slot for measurement-window headroom.
+# Defaults: H=138 MiB, W=0.25 MiB; minimum floor=442.25 MiB.
+# A larger measured B raises this floor. The chart's 64 MiB replay budget is
+# smaller than the standalone 128 MiB default; large replies fill it sooner.
+# These are startup accounting reserves. Forwarding/rule workloads, every
+# buffer full, cgroup charge and CPU consumption need workload-specific checks.
 resources:
   limits:
     cpu: "1"

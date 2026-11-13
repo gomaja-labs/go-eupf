@@ -19,7 +19,7 @@ func TestMemoryBudgetReservesGrowingMapCapacity(t *testing.T) {
 		if entries == 2048 && reserve != 23<<20 {
 			t.Fatalf("default map reserve %d", reserve)
 		}
-		c := config.UpfConfig{MaxSessions: entries / 2}
+		c := config.UpfConfig{MaxSessions: entries / 2, PfcpReplayMemoryMiB: 64}
 		_, err = c.PFCPMemoryPlan(512<<20, (19<<20)+reserve)
 		if (err != nil) != (entries == 131070) {
 			t.Fatalf("entries %d reserve %d: %v", entries, reserve, err)

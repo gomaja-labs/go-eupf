@@ -184,6 +184,13 @@ func run(ctx context.Context) (runErr error) {
 	}
 	log.Info().Int64("container_limit_bytes", memoryLimit).Int64("cgroup_before_maps_bytes", beforeMaps).Int64("cgroup_loaded_baseline_bytes", baseline).Int64("growing_map_reserve_bytes", mapReserve).Int64("go_memory_limit_bytes", softLimit).Msg("PFCP process memory budget")
 
+	bufferSettings := config.Conf.Buffering()
+	packetBuffers, err := core.NewPacketBuffering(bpfObjects, core.BufferingOptions{Packets: bufferSettings.Packets, PerSession: bufferSettings.PerSession, FrameBytes: ebpf.BufferFrameSize, Retention: time.Duration(bufferSettings.RetentionSeconds) * time.Second})
+	if err != nil {
+		return fmt.Errorf("initialize packet buffering: %w", err)
+	}
+	defer func() { runErr = errors.Join(runErr, packetBuffers.Close()) }()
+
 	dumper, err := newStartupDumper(
 		"dumps/",
 		config.Conf.TraceMaxDumpFiles,
@@ -308,6 +315,10 @@ func run(ctx context.Context) (runErr error) {
 		conn, err := core.NewPfcpConnection(s.address, s.nodeId, s.n3Ip, s.n9Ip, bpfObjects, resourceManager, dumper, s.sdfNotifyC, profile)
 		if err != nil {
 			return nil, fmt.Errorf("create %s connection: %w", s.label, err)
+		}
+		if err := conn.SetPacketBuffering(packetBuffers); err != nil {
+			conn.Close()
+			return nil, err
 		}
 		connectors := make([]core.AssociationConnector, 0, len(s.remoteNodes))
 		for _, rn := range s.remoteNodes {
@@ -464,6 +475,8 @@ func run(ctx context.Context) (runErr error) {
 
 	for {
 		select {
+		case err := <-packetBuffers.Failures():
+			return fmt.Errorf("packet buffering: %w", err)
 		case err := <-pfcpConn.Failures():
 			return err
 		case err := <-sxaConn.Failures():

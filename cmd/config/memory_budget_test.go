@@ -7,7 +7,7 @@ import (
 )
 
 func TestMemoryBudgetIncludesSharedReplayAndKernelBaseline(t *testing.T) {
-	c := UpfConfig{MaxSessions: 1024}
+	c := UpfConfig{MaxSessions: 1024, PfcpReplayMemoryMiB: 64}
 	if _, err := c.PFCPMemoryPlan(128*mib, 25*mib); err == nil {
 		t.Fatal("accepted chart limit smaller than replay plus baseline")
 	}
@@ -48,7 +48,7 @@ func TestCgroupMemoryLimits(t *testing.T) {
 func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
 	for _, sessions := range []uint32{1, 1024, 65535, 1 << 20} {
 		c := UpfConfig{MaxSessions: sessions}
-		needed := 400*mib + int64(sessions)*32768
+		needed := 400*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve()
 		if _, err := c.PFCPMemoryPlan(needed-1, 0); err == nil {
 			t.Fatalf("sessions %d: omitted per-session memory", sessions)
 		}
