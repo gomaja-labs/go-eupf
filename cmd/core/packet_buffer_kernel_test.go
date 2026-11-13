@@ -21,6 +21,9 @@ import (
 )
 
 func packetBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
+	return packetBufferFixtureOptions(t, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
+}
+func packetBufferFixtureOptions(t *testing.T, options BufferingOptions) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
 	t.Helper()
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		t.Fatal(err)
@@ -36,7 +39,7 @@ func packetBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *Pfc
 	})
 	conn, assoc, session, peer := downlinkFixture(t, true)
 	conn.mapOperations = plane
-	buffering, err := NewPacketBuffering(plane, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: 2048, Retention: time.Minute})
+	buffering, err := NewPacketBuffering(plane, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,8 +233,11 @@ func TestSessionJournalReservesAndRollsBackPacketBuffers(t *testing.T) {
 }
 
 func publishPacketBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
+	return publishPacketBufferFixtureOptions(t, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
+}
+func publishPacketBufferFixtureOptions(t *testing.T, options BufferingOptions) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
 	t.Helper()
-	plane, buffering, conn, assoc, session, peer := packetBufferFixture(t)
+	plane, buffering, conn, assoc, session, peer := packetBufferFixtureOptions(t, options)
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
 	if err := conn.ResourceManager.AdmitSession(session.LocalSEID); err != nil {

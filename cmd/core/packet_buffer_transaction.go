@@ -260,9 +260,16 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 		}
 		for _, cycle := range plan.drain {
 			cycle.draining, cycle.grace, cycle.ready = true, plan.grace, false
+			cycle.drainStarted = plan.activated
+			if plan.before != nil && plan.before.downlink != nil {
+				state := plan.before.downlink
+				cycle.bufferedBAR = downlinkBARAssociated(plan.before, plan.before.FARs[cycle.farID])
+				cycle.bufferedUntil, cycle.bufferedCutoff, cycle.bufferedInfinite = state.extendedUntil, state.suppressBefore, state.infinite
+			}
 		}
 		for _, cycle := range plan.hold {
 			cycle.draining, cycle.ready = false, false
+			cycle.drainStarted = time.Time{}
 		}
 		if plan.kind == deleteSessionMutation || plan.after.bar == nil && len(plan.after.buffers.cycles) == 0 {
 			owner.canceled, owner.terminal, owner.grace = true, terminal, plan.grace
@@ -281,6 +288,9 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 				conn.downlinkSessions = make(map[uint64]*NodeAssociation)
 			}
 			conn.downlinkSessions[owner.session.LocalSEID] = owner.association
+			if plan.before != nil && hasBufferedBAR(plan.before) && !hasBufferedBAR(plan.after) && plan.after.downlink != nil && plan.after.bar != nil && (plan.after.bar.durationPresent || plan.after.bar.dlPacketCountPresent) {
+				conn.endDownlinkDurationLocked(plan.after, plan.activated)
+			}
 			conn.applyDownlinkDurationLocked(plan.after, plan.activated)
 		}
 	} else {
@@ -308,4 +318,13 @@ func bufferGraceDone(grace <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+func hasBufferedBAR(session *Session) bool {
+	for _, far := range session.FARs {
+		if far.FarInfo.Action&4 != 0 && downlinkBARAssociated(session, far) {
+			return true
+		}
+	}
+	return false
 }

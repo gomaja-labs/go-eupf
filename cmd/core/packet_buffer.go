@@ -39,18 +39,20 @@ type bufferedPacket struct {
 	sent    bool
 }
 type bufferCycle struct {
-	farID               uint32
-	lane                uint32
-	cookie              uint64
-	head                uint32
-	received, completed uint64
-	notified            uint64
-	canceled            bool
-	draining, terminal  bool
-	grace               <-chan struct{}
-	ready               bool
-	ioDone              <-chan struct{}
-	failedAt            time.Time
+	farID                                       uint32
+	lane                                        uint32
+	cookie                                      uint64
+	head                                        uint32
+	received, completed                         uint64
+	notified                                    uint64
+	canceled                                    bool
+	draining, terminal                          bool
+	grace                                       <-chan struct{}
+	ready                                       bool
+	ioDone                                      <-chan struct{}
+	failedAt                                    time.Time
+	drainStarted, bufferedUntil, bufferedCutoff time.Time
+	bufferedBAR, bufferedInfinite               bool
 }
 type packetBufferSession struct {
 	owner    *bufferOwner
@@ -370,6 +372,9 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 	if owner.released || !owner.active && !owner.canceled {
 		return
 	}
+	if owner.active && !owner.canceled {
+		owner.conn.applyDownlinkDurationLocked(owner.session, now)
+	}
 	buffering.noteQueued(owner)
 	if owner.terminal && bufferGraceDone(owner.grace) {
 		owner.graced = true
@@ -396,7 +401,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				if !canDiscard {
 					break
 				}
-			} else if !packet.sent && now.Before(packet.arrived.Add(buffering.options.Retention)) {
+			} else if !packet.sent && !buffering.packetExpired(owner, cycle, packet, now) {
 				break
 			}
 			_, err := buffering.complete(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence, Downlink: packet.record.Downlink})
@@ -528,6 +533,45 @@ func (buffering *PacketBuffering) Close() error {
 		buffering.closeError = errors.Join(buffering.closeError, buffering.sender.Close())
 	})
 	return buffering.closeError
+}
+
+// TS 29.244 V20.1.0 clause 5.2.4.2: extended DL duration replaces
+// ordinary retention. A valid retained packet gets a bounded output window when
+// a new forwarding instruction ends buffering; it is not policed/accounted again.
+func (buffering *PacketBuffering) packetExpired(owner *bufferOwner, cycle *bufferCycle, packet *bufferedPacket, now time.Time) bool {
+	retention := buffering.options.Retention
+	if cycle.draining && !cycle.drainStarted.IsZero() && !packet.arrived.After(cycle.drainStarted) {
+		if packet.record.Downlink && cycle.bufferedBAR {
+			if !cycle.bufferedCutoff.IsZero() && packet.arrived.Before(cycle.bufferedCutoff) {
+				return true
+			}
+			if !cycle.bufferedInfinite {
+				if !cycle.bufferedUntil.IsZero() {
+					if !cycle.drainStarted.Before(cycle.bufferedUntil) {
+						return true
+					}
+				} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
+					return true
+				}
+			}
+		} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
+			return true
+		}
+		return !now.Before(cycle.drainStarted.Add(retention))
+	}
+	if packet.record.Downlink && downlinkBARAssociated(owner.session, owner.session.FARs[cycle.farID]) && owner.session.downlink != nil {
+		state := owner.session.downlink
+		if !state.suppressBefore.IsZero() && packet.arrived.Before(state.suppressBefore) {
+			return true
+		}
+		if state.infinite {
+			return false
+		}
+		if !state.extendedUntil.IsZero() {
+			return !now.Before(state.extendedUntil)
+		}
+	}
+	return !now.Before(packet.arrived.Add(retention))
 }
 
 func waitBufferIO(owner *bufferOwner) {
