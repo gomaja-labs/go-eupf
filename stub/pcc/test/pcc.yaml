@@ -1,6 +1,6 @@
 pcc_rules:
   - pcc_name: "block_icmp"
-    sdf_filter: "permit out ip from 192.168.1.100/32 to any"
+    sdf_filter: "permit out ip from 192.168.1.100/32 to assigned"
     far:
       action: 2
       outer_header_creation: 0

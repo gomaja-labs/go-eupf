@@ -34,7 +34,7 @@ func TestPCCRulesUnmarshal(t *testing.T) {
 	mockConfig := `
 pcc_rules:
   - pcc_name: "block_icmp"
-    sdf_filter: "permit out ip from 192.168.1.100/32 to any"
+    sdf_filter: "permit out ip from 192.168.1.100/32 to assigned"
     far:
       action: 2
       outer_header_creation: 0
@@ -54,7 +54,7 @@ pcc_rules:
 
 	assert.Len(t, config.PccRules, 1)
 	assert.Equal(t, "block_icmp", config.PccRules[0].PccName)
-	assert.Equal(t, "permit out ip from 192.168.1.100/32 to any", config.PccRules[0].SdfFilter)
+	assert.Equal(t, "permit out ip from 192.168.1.100/32 to assigned", config.PccRules[0].SdfFilter)
 	assert.Equal(t, uint8(2), config.PccRules[0].Far.Action)
 	assert.Equal(t, uint8(9), config.PccRules[0].Qer.Qfi)
 }
@@ -64,7 +64,7 @@ func TestPCCRulesValidation(t *testing.T) {
 	mockConfig := `
 pcc_rules:
   - pcc_name: "allow_http"
-    sdf_filter: "permit out ip from 192.168.1.100/32 to any"
+    sdf_filter: "permit out ip from 192.168.1.100/32 to assigned"
     far:
       action: 1
     qer:
@@ -87,7 +87,7 @@ func TestPCCRulesIncorrectSPDFFilter(t *testing.T) {
 	invalidConfigs := []string{
 		`pcc_rules:
   - pcc_name: "allow_http"
-    sdf_filter: "pert out ip from 192.168.1.100/32 to any"
+    sdf_filter: "pert out ip from 192.168.1.100/32 to assigned"
     far:
       action: 1
     qer:

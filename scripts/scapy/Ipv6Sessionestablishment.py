@@ -39,7 +39,7 @@ pfcpSESReq = PFCP(version=1, S=1, seq=2, seid=0, spare_oct=0) / \
          IE_CreatePDR(IE_list=[
              IE_FAR_Id(id=1),
              IE_PDI(IE_list=[
-                 IE_SDF_Filter(FD=1, flow_description="permit out ip from any to any"),
+                 IE_SDF_Filter(FD=1, flow_description="permit out ip from any to assigned"),
                  IE_NetworkInstance(instance="access"),
                  IE_SourceInterface(interface="Access"),
              ]),
