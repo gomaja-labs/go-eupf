@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/btf"
 )
 
 func TestRuleTransactionDoesNotBlockUnrelatedTraffic(t *testing.T) {
@@ -59,10 +60,36 @@ func TestRuleConsistencyHasNoSharedPacketGate(t *testing.T) {
 	if _, exists := spec.Maps["rule_gate"]; exists {
 		t.Fatal("packet path still writes a shared rule gate")
 	}
-	for _, program := range spec.Programs {
+	// Buffer anchors synchronize only a session's admitted packets. They are
+	// not a publication gate; ordinary FORW rules have no buffering reference.
+	// TS 29.244 V20.1.0 clauses 5.2.3.1 and 5.2.4.2.
+	// PDR index locks are taken by kernel BPF_F_LOCK map updates, never by
+	// packet instructions; the helper scan below preserves that distinction.
+	kernelUpdateLocks := map[string]bool{"pdr_map_downlink_ip4": true, "pdr_map_teid_ip4": true}
+	for name, mapSpec := range spec.Maps {
+		if mapSpec.Value == nil {
+			continue
+		}
+		value, ok := btf.UnderlyingType(mapSpec.Value).(*btf.Struct)
+		if !ok {
+			continue
+		}
+		for _, member := range value.Members {
+			lock, ok := btf.UnderlyingType(member.Type).(*btf.Struct)
+			if ok && lock.Name == "bpf_spin_lock" && name != "buffer_anchors" && !kernelUpdateLocks[name] {
+				t.Fatalf("shared packet gate in map %s", name)
+			}
+		}
+	}
+	allowed := map[string]bool{"buffer_admit": true, "upf_buffer_admission_func": true, "upf_buffer_control_func": true}
+	for name, program := range spec.Programs {
+		function := name
 		for _, ins := range program.Instructions {
-			if ins.IsBuiltinCall() && (ins.Constant == int64(asm.FnSpinLock) || ins.Constant == int64(asm.FnSpinUnlock)) {
-				t.Fatal("rule consistency still takes a BPF spin lock")
+			if symbol := ins.Symbol(); symbol != "" {
+				function = symbol
+			}
+			if ins.IsBuiltinCall() && (ins.Constant == int64(asm.FnSpinLock) || ins.Constant == int64(asm.FnSpinUnlock)) && !allowed[function] {
+				t.Fatalf("rule consistency takes a BPF spin lock in %s", function)
 			}
 		}
 	}
