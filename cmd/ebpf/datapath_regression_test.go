@@ -528,21 +528,6 @@ func TestDatapathRouterAdvertisementRouteFallback(t *testing.T) {
 	}
 }
 
-func checksumDatapath(p []byte) uint16 {
-	var sum uint32
-	for len(p) >= 2 {
-		sum += uint32(binary.BigEndian.Uint16(p[:2]))
-		p = p[2:]
-	}
-	if len(p) != 0 {
-		sum += uint32(p[0]) << 8
-	}
-	for sum>>16 != 0 {
-		sum = sum&0xffff + sum>>16
-	}
-	return ^uint16(sum)
-}
-
 func TestDatapathN9IPv4OptionsChecksum(t *testing.T) {
 	// RFC 791 section 3.1: the header checksum covers the complete header,
 	// including options. RFC 1071 section 1 defines one's-complement sum.

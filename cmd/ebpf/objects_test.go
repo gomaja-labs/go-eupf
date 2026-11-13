@@ -1236,3 +1236,18 @@ func serializeFixture(buffer gopacket.SerializeBuffer, opts gopacket.SerializeOp
 	}
 	return gopacket.SerializeLayers(buffer, opts, ls...)
 }
+
+func checksumDatapath(p []byte) uint16 {
+	var sum uint32
+	for len(p) >= 2 {
+		sum += uint32(binary.BigEndian.Uint16(p[:2]))
+		p = p[2:]
+	}
+	if len(p) != 0 {
+		sum += uint32(p[0]) << 8
+	}
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	return ^uint16(sum)
+}
