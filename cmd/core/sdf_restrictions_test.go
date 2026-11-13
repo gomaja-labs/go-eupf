@@ -3,6 +3,8 @@ package core
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
@@ -22,6 +24,7 @@ func TestFlowDescriptionDeparturesAreAbsent(t *testing.T) {
 			if _, err := ParseSdfFilter(description); err == nil {
 				t.Error("accepted a TS 29.212 clause 5.4.2 departure")
 			}
+			before := ignoredSDFCount(t)
 			session := NewSession(9, 42, "", "", false)
 			ctx := NewPDRCreationContext(session, nil)
 			info := SPDRInfo{PdrID: 1}
@@ -31,6 +34,9 @@ func TestFlowDescriptionDeparturesAreAbsent(t *testing.T) {
 			}
 			if len(info.PdrInfo.SdfFilter) != 0 {
 				t.Fatal("semantically incorrect SDF retained")
+			}
+			if got := ignoredSDFCount(t) - before; got != 1 {
+				t.Fatalf("ignored %g filters, want exactly one", got)
 			}
 		})
 	}
@@ -42,4 +48,19 @@ func TestFlowDescriptionPortsOnOpaqueProtocolsParse(t *testing.T) {
 			t.Errorf("non-port predicate must be representable: protocol=%s filter=%+v error=%v", protocol, filter, err)
 		}
 	}
+}
+
+func ignoredSDFCount(t *testing.T) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() == "upf_ignored_sdf_filters_total" {
+			return family.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	t.Fatal("ignored SDF counter is missing")
+	return 0
 }

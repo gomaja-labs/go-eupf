@@ -60,8 +60,10 @@ def test_valid_create_far_modification_does_not_crash(peer):
     # TS 29.244 V20.1.0 table 7.5.4.1-1; OHC format in clause 8.2.56.
     seid = peer.session()
     outer = pfcp.IE_OuterHeaderCreation(GTPUUDPIPV4=1, TEID=1234, ipv4="192.0.2.20")
-    downlink = pdr(identifier=2, sdf=pfcp.IE_SDF_Filter(
-        FD=1, flow_description=b"permit out udp from any to assigned"))
+    downlink = pdr(identifier=2)
+    destination = str(downlink[pfcp.IE_UE_IP_Address].ipv4).encode()
+    downlink.IE_list.append(pfcp.IE_SDF_Filter(
+        FD=1, flow_description=b"permit out udp from any to " + destination))
     downlink[pfcp.IE_FAR_Id].id = 2
     response = peer.request(pfcp.PFCPSessionModificationRequest(
         IE_list=[far(2, outer), downlink]), seid)
