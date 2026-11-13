@@ -34,7 +34,6 @@ func TestFailedUsageReportIsIncludedInNextReport(t *testing.T) {
 				if cause := pipelineCause(t, identityRead(t, cp)); cause != ie.CauseRequestAccepted {
 					t.Fatal("CP F-SEID update rejected")
 				}
-				session = assoc.Sessions[11]
 			}
 			if outcome == "timeout" {
 				conn.serviceTransactions(time.Now().Add(time.Second))
