@@ -6,7 +6,6 @@ package core
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -18,42 +17,43 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 
-// ParseSdfFilter parses the IPFilterRule tuple and distinguishes invalid syntax
-// from valid rules outside the supported packet classifier. RFC 6733 section
-// 4.3.1 defines assigned, address negation, port lists and filter options.
+// ParseSdfFilter parses TS 29.212 V20.0.0 clause 5.4.2, referenced by
+// TS 29.244 V20.1.0 clause 8.2.5. RFC 6733 section 4.3.1 supplies the
+// encoding; 3GPP restricts it to permit/out, one port or range, and no options.
+// Every departure is semantically incorrect, so the caller ignores that
+// optional SDF Filter under TS 29.244 clause 7.6.8.
 func ParseSdfFilter(description string) (ebpf.SdfFilter, error) {
-	fields := strings.Fields(description)
-	bad := func() (ebpf.SdfFilter, error) { return ebpf.SdfFilter{}, fmt.Errorf("invalid SDF Flow Description") }
-	if len(fields) < 7 || (fields[0] != "permit" && fields[0] != "deny") || (fields[1] != "out" && fields[1] != "in") || fields[3] != "from" {
-		return bad()
+	bad := func() (ebpf.SdfFilter, error) {
+		return ebpf.SdfFilter{}, fmt.Errorf("invalid SDF Flow Description under TS 29.212 clause 5.4.2")
 	}
-	unsupported := fields[0] == "deny"
-	filter := ebpf.SdfFilter{Direction: fields[1]}
-	var err error
-	if filter.Protocol, err = ParseProtocol(fields[2]); err != nil {
-		if !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
+	for _, c := range description {
+		if c > 127 {
 			return bad()
 		}
-		unsupported = true
+	}
+	fields := strings.Fields(description)
+	if len(fields) < 7 || len(fields) > 9 || fields[0] != "permit" || fields[1] != "out" || fields[3] != "from" {
+		return bad()
+	}
+	filter := ebpf.SdfFilter{Direction: "out"}
+	var err error
+	filter.Protocol, err = ParseProtocol(fields[2])
+	if err != nil {
+		return bad()
 	}
 	index := 4
-	endpoint := func() (ebpf.IpWMask, ebpf.PortRange, error) {
+	endpoint := func(source bool) (ebpf.IpWMask, ebpf.PortRange, error) {
 		ports := ebpf.PortRange{LowerBound: 0, UpperBound: 65535}
 		if index >= len(fields) {
 			return ebpf.IpWMask{}, ports, fmt.Errorf("missing SDF address")
 		}
 		token := fields[index]
 		index++
-		if strings.HasPrefix(token, "!") {
-			unsupported = true
-			token = strings.TrimPrefix(token, "!")
-		}
-		address := ebpf.IpWMask{}
-		switch token {
-		case "any":
-		case "assigned":
+		var address ebpf.IpWMask
+		if source && token == "any" {
+		} else if !source && token == "assigned" {
 			address.Type = 3
-		default:
+		} else {
 			pieces := strings.Split(token, "/")
 			if len(pieces) > 2 {
 				return address, ports, fmt.Errorf("invalid SDF address")
@@ -65,32 +65,22 @@ func ParseSdfFilter(description string) (ebpf.SdfFilter, error) {
 					return address, ports, fmt.Errorf("empty SDF mask")
 				}
 			}
-			var e error
-			address, e = ParseCidrIp(pieces[0], mask)
-			if e != nil {
-				return address, ports, e
+			address, err = ParseCidrIp(pieces[0], mask)
+			if err != nil {
+				return address, ports, err
 			}
 		}
-		if index < len(fields) && len(fields[index]) > 0 && fields[index][0] >= '0' && fields[index][0] <= '9' {
+		if index < len(fields) && fields[index] != "to" {
+			ports, err = ParsePortRange(fields[index])
+			if err != nil {
+				return address, ports, err
+			}
 			filter.PortsPresent = true
-			parts := strings.Split(fields[index], ",")
 			index++
-			for n, part := range parts {
-				parsed, e := ParsePortRange(part)
-				if e != nil {
-					return address, ports, e
-				}
-				if n == 0 {
-					ports = parsed
-				}
-			}
-			if len(parts) > 1 {
-				unsupported = true
-			}
 		}
 		return address, ports, nil
 	}
-	filter.SrcAddress, filter.SrcPortRange, err = endpoint()
+	filter.SrcAddress, filter.SrcPortRange, err = endpoint(true)
 	if err != nil {
 		return bad()
 	}
@@ -98,58 +88,13 @@ func ParseSdfFilter(description string) (ebpf.SdfFilter, error) {
 		return bad()
 	}
 	index++
-	filter.DstAddress, filter.DstPortRange, err = endpoint()
-	if err != nil {
+	filter.DstAddress, filter.DstPortRange, err = endpoint(false)
+	if err != nil || index != len(fields) {
 		return bad()
 	}
-	for index < len(fields) {
-		option := fields[index]
-		index++
-		switch option {
-		case "frag", "established", "setup":
-		case "ipoptions", "tcpoptions", "tcpflags", "icmptypes":
-			if index >= len(fields) {
-				return bad()
-			}
-			argument := fields[index]
-			index++
-			if option == "icmptypes" {
-				for index < len(fields) && !isSDFOption(fields[index]) {
-					argument += " " + fields[index]
-					index++
-				}
-			}
-			if !validSDFOption(option, argument) {
-				return bad()
-			}
-		default:
-			return bad()
-		}
-		unsupported = true
-	}
-	// RFC 6733 section 4.3.1 defines ports for TCP, UDP and SCTP only.
-	if filter.PortsPresent && filter.Protocol != 6 && filter.Protocol != 17 && filter.Protocol != 132 {
-		unsupported = true
-	}
-	if unsupported {
-		return ebpf.SdfFilter{}, fmt.Errorf("SDF Flow Description requires an unsupported classifier: %w", ebpf.ErrUnsupportedRuleContent)
-	}
+	// Explicit ports on an opaque protocol remain a predicate that matches no
+	// packet: the packet classifier requires actual TCP/UDP/SCTP ports.
 	return filter, nil
-}
-
-func validSDFOption(option, argument string) bool {
-	names := map[string]string{"ipoptions": ",ssrr,lsrr,rr,ts,", "tcpoptions": ",mss,window,sack,ts,cc,", "tcpflags": ",fin,syn,rst,psh,ack,urg,"}
-	for _, part := range strings.Split(argument, ",") {
-		if option == "icmptypes" {
-			ports, err := ParsePortRange(part)
-			if (err != nil || ports.UpperBound > 255) && !validICMPTypeName(part) {
-				return false
-			}
-		} else if part == "" || !strings.Contains(names[option], ","+strings.TrimPrefix(part, "!")+",") {
-			return false
-		}
-	}
-	return true
 }
 
 // protocolNames is immutable after first use. Read the deployment's protocol
@@ -276,22 +221,4 @@ func ParsePort(str string) (uint16, error) {
 	} else {
 		return 0, err
 	}
-}
-
-// RFC 6733 section 4.3.1 also permits symbolic ICMP type names.
-func validICMPTypeName(name string) bool {
-	name = strings.NewReplacer(" ", "", "-", "").Replace(name)
-	switch name {
-	case "echoreply", "unreach", "quench", "redirect", "echo", "routeradv", "routersol", "timex", "paramprob", "tstamp", "tstampreply", "ireq", "ireqreply", "maskreq", "maskreply", "destinationunreachable", "sourcequench", "echorequest", "routeradvertisement", "routersolicitation", "timetoliveexceeded", "ipheaderbad", "timestamprequest", "timestampreply", "informationrequest", "informationreply", "addressmaskrequest", "addressmaskreply":
-		return true
-	}
-	return false
-}
-
-func isSDFOption(s string) bool {
-	switch s {
-	case "frag", "ipoptions", "tcpoptions", "established", "setup", "tcpflags", "icmptypes":
-		return true
-	}
-	return false
 }

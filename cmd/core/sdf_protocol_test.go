@@ -23,14 +23,14 @@ func TestSDFEveryIPProtocolNumber(t *testing.T) {
 	}
 }
 
-func TestSDFValidGrammarNeverBecomesAbsent(t *testing.T) {
+func TestSDFRestrictedGrammarRejectsOptions(t *testing.T) {
 	for _, suffix := range []string{"frag", "ipoptions ssrr,!lsrr,rr,ts", "tcpoptions mss,!window,sack,ts,cc", "established", "setup", "tcpflags syn,!ack", "icmptypes 0,8,255", "icmptypes echo reply,destination unreachable", "icmptypes echoreply,echo,maskreq"} {
 		_, err := ParseSdfFilter("permit out tcp from !192.0.2.10/24 1,2-3 to assigned 0-65535 " + suffix)
-		if !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
-			t.Errorf("valid unsupported option %q was classified malformed: %v", suffix, err)
+		if err == nil || errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
+			t.Errorf("prohibited option %q was not semantically incorrect: %v", suffix, err)
 		}
 	}
-	for _, description := range []string{"permit out 132 from any 80 to assigned 100-200", "permit out gre from any to assigned", "permit out esp from any to any"} {
+	for _, description := range []string{"permit out 132 from any 80 to assigned 100-200", "permit out gre from any to assigned", "permit out esp from any to assigned"} {
 		if _, err := ParseSdfFilter(description); err != nil {
 			t.Errorf("supported description %q: %v", description, err)
 		}
@@ -39,7 +39,7 @@ func TestSDFValidGrammarNeverBecomesAbsent(t *testing.T) {
 
 func TestSDFIPv6MappedLiteralKeepsIPv6Mask(t *testing.T) {
 	for _, address := range []string{"::ffff:192.0.2.10/128", "::ffff:192.0.2.10/120"} {
-		filter, err := ParseSdfFilter("permit out ip from " + address + " to any")
+		filter, err := ParseSdfFilter("permit out ip from " + address + " to assigned")
 		if err != nil {
 			t.Fatalf("valid IPv6 SDF became absent: %s: %v", address, err)
 		}

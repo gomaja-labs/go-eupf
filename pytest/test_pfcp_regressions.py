@@ -61,7 +61,7 @@ def test_valid_create_far_modification_does_not_crash(peer):
     seid = peer.session()
     outer = pfcp.IE_OuterHeaderCreation(GTPUUDPIPV4=1, TEID=1234, ipv4="192.0.2.20")
     downlink = pdr(identifier=2, sdf=pfcp.IE_SDF_Filter(
-        FD=1, flow_description=b"permit out udp from any to any"))
+        FD=1, flow_description=b"permit out udp from any to assigned"))
     downlink[pfcp.IE_FAR_Id].id = 2
     response = peer.request(pfcp.PFCPSessionModificationRequest(
         IE_list=[far(2, outer), downlink]), seid)
@@ -103,17 +103,14 @@ def test_malformed_optional_sdf_is_ignored(peer):
     assert (get_json("/api/v1/pfcp_sessions") or []) == before
 
 
-def test_valid_unsupported_sdf_rejects_without_leaving_state(peer):
-    # RFC 6733 section 4.3.1: established is valid but unsupported.
-    before = get_json("/api/v1/pfcp_sessions") or []
+def test_semantically_incorrect_sdf_is_ignored(peer):
+    # TS 29.212 V20.0.0 clause 5.4.2 and TS 29.244 V20.1.0 clause 7.6.8.
     response = peer.establish([
         far(), pdr(sdf=pfcp.IE_SDF_Filter(
-            FD=1, flow_description=b"permit out tcp from any to any established")),
+            FD=1, flow_description=b"permit out tcp from any to assigned established")),
     ])
-    assert response[pfcp.IE_Cause].cause == 76
-    assert response[pfcp.IE_FailedRuleId].type == 0
-    assert response[pfcp.IE_FailedRuleId].pdr_id == 1
-    assert (get_json("/api/v1/pfcp_sessions") or []) == before
+    assert response[pfcp.IE_Cause].cause == 1
+    assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
 
 
 def test_unidentifiable_pdr_is_not_silently_accepted(peer):
@@ -121,7 +118,7 @@ def test_unidentifiable_pdr_is_not_silently_accepted(peer):
     seid = peer.session()
     response = peer.request(pfcp.PFCPSessionModificationRequest(IE_list=[
         pdr(identifier=5, address=False,
-            sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=b"permit out udp from any to any 5201")),
+            sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=b"permit out udp from any to assigned 5201")),
     ]), seid)
     assert response[pfcp.IE_Cause].cause != 1
 
@@ -192,7 +189,7 @@ def test_rule_rejection_details_and_atomicity(peer,case,cause,offending,rule_kin
     elif case=="allocation":
         rules[1][pfcp.IE_PDI].IE_list.append(pfcp.IE_FTEID(V4=1,TEID=100,ipv4="127.0.0.1"))
     elif case=="capacity":
-        rules[1][pfcp.IE_PDI].IE_list += [pfcp.IE_SDF_Filter(FD=1,flow_description=b"permit out udp from any to any") for _ in range(6)]
+        rules[1][pfcp.IE_PDI].IE_list += [pfcp.IE_SDF_Filter(FD=1,flow_description=b"permit out udp from any to assigned") for _ in range(6)]
     elif case=="unsupported":
         rules.append(pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=9),pfcp.IE_MeasurementMethod(DURAT=1),pfcp.IE_ReportingTriggers()]))
     before=get_json("/api/v1/pfcp_sessions") or []
@@ -300,7 +297,7 @@ def test_live_precedence_qers_and_unmatched_drop(peer):
 @pytest.mark.parametrize("protocol", ["0", "1", "6", "17", "47", "50", "58", "132", "253", "255", "gre", "esp", "sctp", "ip"])
 def test_sdf_protocol_number_establishment(peer, protocol):
     # RFC 6733 section 4.3.1: preserve the complete IP protocol number.
-    description = f"permit out {protocol} from any to any".encode()
+    description = f"permit out {protocol} from any to assigned".encode()
     response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(
         FD=1, flow_description=description))])
     assert response[pfcp.IE_Cause].cause == 1
@@ -323,13 +320,12 @@ def test_fteid_choose_offered_families(peer, v4, v6, cause):
 
 
 @pytest.mark.parametrize("option", ["frag", "ipoptions ssrr,!lsrr,rr,ts", "tcpoptions mss,!window,sack,ts,cc", "established", "setup", "tcpflags syn,!ack", "icmptypes 0,8-11", "icmptypes echo reply"])
-def test_valid_unsupported_sdf_option_rejected(peer, option):
-    # Valid IPFilterRule options must not be discarded as malformed optional IEs.
+def test_semantically_incorrect_sdf_option_is_ignored(peer, option):
+    # TS 29.212 clause 5.4.2 prohibits every option; TS 29.244 clause 7.6.8 applies.
     description = f"permit out tcp from any to assigned {option}".encode()
     response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=description))])
-    assert response[pfcp.IE_Cause].cause == 76
-    assert response[pfcp.IE_FailedRuleId].type == 0
-    assert response[pfcp.IE_FailedRuleId].pdr_id == 1
+    assert response[pfcp.IE_Cause].cause == 1
+    assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
 
 
 def test_ignored_sdf_metric_counts_each_filter(peer):
@@ -341,7 +337,7 @@ def test_ignored_sdf_metric_counts_each_filter(peer):
                     return float(line.split()[1])
         pytest.fail("ignored-SDF counter is missing")
     before = count()
-    for description in (b"invalid", b"", b"permit out udp from any 2000-1000 to any"):
+    for description in (b"invalid", b"", b"permit out udp from any 2000-1000 to assigned"):
         response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(FD=1, flow_description=description))])
         assert response[pfcp.IE_Cause].cause == 1
         assert peer.request(pfcp.PFCPSessionDeletionRequest(), response[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
@@ -351,7 +347,7 @@ def test_ignored_sdf_metric_counts_each_filter(peer):
 def test_ipv6_mapped_sdf_is_not_ignored(peer):
     # RFC 6733 section 4.3.1: an IPv6 literal retains its 128-bit mask.
     response = peer.establish([far(), pdr(sdf=pfcp.IE_SDF_Filter(
-        FD=1, flow_description=b"permit out ip from ::ffff:192.0.2.10/128 to any"))])
+        FD=1, flow_description=b"permit out ip from ::ffff:192.0.2.10/128 to assigned"))])
     assert response[pfcp.IE_Cause].cause == 1
     with urllib.request.urlopen("http://127.0.0.1:19090/metrics", timeout=2) as metrics:
         counters = [line for line in metrics.read().decode().splitlines()

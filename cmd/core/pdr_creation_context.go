@@ -255,9 +255,6 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 						return ebpf.ErrRuleCapacity
 					}
 				} else {
-					if errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
-						return err
-					}
 					// TS 29.244 V20.1.0 clause 7.6.8 and Table 7.5.2.2-2:
 					// a semantically incorrect optional SDF Filter is absent.
 					ignoreSDFFilter(spdrInfo, err)

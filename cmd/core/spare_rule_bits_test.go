@@ -8,7 +8,7 @@ import (
 )
 
 func TestRuleCapabilityIgnoresPublishedSpareBits(t *testing.T) {
-	sdf := ie.NewSDFFilter("permit out udp from any to any", nil, nil, nil, 0)
+	sdf := ie.NewSDFFilter("permit out udp from any to assigned", nil, nil, nil, 0)
 	sdf.Payload[0] |= 0xc0
 	tests := []struct {
 		name string

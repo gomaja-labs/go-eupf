@@ -137,16 +137,17 @@ Interface, UE address constraint, QFI and SDF tuple constraints are conjunctive.
 Repeated SDF filters and repeated QFIs are alternatives within their own field.
 Access PDRs reverse the CP description's addresses and ports (clause 5.2.1A.2A).
 `assigned` resolves against the session's IPv4 address and/or IPv6 prefix.
-An unavailable address family never widens the match. Malformed optional SDF
-Flow Descriptions are logged and ignored (clause 7.6.8); valid descriptions that
-request unsupported semantics return Service not supported with Failed Rule ID.
-Every ignored filter increments `upf_ignored_sdf_filters_total` and logs its
-session and PDR. Numeric protocols cover 0-255; `ip` is a separate wildcard.
-Names resolve through the deployment's `/etc/protocols` database. Ports are
-classified for TCP, UDP and SCTP (RFC 6733 section 4.3.1); explicit ports on
-other protocols reject with Cause 76. Unknown protocol names, deny rules,
-address negation, port lists and filter options are recognised as unsupported
-and rejected, preserving the PDR's intended restriction.
+An unavailable address family never widens the match. Flow Descriptions use
+TS 29.212 V20.0.0 clause 5.4.2: `permit out`, decimal protocol (0-255) or
+`ip`, source address/prefix or `any`, destination address/prefix or `assigned`,
+and optional single ports or ranges. Names resolve to protocol numbers through
+`/etc/protocols` (RFC 6733 section 4.3.1). Options, `deny`, direction `in`,
+negation, lists, unknown protocol names and other departures are semantically
+incorrect. Their optional SDF Filter is logged and ignored under TS 29.244
+V20.1.0 clause 7.6.8; each increments `upf_ignored_sdf_filters_total` with
+session/PDR context in the log. If all are ignored the PDR is unfiltered.
+Explicit ports require actual TCP, UDP or SCTP ports in the packet; a port
+predicate on another protocol matches no packet.
 A known key with no matching PDR drops. Unowned N6 destinations, non-IP traffic,
 and explicitly documented kernel slow paths retain XDP_PASS; an unknown GTP
 TEID follows the Error Indication procedure above. IPv6 prefixes use an LPM

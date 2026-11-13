@@ -17,8 +17,8 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 		kind uint8
 		id   uint32
 	}{
-		{"unsupported-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out tcp from any to any established", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+		{"unsupported-pdi-field", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewTrafficEndpointID(1))), ie.RuleIDTypePDR, 7},
 		{"unknown-predefined-rule", ie.NewCreatePDR(ie.NewPDRID(8), ie.NewPrecedence(10),
 			ie.NewActivatePredefinedRules("unconfigured"), ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.11", "", 0, 0))), ie.RuleIDTypePDR, 8},
 		{"truncated-outer-header", ie.NewCreateFAR(ie.NewFARID(9), ie.NewApplyAction(2),
@@ -36,7 +36,7 @@ func TestInvalidRulesRejectEstablishment(t *testing.T) {
 			response := reply.(*message.SessionEstablishmentResponse)
 			cause, err := response.Cause.Cause()
 			wantCause := ie.CauseRuleCreationModificationFailure
-			if tt.name == "unsupported-sdf" {
+			if tt.name == "unsupported-pdi-field" {
 				wantCause = ie.CauseServiceNotSupported
 			}
 			if err != nil || cause != wantCause {
@@ -64,8 +64,8 @@ func TestInvalidRulesPreserveModification(t *testing.T) {
 		kind uint8
 		id   uint32
 	}{
-		{"unsupported-sdf", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
-			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewSDFFilter("permit out tcp from any to any established", nil, nil, nil, 0))), ie.RuleIDTypePDR, 7},
+		{"unsupported-pdi-field", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(10),
+			ie.NewPDI(ie.NewSourceInterface(ie.SrcInterfaceCore), ie.NewUEIPAddress(6, "192.0.2.10", "", 0, 0), ie.NewTrafficEndpointID(1))), ie.RuleIDTypePDR, 7},
 		{"truncated-outer-header", ie.NewUpdateFAR(ie.NewFARID(9),
 			ie.NewUpdateForwardingParameters(ie.New(ie.OuterHeaderCreation, []byte{1, 0, 1}))), ie.RuleIDTypeFAR, 9},
 	} {
@@ -84,8 +84,12 @@ func TestInvalidRulesPreserveModification(t *testing.T) {
 			}
 			response := reply.(*message.SessionModificationResponse)
 			cause, err := response.Cause.Cause()
-			if err != nil || cause != ie.CauseRuleCreationModificationFailure {
-				t.Fatalf("cause = %d, %v; want rule failure", cause, err)
+			wantCause := ie.CauseRuleCreationModificationFailure
+			if tt.name == "unsupported-pdi-field" {
+				wantCause = ie.CauseServiceNotSupported
+			}
+			if err != nil || cause != wantCause {
+				t.Fatalf("cause = %d, %v; want %d", cause, err, wantCause)
 			}
 			if len(session.PDRs) != 1 || !reflect.DeepEqual(session.PDRs[7], wantPDR) || len(session.FARs) != 1 || session.FARs[9] != wantFAR {
 				t.Fatal("rejected request changed existing rules")

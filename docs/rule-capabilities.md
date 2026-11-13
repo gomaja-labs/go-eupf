@@ -6,7 +6,8 @@ Each source cell names the actual table. An implemented group supports only its
 listed children. A rejected grouped feature includes its nested children.
 Unknown/unexpected IEs and excess singular occurrences are ignored under
 clauses 7.6.9–7.6.10. Semantically invalid optional SDF Filters are logged and
-ignored under clause 7.6.8; valid unsupported filters remain rejections.
+ignored under clause 7.6.8. Flow Description uses the restricted grammar of
+TS 29.212 V20.0.0 clause 5.4.2, as required by TS 29.244 clause 8.2.5.
 
 Rejections normally use Cause 76 (Service not supported), Failed Rule ID and
 Offending IE. Capacity exhaustion uses Cause 75 (No resources available) and
@@ -235,8 +236,18 @@ There is one supported IPv4 address and one supported IPv6 prefix in this set;
 ambiguous multiple addresses are rejected rather than widening the filter.
 Access filters reverse a downlink description's endpoints and ports. A missing
 assigned address remains a rejection. Malformed optional Flow Descriptions are
-absent under TS 29.244 clause 7.6.8; valid deny rules, address negation, lists,
-unresolved protocol names or IPFilterRule options return Cause 76.
+absent under TS 29.244 V20.1.0 clause 7.6.8. The grammar is:
+
+`permit out <decimal-protocol|ip|protocol-name> from <address[/mask]|any> [port[-port]] to <address[/mask]|assigned> [port[-port]]`
+
+TS 29.212 V20.0.0 clause 5.4.2 restricts RFC 6733 section 4.3.1 encoding:
+no `deny`, direction `in`, address negation, port lists or options. Source
+`assigned` and destination `any` also depart from that clause. Every such
+Flow Description is semantically incorrect and its SDF Filter is ignored,
+logged and counted. If every filter is ignored the PDR has no SDF predicate.
+Protocol names resolve to their numbers through `/etc/protocols`. An explicit
+port predicate on a protocol without visible ports matches no packet; it
+does not reject the request.
 
 FTUP is always advertised. TS 29.244 V20.1.0 clause 5.5.1 requires UP F-TEID
 allocation in EPC/5GC. New CP-allocated tunnels are rejected with Cause 71;
@@ -248,6 +259,5 @@ N4-u/Sx-u forwarding (TS 29.244 V20.1.0 clause 5.3.1). Local tunnel addresses
 remain IPv4-only: an F-TEID CHOOSE offering both families receives V4 only;
 a V6-only choice returns Cause 76. Numeric SDF protocol values cover 0-255,
 with a separate `ip` wildcard. TCP, UDP and SCTP port ranges are supported;
-port lists, address negation and filter options return Cause 76 with Failed
-Rule ID. Ignored malformed optional filters are logged with SEID/PDR ID and
+prohibited grammar is ignored under clause 7.6.8. Ignored optional filters are logged with SEID/PDR ID and
 counted by `upf_ignored_sdf_filters_total`.
