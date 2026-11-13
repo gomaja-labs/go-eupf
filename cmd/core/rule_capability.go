@@ -139,6 +139,17 @@ func validateRuleCapability(rule *ie.IE) error {
 			if err != nil {
 				return err
 			}
+			if v.PFCPSMReqFlags != nil {
+				flags, err := v.PFCPSMReqFlags.PFCPSMReqFlags()
+				if err != nil {
+					return err
+				}
+				// TS 29.244 V20.1.0 clauses 8.2.31 and 7.5.4.3:
+				// only SNDEM applies inside Update Forwarding Parameters.
+				if flags&0x7d != 0 {
+					return unsupportedRuleIE(ie.PFCPSMReqFlags)
+				}
+			}
 			return validateForwardingCapability(v, v.DestinationInterface, v.ForwardingPolicy)
 		}
 	case ie.CreateQER:
@@ -273,7 +284,7 @@ func validateForwardingCapability(fields interface{}, destination, policy *ie.IE
 	if policy != nil {
 		return &requestIEError{ie.CauseInvalidForwardingPolicy, ie.ForwardingPolicy, fmt.Errorf("no forwarding policy is configured")}
 	}
-	if err := rejectUnsupportedFields(fields, "DestinationInterface", "NetworkInstance", "OuterHeaderCreation", "TransportLevelMarking", "DestinationInterfaceType", "DataNetworkAccessIdentifier"); err != nil {
+	if err := rejectUnsupportedFields(fields, "DestinationInterface", "NetworkInstance", "OuterHeaderCreation", "TransportLevelMarking", "DestinationInterfaceType", "DataNetworkAccessIdentifier", "PFCPSMReqFlags"); err != nil {
 		return err
 	}
 	if destination != nil {

@@ -1,0 +1,195 @@
+package core
+
+import (
+	"encoding/binary"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/config"
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
+)
+
+// TS 29.244 V20.1.0 table 7.5.4.3-1 and clause 5.3.2;
+// TS 29.281 V19.2.0 clauses 4.4.2.6, 4.4.3.6 and 7.3.2.
+func TestEndMarkerOnChangedDownstreamFTEID(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags byte
+		teid  uint32
+		want  bool
+	}{
+		{"requested", 2, 201, true}, {"unchanged", 2, 200, false}, {"not requested", 0, 201, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := net.IPv4(127, 0, 0, 30)
+			peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: remote, Port: 2152})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer peer.Close()
+			conn, assocID := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
+			conn.n3Address = net.IPv4(127, 0, 0, 1)
+			s := NewSession(2, 42, "", "", false)
+			s.NewFar(9, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: binary.LittleEndian.Uint32(remote.To4())})
+			conn.GetAssociation(assocID).Sessions[2] = s
+			parameters := []*ie.IE{ie.NewOuterHeaderCreation(0x100, tc.teid, remote.String(), "", 0, 0, 0)}
+			if tc.flags != 0 {
+				parameters = append(parameters, ie.NewPFCPSMReqFlags(tc.flags))
+			}
+			request := message.NewSessionModificationRequest(2, 1, ie.NewUpdateFAR(ie.NewFARID(9), ie.NewUpdateForwardingParameters(parameters...)))
+			reply, _, err := HandlePfcpSessionModificationRequest(conn, request, assocID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cause, err := reply.(*message.SessionModificationResponse).Cause.Cause()
+			if err != nil || cause != ie.CauseRequestAccepted {
+				t.Fatalf("cause=%d err=%v", cause, err)
+			}
+			if err := peer.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 64)
+			n, from, err := peer.ReadFromUDP(buf)
+			if !tc.want {
+				if err == nil {
+					t.Fatal("unexpected End Marker")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != 8 || buf[0] != 0x30 || buf[1] != 254 || binary.BigEndian.Uint16(buf[2:4]) != 0 || binary.BigEndian.Uint32(buf[4:8]) != 200 {
+				t.Fatalf("invalid End Marker length=%d", n)
+			}
+			if from.Port != 2152 || !from.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+				t.Fatalf("incorrect tunnel source=%s", from)
+			}
+		})
+	}
+}
+
+func TestEndMarkerReservationsAreBoundedAndReturnedOnce(t *testing.T) {
+	s := &endMarkerSender{slots: make(chan struct{}, maxPendingEndMarkers)}
+	b, err := s.reserve(make([]endMarker, maxPendingEndMarkers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.reserve([]endMarker{{}}); err == nil {
+		t.Fatal("unbounded End Marker admission")
+	}
+	b.release()
+	b.release()
+	if len(s.slots) != 0 {
+		t.Fatal("reservation leak")
+	}
+	b, err = s.reserve(make([]endMarker, maxPendingEndMarkers+1))
+	if err == nil || b != nil || len(s.slots) != 0 {
+		t.Fatal("partial reservation was retained")
+	}
+}
+
+func TestEndMarkerSharesSourcePortWithEchoProbe(t *testing.T) {
+	local := net.IPv4(127, 0, 0, 1)
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 31), Port: 2152})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	manager := NewGtpPathManager(net.JoinHostPort(local.String(), "2152"), time.Hour)
+	defer manager.Stop()
+	result := make(chan error, 1)
+	go func() { _, err := manager.sendEcho(peer.LocalAddr().String(), 7); result <- err }()
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 64)
+	n, source, err := peer.ReadFromUDP(data)
+	if err != nil || n < 8 || data[1] != 1 {
+		t.Fatalf("Echo request n=%d err=%v", n, err)
+	}
+	echo := append([]byte(nil), data[:n]...)
+	if err := sendEndMarker(endMarker{local, peer.LocalAddr().(*net.UDPAddr).IP, 200}); err != nil {
+		t.Fatal(err)
+	}
+	n, _, err = peer.ReadFromUDP(data)
+	if err != nil || n != 8 || data[1] != 254 {
+		t.Fatalf("End Marker n=%d err=%v", n, err)
+	}
+	echo[1] = 2
+	if _, err := peer.WriteToUDP(echo, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEndMarkerShutdownReturnsQueuedReservations(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	s := &endMarkerSender{slots: make(chan struct{}, maxPendingEndMarkers), jobs: make(chan *endMarkerBatch, maxPendingEndMarkers), stop: make(chan struct{}), done: make(chan struct{})}
+	s.send = func(endMarker) error { close(entered); <-release; return nil }
+	first, err := s.reserve(make([]endMarker, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.reserve(make([]endMarker, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.submit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.submit(); err != nil {
+		t.Fatal(err)
+	}
+	go s.run()
+	<-entered
+	closed := make(chan struct{})
+	go func() { s.close(); close(closed) }()
+	// Closing is published before releasing the active send.
+	<-s.stop
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("sender shutdown blocked")
+	}
+	if len(s.slots) != 0 {
+		t.Fatalf("shutdown retained %d reservations", len(s.slots))
+	}
+	if _, err := s.reserve([]endMarker{{}}); err == nil {
+		t.Fatal("closed sender admitted a marker")
+	}
+}
+
+func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
+	conn, _ := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
+	if len(conn.featuresOctets) < 2 || conn.featuresOctets[1]&1 == 0 {
+		t.Fatal("EMPU not advertised")
+	}
+	for _, typ := range []uint8{ie.TGPPInterfaceTypeN19, ie.TGPPInterfaceTypeN19mb, ie.TGPPInterfaceTypeN3ForDataForwarding, ie.TGPPInterfaceTypeN9DataForwarding} {
+		old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
+		old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
+		f := old.FARs[1]
+		f.InterfaceType, f.InterfaceTypePresent = typ, true
+		old.FARs[1] = f
+		next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
+		request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+		batch, err := conn.prepareEndMarkers(request, old, next)
+		if batch != nil {
+			batch.release()
+			t.Fatalf("interface %d created a container-free End Marker", typ)
+		}
+		if typ == ie.TGPPInterfaceTypeN19 || typ == ie.TGPPInterfaceTypeN19mb {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil {
+			t.Fatalf("data forwarding interface %d was silently accepted", typ)
+		}
+	}
+}

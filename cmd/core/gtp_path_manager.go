@@ -189,7 +189,8 @@ func (gtpPathManager *GtpPathManager) sendEcho(gtpPeerAddress string, seq uint16
 	if err != nil {
 		return 0, fmt.Errorf("can't resolve remote UDP address: %w", err)
 	}
-	conn, err := net.DialUDP("udp", udpLocalAddr, udpRemoteAddr)
+	dialer := net.Dialer{LocalAddr: udpLocalAddr, Control: reuseGTPSourcePort}
+	conn, err := dialer.DialContext(gtpPathManager.ctx, "udp", udpRemoteAddr.String())
 	if err != nil {
 		return 0, fmt.Errorf("can't create UDP connection: %w", err)
 	}

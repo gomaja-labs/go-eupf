@@ -101,13 +101,13 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 | Header Enrichment | Rejected | Header enrichment is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | Linked Traffic Endpoint ID | Rejected | Traffic endpoint indirection is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | Proxying | Rejected | Requested ARP/ND proxying is not implemented. | 7.5.2.3-2 |
-| Destination Interface Type | Ignored | 3GPP interface label; Destination Interface and the supplied tunnel/FIB determine output. No MAR or redundant forwarding is supported. | 7.5.2.3-2, 7.5.4.3-2 |
+| Destination Interface Type | Implemented | Retained for End Marker interface restrictions; 3GPP interface label; Destination Interface and the supplied tunnel/FIB determine output. No MAR or redundant forwarding is supported. | 7.5.2.3-2, 7.5.4.3-2 |
 | Data Network Access Identifier | Ignored | N16a local-PSA identifier, not an N4 packet-handling instruction; no alternate routing domains or PSA-selection behavior are exposed. | 7.5.2.3-2, 7.5.4.3-2 |
 | IP Address and Port Number Replacement | Rejected | Address/port replacement is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | N6 Routing Information | Rejected | HR-SBO N6 tunnel selection is not implemented. | 7.5.2.3-2 |
 | Header Handling Control Rule | Rejected | Payload header handling is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | On-path N6 Connection Information | Rejected | Media-information proxy connections are not advertised. | 7.5.2.3-2 |
-| PFCPSMReq-Flags | Rejected | Requested forwarding-switch actions such as End Marker generation are not implemented. | 7.5.4.3-2 |
+| PFCPSMReq-Flags | Implemented | SNDEM inside Update Forwarding Parameters for ordinary N3/N9/EPC path switches; data-forwarding containers remain unsupported. | 7.5.4.3-2 |
 
 ## QER
 
@@ -138,7 +138,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 | Measurement Method | Implemented | Post-QoS octet volume only. | 7.5.2.4-1, 7.5.4.4-1 |
 | Reporting Triggers | Implemented | Total-volume threshold and mandatory final reports; other triggers rejected. | 7.5.2.4-1, 7.5.4.4-1 |
 | Measurement Period | Rejected | Only post-QoS octets, a total-volume threshold and final reports are measured; this IE requests additional metering, scheduling, quota or reporting behavior. | 7.5.2.4-1, 7.5.4.4-1 |
-| Volume Threshold | Implemented | Positive total threshold only; separate UL/DL thresholds rejected. | 7.5.2.4-1, 7.5.4.4-1 |
+| Volume Threshold | Implemented | Positive total threshold, re-applied after each VOLTH report; failed delivery retains usage. Separate UL/DL thresholds rejected. | 7.5.2.4-1, 7.5.4.4-1 |
 | Volume Quota | Rejected | Only post-QoS octets, a total-volume threshold and final reports are measured; this IE requests additional metering, scheduling, quota or reporting behavior. | 7.5.2.4-1, 7.5.4.4-1 |
 | Event Threshold | Rejected | Only post-QoS octets, a total-volume threshold and final reports are measured; this IE requests additional metering, scheduling, quota or reporting behavior. | 7.5.2.4-1, 7.5.4.4-1 |
 | Event Quota | Rejected | Only post-QoS octets, a total-volume threshold and final reports are measured; this IE requests additional metering, scheduling, quota or reporting behavior. | 7.5.2.4-1, 7.5.4.4-1 |
@@ -289,9 +289,32 @@ CIoT) are outside this supported subset. Their basic IP-payload forwarding can
 overlap the rows above, but full extension-header preservation, nested End
 Marker semantics and CIoT procedures are not claimed. BUFF/NOCP/BAR controls
 remain rejected with Cause 76; there is no separate scenario discriminator
-that makes every overlapping ordinary FORW rule reject. UP-constructed End
-Marker capability remains unadvertised.
+that makes every overlapping ordinary FORW rule reject. UP-constructed ordinary N3/N9/EPC End Markers are supported and advertised as EMPU. The per-FAR SNDEM flag in Update Forwarding Parameters sends to the old F-TEID after rule publication and a data-plane grace period. Unchanged F-TEIDs and requests without SNDEM send nothing. N19 emits no marker. SNDEM for labeled N3/N9 data-forwarding tunnels returns Cause 76 until E-RAB/QFI container handling is implemented (TS 29.281 V19.2.0 clause 7.3.2.3).
 
 N3, N9 and N4-u outer tunnel endpoints remain IPv4. N4-u uses the configured N3
 IPv4 address. CHOOSE offering V4 and V6 receives V4 only; a V6-only offer returns
 Cause 76 (TS 29.244 V20.1.0 clause 8.2.3).
+
+## End Marker transmission
+
+TS 29.244 V20.1.0 clause 5.3.2, table 7.5.4.3-1 and clause 8.2.31
+control UP-constructed End Markers. SNDEM applies to its enclosing updated FAR.
+It is not supported as a top-level Session Modification flag. EMPU is set in
+UP Function Features (table 8.2.25-1, octet 6 bit 1).
+
+The source address follows the old tunnel's local N3 or N9 endpoint, with
+source and destination UDP port 2152 and the old destination address/TEID
+(TS 29.281 V19.2.0 clauses 4.4.2.6, 4.4.3.6 and 7.3.2).
+A successful publication schedules transmission after the kernel grace period;
+rejected/rolled-back changes do not send. A maximum of 1024 pending markers per
+PFCP endpoint is reserved before publication. Capacity exhaustion rejects the
+request with Cause 75; no path switch is committed. Fixed queue metadata fits
+within the memory plan's existing 32 MiB transient allowance. UDP sends have a
+100 ms deadline, with failures/cancellations counted in
+`upf_gtp_end_marker_failures_total`. Shutdown cancels queued sends and returns
+the reservations. Echo probes share the source port through the same socket
+policy.
+
+Labeled N3/N9 data-forwarding tunnels remain unsupported for SNDEM because the
+PDU Session Container depends on inter-system E-RAB/QFI mapping. N19 End Markers
+are prohibited. This does not add REEMR reporting, which remains rejected.

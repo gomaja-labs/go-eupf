@@ -194,3 +194,18 @@ func (g *ruleGrace) close() error {
 	<-g.done
 	return errors.Join(g.failure(), g.outer.Close(), g.inner.Close())
 }
+
+// AfterRuleGrace runs work after all XDP invocations preceding this call have
+// completed. The work must not acquire a control-plane lock or block on I/O.
+func (b *BpfObjects) AfterRuleGrace(work func() error) error {
+	b.ruleMutex.Lock()
+	defer b.ruleMutex.Unlock()
+	if b.ruleClosed || b.grace == nil {
+		return errors.New("rule grace is unavailable")
+	}
+	if err := b.grace.failure(); err != nil {
+		return err
+	}
+	b.grace.enqueue(graceWork{reclaim: work})
+	return nil
+}

@@ -74,6 +74,7 @@ type PfcpConnection struct {
 	reportRetries         []*pendingRequest
 	retiredAssociations   []*NodeAssociation // Invalid CP contexts awaiting safe rule reclamation.
 
+	endMarkers    *endMarkerSender
 	release       *AssociationRelease
 	releasing     bool
 	terminalError error
@@ -149,7 +150,8 @@ func NewPfcpConnection(
 	log.Info().Msgf("Starting PFCP connection: %v with Node ID: %v, N3 address: %v, N9 address: %v", udpAddr, nodeId, n3Addr, n9Addr)
 
 	featuresOctets := []uint8{0, 0, 0x40} // BUNDL: IE octet 7 (payload byte 2), TS 29.244 V20.1.0 table 8.2.25-1
-	// TS 29.244 V20.1.0 clause 8.2.25: EMPU denotes sending End Markers, not receiving them.
+	// TS 29.244 V20.1.0 table 8.2.25-1: EMPU is payload byte 1, bit 1.
+	featuresOctets[1] |= 1
 	// TS 29.244 V20.1.0 clause 5.5.1: EPC and 5GC require UP allocation.
 	featuresOctets[0] = setBit(featuresOctets[0], 4)
 	if config.Conf.FeatureUEIP {
@@ -548,7 +550,11 @@ func (connection *PfcpConnection) Close() {
 		connection.transport.clearResponses()
 		connection.transport.pendingBytes = 0
 		connection.transport.mu.Unlock()
+		markerSender := connection.endMarkers
 		connection.stateMu.Unlock()
+		if markerSender != nil {
+			markerSender.close()
+		}
 		_ = socket.Close()
 		connection.cleanupBeforeClose()
 	})

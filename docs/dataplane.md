@@ -37,7 +37,9 @@ and RFC 8200 section 4, updated by RFC 9673.
 A valid GTP Echo Request with S=1 receives a fresh Echo Response containing its
 sequence number and mandatory Recovery=0, independent of request IEs and
 Ethernet padding (TS 29.281 V19.2.0 clauses 7.2.2 and 8.2). Unknown nonzero
-TEIDs receive Error Indication with the triggering TEID and destination address;
+TEIDs receive Error Indication with the triggering TEID and destination address
+after the startup `restoration_period`; suppressed indications are counted in
+`upf_gtp_error_indications_suppressed_total` (TS 23.527 V20.0.0 clause 4.3.2);
 zero TEIDs are silently discarded (clause 7.3.1). Diagnostic replies target UDP
 2152; Echo Response returns to the request source port (clauses 4.4.2.2, 4.4.2.4
 and 4.4.2.5). Error Indications and Supported
@@ -46,10 +48,10 @@ bound reflection. Echo Responses are not policed by this budget.
 
 Received End Markers for unknown contexts are consumed. An intermediate UPF
 forwards a known End Marker through the default FAR, without applying QERs or
-charging URRs; a terminal UPF consumes it (clause 7.3.2). Generating End Markers
-on control-plane tunnel switches, selecting a QoS-specific forwarding context,
-and propagating received Error Indications to the control plane remain required
-integration work.
+charging URRs; a terminal UPF consumes it (clause 7.3.2). Ordinary End Markers on control-plane tunnel switches are generated after the
+rule grace period; see [transmission limits](rule-capabilities.md#end-marker-transmission).
+Inter-system forwarding containers and propagation of received Error Indications
+to the control plane remain required integration work.
 
 URR counters and QER rates use the validated IP PDU length, including its IP
 header and excluding GTP optional headers, outer IP/UDP headers, Ethernet and

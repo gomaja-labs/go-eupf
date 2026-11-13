@@ -75,8 +75,11 @@ type PCCInfo struct {
 }
 
 type SFarInfo struct {
-	FarInfo  ebpf.FarInfo
-	GlobalId uint32
+	// TS 29.281 V19.2.0 clause 7.3.2.3 excludes N19 End Markers.
+	InterfaceType        uint8
+	InterfaceTypePresent bool
+	FarInfo              ebpf.FarInfo
+	GlobalId             uint32
 }
 
 type SQerInfo struct {

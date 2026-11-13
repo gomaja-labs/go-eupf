@@ -295,6 +295,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return message.NewSessionModificationResponse(0, req.Sequence(), ie.NewCause(ie.CauseSessionContextNotFound)), false, nil
 	}
 
+	previousSession := session
 	session = cloneSession(session)
 	session.Is5G = session.Is5G || requestHasQFI(req.CreateQER) || requestHasQFI(req.UpdateQER)
 
@@ -352,6 +353,16 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
 	}
 
+	markers, err := conn.prepareEndMarkers(req, previousSession, session)
+	if err != nil {
+		return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
+	}
+	defer func() {
+		if markers != nil {
+			markers.release()
+		}
+	}()
+
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
@@ -362,6 +373,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if err := finish(true); err != nil {
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
 	}
+
+	conn.commitEndMarkers(markers)
+	markers = nil
 
 	// TS 29.244 V20.1.0 clause 6.3.3.3: rejected requests discard every
 	// context update, including the CP F-SEID used for subsequent messages.
@@ -960,13 +974,26 @@ func createFARs(
 		logger.Info().Msgf("Saving FAR info to session: %d, %+v", farID, farInfo)
 
 		session.NewFar(farID, 0, farInfo)
+		if fields.ForwardingParameters != nil {
+			forwarding, err := fields.ForwardingParameters.ForwardingParameters()
+			if err != nil {
+				return err
+			}
+			saved := session.FARs[farID]
+			if err := retainFarInterfaceType(forwarding.DestinationInterfaceType, &saved); err != nil {
+				return err
+			}
+			session.FARs[farID] = saved
+		}
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
 			Reserve: func() error {
 				id, err := mapOperations.GetNextFAR()
 				if err != nil {
 					return err
 				}
-				session.NewFar(farID, id, farInfo)
+				next := session.FARs[farID]
+				next.GlobalId = id
+				session.FARs[farID] = next
 				return nil
 			},
 			Apply: func() error { return mapOperations.UpdateFar(session.GetFar(farID).GlobalId, farInfo) },
@@ -1148,6 +1175,15 @@ func updateFARs(
 
 		newFar := oldFar
 		newFar.FarInfo = newFarInfo
+		if fields.UpdateForwardingParameters != nil {
+			forwarding, err := fields.UpdateForwardingParameters.UpdateForwardingParameters()
+			if err != nil {
+				return err
+			}
+			if err := retainFarInterfaceType(forwarding.DestinationInterfaceType, &newFar); err != nil {
+				return err
+			}
+		}
 
 		session.FARs[farID] = newFar
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{

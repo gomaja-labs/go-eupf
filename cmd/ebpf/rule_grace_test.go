@@ -121,3 +121,36 @@ func TestExhaustedRuleRecoveryNotifiesSupervisorWithoutReclaiming(t *testing.T) 
 		t.Fatal("supervisor was not notified")
 	}
 }
+
+func TestAfterRuleGraceDoesNotRunBeforeOldReadersFinish(t *testing.T) {
+	entered, release, completed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	g := &ruleGrace{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	g.synchronize = func() error { close(entered); <-release; return nil }
+	b := &BpfObjects{grace: g}
+	go g.run()
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }); close(g.stop); <-g.done })
+	if err := b.AfterRuleGrace(func() error { close(completed); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("grace period did not start")
+	}
+	select {
+	case <-completed:
+		t.Fatal("callback ran with old readers still active")
+	default:
+	}
+	once.Do(func() { close(release) })
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("callback did not run after grace period")
+	}
+	b.ruleClosed = true
+	if err := b.AfterRuleGrace(func() error { return nil }); err == nil {
+		t.Fatal("closed map lifetime admitted callback")
+	}
+}
