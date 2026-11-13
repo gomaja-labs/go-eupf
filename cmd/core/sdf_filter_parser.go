@@ -150,9 +150,9 @@ func ParseProtocol(protocol string) (uint16, error) {
 	if protocol == "" {
 		return 0, fmt.Errorf("empty SDF protocol")
 	}
-	// A syntactically valid name unknown on this host must never silently
-	// discard an optional SDF and widen its PDR.
-	return 0, fmt.Errorf("unknown SDF protocol name %s: %w", protocol, ebpf.ErrUnsupportedRuleContent)
+	// Unknown names cannot be encoded as a protocol number. The enclosing
+	// optional Flow Description follows TS 29.244 clause 7.6.8.
+	return 0, fmt.Errorf("unknown SDF protocol name %s", protocol)
 }
 
 func ParseCidrIp(ipStr, maskStr string) (ebpf.IpWMask, error) {

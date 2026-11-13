@@ -75,7 +75,7 @@ Predefined PCC rules are configured in a separate config file (default `./pcc.ya
 pcc_rules:
   - pcc_name: "block_icmp"
     notify: false
-    sdf_filter: "permit out ip from 192.168.1.100/32 to any"
+    sdf_filter: "permit out ip from 192.168.1.100/32 to assigned"
     far:
       action: 2                      # bitmask: 1 = DROP, 2 = FORW, 4 = BUFF, 8 = NOCP, 16 = DUPL
       outer_header_creation: 0       # 0 = none, 1 = GTP-U/UDP/IP IPv4, 2 = GTP-U/UDP/IP IPv6, 4 = UDP/IPv4, 8 = UDP/IPv6
@@ -96,7 +96,7 @@ Field             | Description                                                 
 ----------------- | ----------------------------------------------------------------------------------------------- | ----------------------- | --------
 Rule name         | Unique name of the predefined rule. Referenced by PDRs via Activate Predefined Rules            | `pcc_name`              | (required)
 Notify            | Send a notification when the SDF filter matches                                                | `notify`                | `false`
-SDF filter        | Service data flow filter, e.g. `permit out ip from 192.168.1.100/32 to any`                    | `sdf_filter`            | (required)
+SDF filter        | Service data flow filter, e.g. `permit out ip from 192.168.1.100/32 to assigned`                    | `sdf_filter`            | (required)
 FAR action        | Forwarding action bitmask: 1 = DROP, 2 = FORW, 4 = BUFF, 8 = NOCP, 16 = DUPL                      | `far.action`            | `0`
 Outer header      | Outer header creation for the FAR: 0 = none, 1 = GTP-U/UDP/IP (IPv4), 2 = GTP-U/UDP/IP (IPv6), 4 = UDP/IPv4, 8 = UDP/IPv6 | `far.outer_header_creation` | `0`
 FAR TEID          | Tunnel endpoint identifier for the forwarding action                                            | `far.teid`              | `0`
