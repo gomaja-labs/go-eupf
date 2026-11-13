@@ -200,6 +200,7 @@ func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 		peers = append(peers, addr)
 	}
 	conn.stateMu.Unlock()
+	conn.flushReportRetries()
 	_ = conn.sendAdmitted(outgoing)
 	for _, peer := range peers {
 		if err := SendHeartbeatRequest(conn, 0, peer); err != nil {

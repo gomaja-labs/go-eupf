@@ -205,6 +205,7 @@ func (conn *PfcpConnection) serviceTransactions(now time.Time) {
 	for _, req := range failed {
 		conn.requestFailed(req)
 	}
+	conn.flushReportRetries()
 }
 func (conn *PfcpConnection) requestFailed(req *pendingRequest) {
 	PfcpRequestTimeouts.WithLabelValues(message.MessageTypeName(req.typ)).Inc()

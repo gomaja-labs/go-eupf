@@ -9,12 +9,12 @@ import (
 )
 
 type reportedUsage struct {
-	id, globalID     uint32
+	id               uint32
+	generation       uint64
 	uplink, downlink uint64
 }
 type reportCleanup struct {
-	association    *NodeAssociation
-	session        *Session
+	request        *pendingRequest
 	failedAt, next time.Time
 }
 
@@ -44,7 +44,7 @@ func (conn *PfcpConnection) bindReportUsageLocked(msg message.Message, assoc *No
 		if !ok {
 			continue
 		}
-		usage = append(usage, reportedUsage{id, urr.GlobalId, volume.UplinkVolume, volume.DownlinkVolume})
+		usage = append(usage, reportedUsage{id, urr.Generation, volume.UplinkVolume, volume.DownlinkVolume})
 	}
 	conn.transport.mu.Lock()
 	if req := conn.transport.pending[msg.Sequence()]; req != nil {
@@ -57,18 +57,24 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 	if result.outcome == requestAccepted {
 		return
 	} // Clause 6.3.5.2: delivered.
+	if !conn.reportAddressCurrent(req, session) {
+		// Table 7.5.4.1-1 and clause 6.4: this is a new procedure to
+		// the current CP F-SEID, preserving all originally reported IEs.
+		conn.reportRetries = append(conn.reportRetries, req)
+		return
+	}
 	if response, ok := result.response.(*message.SessionReportResponse); ok {
 		if cause, err := response.Cause.Cause(); err == nil && cause == ie.CauseSessionContextNotFound {
 			// Clause 6.3.5.3: the CP has no corresponding context. Queue local
 			// deletion; the completion callback never waits for kernel reclamation.
-			conn.reportCleanup = append(conn.reportCleanup, reportCleanup{association: req.association, session: session})
+			conn.reportCleanup = append(conn.reportCleanup, reportCleanup{request: req})
 			log.Warn().Uint64("session", session.LocalSEID).Msg("CP has no session context; schedule local rule cleanup")
 			return
 		}
 	}
 	for _, usage := range req.usage {
 		urr, ok := session.URRs[usage.id]
-		if !ok || urr.GlobalId != usage.globalID {
+		if !ok || urr.Generation != usage.generation {
 			PfcpUndeliveredUsage.Add(float64(usage.uplink + usage.downlink))
 			log.Error().Uint64("session", session.LocalSEID).Uint32("urr", usage.id).Uint64("uplink", usage.uplink).Uint64("downlink", usage.downlink).Msg("Failed report belongs to a removed or replaced URR; octets cannot be merged into another rule")
 			continue
@@ -84,8 +90,15 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 	pending := conn.reportCleanup
 	conn.reportCleanup = nil
 	for _, work := range pending {
-		assoc, session := work.association, work.session
-		if conn.associationByID(assoc.ID) != assoc || assoc.Sessions[session.LocalSEID] != session {
+		req := work.request
+		assoc := req.association
+		session := assoc.Sessions[req.localSEID]
+		if conn.associationByID(assoc.ID) != assoc || session == nil {
+			continue
+		}
+		// The CP may change after Cause 65 but before local reclamation.
+		if !conn.reportAddressCurrent(req, session) {
+			conn.reportRetries = append(conn.reportRetries, req)
 			continue
 		}
 		if now.Before(work.next) {
@@ -108,6 +121,50 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 			conn.forgetSession(assoc, session.LocalSEID)
 		}
 	}
+}
+
+func (conn *PfcpConnection) reportAddressCurrent(req *pendingRequest, session *Session) bool {
+	return req.remoteSEID == session.RemoteSEID && req.peer.IP.Equal(session.controlIP(conn))
+}
+
+// Completion can run while transport.mu is held. Queue re-origination there;
+// admission and sending happen immediately after those locks are released.
+func (conn *PfcpConnection) flushReportRetries() {
+	conn.stateMu.Lock()
+	pending := conn.reportRetries
+	conn.reportRetries = nil
+	var outgoing []admittedRequest
+	for _, old := range pending {
+		assoc := conn.associationByID(old.associationID())
+		if assoc != old.association || activeAssociation(assoc) == nil || assoc.Sessions[old.localSEID] == nil {
+			recordUndeliveredUsage(old, "session removed before report re-origination")
+			continue
+		}
+		session := assoc.Sessions[old.localSEID]
+		msg, err := message.Parse(old.wire)
+		if err != nil {
+			// old.wire was encoded by prepareRequestContext and is immutable.
+			log.Error().Err(err).Msg("Decode retained Session Report")
+			conn.completeReportLocked(old, session, requestResult{outcome: requestInvalid})
+			continue
+		}
+		report := msg.(*message.SessionReportRequest)
+		report.Header.SEID = session.RemoteSEID
+		peer := *old.peer
+		peer.IP = append(peer.IP[:0:0], session.controlIP(conn)...)
+		socket := conn.socket()
+		wire, err := conn.prepareRequestContext(report, &peer, old.trace, socket, assoc.sessionEntities[old.localSEID], assoc, old.localSEID)
+		if err != nil {
+			conn.reportRetries = append(conn.reportRetries, old)
+			continue
+		}
+		conn.transport.mu.Lock()
+		conn.transport.pending[report.Sequence()].usage = old.usage
+		conn.transport.mu.Unlock()
+		outgoing = append(outgoing, admittedRequest{wire, report.MessageType(), &peer, socket, old.trace})
+	}
+	conn.stateMu.Unlock()
+	_ = conn.sendAdmitted(outgoing)
 }
 
 func recordUndeliveredUsage(request *pendingRequest, reason string) {

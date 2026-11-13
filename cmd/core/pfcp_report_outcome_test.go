@@ -44,6 +44,13 @@ func TestFailedUsageReportIsIncludedInNextReport(t *testing.T) {
 					cause = ie.CauseSystemFailure
 				}
 				conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, first.Sequence(), ie.NewCause(cause))), cp.LocalAddr().(*net.UDPAddr))
+				if outcome == "changed CP F-SEID" {
+					reoriginated := identityRead(t, cp)
+					if reoriginated.SEID() != 88 || reoriginated.Sequence() == first.Sequence() {
+						t.Fatal("report did not follow new CP F-SEID")
+					}
+					conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, reoriginated.Sequence(), ie.NewCause(ie.CauseSystemFailure))), cp.LocalAddr().(*net.UDPAddr))
+				}
 			}
 			maps.urr.UplinkVolume = 35
 			urr := session.URRs[9]

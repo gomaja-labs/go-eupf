@@ -71,6 +71,7 @@ type PfcpConnection struct {
 	addressIndex          map[string]map[*NodeAssociation]int
 	responseWait          <-chan error
 	reportCleanup         []reportCleanup
+	reportRetries         []*pendingRequest
 
 	release       *AssociationRelease
 	releasing     bool
