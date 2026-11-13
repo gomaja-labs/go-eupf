@@ -65,7 +65,7 @@ func TestEndMarkerOnChangedDownstreamFTEID(t *testing.T) {
 			if n != 8 || buf[0] != 0x30 || buf[1] != 254 || binary.BigEndian.Uint16(buf[2:4]) != 0 || binary.BigEndian.Uint32(buf[4:8]) != 200 {
 				t.Fatalf("invalid End Marker length=%d", n)
 			}
-			if from.Port != 2152 || !from.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+			if from.Port != 49352 || !from.IP.Equal(net.IPv4(127, 0, 0, 1)) {
 				t.Fatalf("incorrect tunnel source=%s", from)
 			}
 		})
@@ -99,7 +99,7 @@ func TestEndMarkerSharesSourcePortWithEchoProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = peer.Close() }()
-	manager := NewGtpPathManager(net.JoinHostPort(local.String(), "2152"), time.Hour)
+	manager := NewGtpPathManager(net.JoinHostPort(local.String(), "49352"), time.Hour)
 	defer manager.Stop()
 	result := make(chan error, 1)
 	go func() { _, err := manager.sendEcho(peer.LocalAddr().String(), 7); result <- err }()
@@ -239,6 +239,54 @@ func TestEndMarkerRetainsTunnelInterfaceThroughRuleTransactions(t *testing.T) {
 	}
 	if assoc.Sessions[fseid.SEID].FARs[9].InterfaceTypePresent {
 		t.Fatal("null interface label was not removed")
+	}
+}
+
+func TestEndMarkerUsesEveryOldTunnelSource(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		native, relayed bool
+		want            map[string]bool
+	}{
+		{"native", true, false, map[string]bool{"127.0.0.1": true}},
+		{"N9 relay", false, true, map[string]bool{"127.0.0.9": true}},
+		{"shared FAR", true, true, map[string]bool{"127.0.0.1": true, "127.0.0.9": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			conn.n9Address = net.IPv4(127, 0, 0, 9)
+			old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
+			fid := uint32(9)
+			old.NewFar(fid, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1, DestinationInterface: ie.DstInterfaceAccess, DestinationInterfacePresent: true})
+			next.NewFar(fid, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
+			if tc.native {
+				old.PutPDR(1, SPDRInfo{PdrID: 1, FARID: &fid, SourceInterface: ie.SrcInterfaceCore})
+			}
+			if tc.relayed {
+				old.PutPDR(2, SPDRInfo{PdrID: 2, FARID: &fid, Teid: 10, SourceInterface: ie.SrcInterfaceCore})
+			}
+			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(fid), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+			batch, err := conn.prepareEndMarkers(request, old, next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch == nil {
+				t.Fatal("missing markers")
+			}
+			defer batch.release()
+			got := make(map[string]bool)
+			for _, packet := range batch.packets {
+				got[packet.source.String()] = true
+			}
+			if len(batch.packets) != len(tc.want) || len(got) != len(tc.want) {
+				t.Fatalf("marker sources=%v want=%v", got, tc.want)
+			}
+			for address := range tc.want {
+				if !got[address] {
+					t.Fatalf("marker sources=%v missing %s", got, address)
+				}
+			}
+		})
 	}
 }
 

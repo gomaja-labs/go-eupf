@@ -5,7 +5,7 @@ import (
 	"syscall"
 )
 
-// GTP diagnostic/control senders share UDP 2152. Connected Echo sockets retain
+// GTP control senders can share a local UDP port. Connected Echo sockets retain
 // more specific receive demultiplexing than unconnected End Marker senders.
 func reuseGTPSourcePort(_, _ string, raw syscall.RawConn) error {
 	var optionErr error

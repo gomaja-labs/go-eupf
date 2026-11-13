@@ -303,8 +303,12 @@ control UP-constructed End Markers. SNDEM applies to its enclosing updated FAR.
 It is not supported as a top-level Session Modification flag. EMPU is set in
 UP Function Features (table 8.2.25-1, octet 6 bit 1).
 
-The source address follows the old tunnel's local N3 or N9 endpoint, with
-source and destination UDP port 2152 and the old destination address/TEID
+The source address follows the old PDR ingress paths: native N6 and CP-originated
+re-encapsulation use N3; ordinary GTP relay uses N9, except forwarding towards
+the CP function uses N3. If a FAR served both local endpoints, a marker is sent
+from each distinct source. The marker uses
+destination UDP port 2152, source UDP port `49152 | (old_TEID & 16383)`,
+and the old destination address/TEID
 (TS 29.281 V19.2.0 clauses 4.4.2.6, 4.4.3.6 and 7.3.2).
 A successful publication schedules transmission after the kernel grace period;
 rejected/rolled-back changes do not send. A maximum of 1024 pending markers per
@@ -313,8 +317,7 @@ request with Cause 75; no path switch is committed. Fixed queue metadata fits
 within the memory plan's existing 32 MiB transient allowance. UDP sends have a
 100 ms deadline, with failures/cancellations counted in
 `upf_gtp_end_marker_failures_total`. Shutdown cancels queued sends and returns
-the reservations. Echo probes share the source port through the same socket
-policy.
+the reservations. Echo probes and End Marker senders use the same source-port reuse policy.
 
 Labeled N3/N9 data-forwarding tunnels remain unsupported for SNDEM because the
 PDU Session Container depends on inter-system E-RAB/QFI mapping. N19 End Markers

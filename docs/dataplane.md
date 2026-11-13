@@ -268,3 +268,10 @@ Interface to choose UL versus DL, consistently for QoS, usage and SDF endpoint
 orientation (TS 29.244 V20.1.0 clause 5.4.4). UE-to-CP and CP-to-DN are UL;
 CP-to-UE and DN-to-CP are DL. N4-u shares the configured N3 IPv4 endpoint.
 See `rule-capabilities.md` for the clause 5.3.1 scenario matrix and limits.
+
+Outgoing GTP-U tunnels use UDP destination port 2152 and a stable dynamic source
+port `49152 | (TEID & 16383)`, for native encapsulation and GTP relay. Generated
+End Markers use that same old-tunnel source port. This provides per-tunnel
+transport load distribution without retaining arbitrary ingress source ports
+(TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6). Echo and diagnostic reply
+port handling is unchanged.

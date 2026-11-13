@@ -244,6 +244,12 @@ static __always_inline void fill_udp_header(struct udphdr *udp, int port, int le
     udp->check = 0;
 }
 
+// TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6: select a stable
+// dynamic source port per outgoing tunnel, including generated End Markers.
+static __always_inline __u16 gtp_tunnel_source_port(__u32 teid) {
+    return bpf_htons(49152U | (teid & 0x3fffU));
+}
+
 static __always_inline void fill_gtp_header(struct gtpuhdr *gtp, int extention, int teid, int len) {
     *(__u8 *)gtp = GTP_FLAGS;
     gtp->e = extention;
@@ -331,6 +337,7 @@ static __always_inline __u32 add_gtp_over_ip4_headers(struct packet_context *ctx
         return -1;
 
     fill_udp_header(udp, GTP_UDP_PORT, ip_packet_len + sizeof(*udp) + gtp_full_hdr_size);
+    udp->source = gtp_tunnel_source_port(teid);
 
     /* Add the GTP header */
     struct gtpuhdr *gtp = (struct gtpuhdr *)(udp + 1);
@@ -375,6 +382,7 @@ static __always_inline __u32 add_gtp_over_ip4_headers(struct packet_context *ctx
 static __always_inline void update_gtp_tunnel(struct packet_context *ctx, int srcip, int dstip, __u8 tos, int teid) {
 
     ctx->gtp->teid = bpf_htonl(teid);
+    ctx->udp->source = gtp_tunnel_source_port(teid);
     ctx->ip4->saddr = srcip;
     ctx->ip4->daddr = dstip;
     ctx->ip4->check = 0;

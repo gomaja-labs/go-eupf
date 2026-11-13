@@ -131,7 +131,7 @@ func (s *endMarkerSender) close() {
 // Ordinary N3/N9/EPC End Markers have no PDU Session Container.
 func sendEndMarker(packet endMarker) error {
 	listen := net.ListenConfig{Control: reuseGTPSourcePort}
-	socket, err := listen.ListenPacket(context.Background(), "udp4", net.JoinHostPort(packet.source.String(), "2152"))
+	socket, err := listen.ListenPacket(context.Background(), "udp4", net.JoinHostPort(packet.source.String(), fmt.Sprint(gtpTunnelSourcePort(packet.teid))))
 	if err != nil {
 		return fmt.Errorf("open End Marker source: %w", err)
 	}
@@ -192,16 +192,14 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 		}
 		destination := make(net.IP, 4)
 		binary.LittleEndian.PutUint32(destination, a.RemoteIP)
-		source := cloneIP(conn.n3Address)
-		if a.DestinationInterfacePresent && a.DestinationInterface == ie.DstInterfaceCore {
-			source = cloneIP(conn.n9Address)
+		for _, source := range conn.oldTunnelSources(old, id, before) {
+			key := fmt.Sprintf("%s/%s/%d", source, destination, a.Teid)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			packets = append(packets, endMarker{source, destination, a.Teid})
 		}
-		key := fmt.Sprintf("%s/%s/%d", source, destination, a.Teid)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		packets = append(packets, endMarker{source, destination, a.Teid})
 	}
 	if len(packets) == 0 {
 		return nil, nil
@@ -257,3 +255,44 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 	far.InterfaceType, far.InterfaceTypePresent = typ, true
 	return nil
 }
+
+// Match the existing data-plane source selection for each old ingress path:
+// native N6 and CP-originated re-encapsulation use N3; ordinary GTP relay
+// uses N9 unless forwarding towards the CP function. A shared FAR can serve
+// both paths, requiring one marker for each distinct old local endpoint.
+// TS 29.281 V19.2.0 clause 4.4.3.6 requires the tunnel's same source address.
+func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SFarInfo) []net.IP {
+	native, relay := false, false
+	for _, pdr := range session.PDRs {
+		if pdr.FARID != nil {
+			if *pdr.FARID != id {
+				continue
+			}
+		} else if far.GlobalId == 0 || pdr.PdrInfo.FarId != far.GlobalId {
+			continue
+		}
+		toCP := far.FarInfo.DestinationInterfacePresent && far.FarInfo.DestinationInterface == ie.DstInterfaceCPFunction
+		if pdr.Teid != 0 && pdr.SourceInterface != ie.SrcInterfaceCPFunction && !toCP {
+			relay = true
+		} else {
+			native = true
+		}
+	}
+	if !native && !relay {
+		// An inactive FAR has no old readers; retain its configured local role.
+		relay = far.FarInfo.DestinationInterfacePresent && far.FarInfo.DestinationInterface == ie.DstInterfaceCore
+		native = !relay
+	}
+	var sources []net.IP
+	if native {
+		sources = append(sources, cloneIP(conn.n3Address))
+	}
+	if relay {
+		sources = append(sources, cloneIP(conn.n9Address))
+	}
+	return sources
+}
+
+// TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6: the same
+// per-tunnel source port is used by XDP forwarding and End Markers.
+func gtpTunnelSourcePort(teid uint32) uint16 { return 49152 | uint16(teid&0x3fff) }
