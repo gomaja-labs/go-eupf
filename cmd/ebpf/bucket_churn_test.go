@@ -156,7 +156,7 @@ func TestPublishedBucketsDoNotCrossSessions(t *testing.T) {
 	}()
 	defer func() { stop.Store(true); wg.Wait() }()
 	defer pinPublicationCPU(t, 5)()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(publicationChurnDuration(t))
 	packets, bad, errorIndications := 0, 0, 0
 	for time.Now().Before(deadline) {
 		action, out, err := b.UpfIpEntrypointFunc.Test(packet)
@@ -212,4 +212,18 @@ func TestPublishedBucketKeyTagRejectsRecycledIndex(t *testing.T) {
 	if action != 2 {
 		t.Fatalf("wrong-kind index was matched: %d", action)
 	}
+}
+
+// Override only when linking the long acceptance probe binary, so the normal
+// suite stays bounded while both kernels can run the review's 20-second churn.
+var ruleChurnDuration = "2s"
+
+func publicationChurnDuration(t *testing.T) time.Duration {
+	t.Helper()
+	duration, err := time.ParseDuration(ruleChurnDuration)
+	if err != nil || duration <= 0 || duration > 5*time.Minute {
+		t.Fatalf("invalid rule churn duration %q", ruleChurnDuration)
+	}
+	t.Logf("publication churn duration=%s", duration)
+	return duration
 }

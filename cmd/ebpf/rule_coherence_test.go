@@ -81,7 +81,7 @@ func TestPublishedFARFieldsRemainConsistent(t *testing.T) {
 	defer func() { stop.Store(true); wg.Wait() }()
 	defer pinPublicationCPU(t, 5)()
 	packet := ethernetDatapath(t, layers.EthernetTypeIPv4, udpDatapath(t, false))
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(publicationChurnDuration(t))
 	packets, mixed, forwarded := 0, 0, 0
 	for time.Now().Before(deadline) {
 		_, out, err := b.UpfIpEntrypointFunc.Test(packet)
@@ -229,11 +229,14 @@ func TestReplacementQERMetersAgainstSharedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, QerIDs: []uint32{version}}); err != nil {
-		t.Fatal(err)
+	for _, ids := range [][]uint32{{version}, {1, version}} {
+		if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, QerIDs: ids}); err != nil {
+			t.Fatal(err)
+		}
+		action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false))
+		if action != 1 {
+			t.Fatalf("replacement reset the policer budget with %d bindings: %d", len(ids), action)
+		}
 	}
-	action, _ := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false))
-	if action != 1 {
-		t.Fatalf("replacement reset the policer budget: %d", action)
-	}
+
 }
