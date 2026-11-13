@@ -69,3 +69,149 @@ func (b *BpfObjects) graceBarrierForTest() <-chan error {
 	b.grace.enqueue(graceWork{graced: true, done: done})
 	return done
 }
+
+func TestPDRImageRollbackRetainsOtherEntries(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 2, FarId: 2}); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := b.BeginRuleTransaction(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := controller.(*ruleTransaction)
+	if err := tx.DeletePdrUplink(10, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.publishPDRs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 3, FarId: 2}); err != nil {
+		t.Fatal(err)
+	}
+	var bucket IpEntrypointPdrInfo
+	if err := b.LookupUplinkPDR(10, &bucket); err != nil {
+		t.Fatal(err)
+	}
+	if bucket.Count != 3 {
+		t.Fatalf("rollback left a stale publication image: count=%d", bucket.Count)
+	}
+}
+
+func TestRollbackKeepsNewConfigurationsUntilGrace(t *testing.T) {
+	b := loadDatapath(t)
+	for range 3 {
+		if _, err := b.GetNextFAR(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := b.GetNextQER(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.GetNextURR(); err != nil {
+		t.Fatal(err)
+	}
+	entered, resume := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(unblock)
+	signal := sync.OnceFunc(func() { close(entered) })
+	original := b.grace.synchronize
+	b.grace.synchronize = func() error { signal(); <-resume; return original() }
+	controller, err := b.BeginRuleTransaction(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := controller.(*ruleTransaction)
+	far, err := tx.NewFar(FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1234})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qer, err := tx.NewQer(QerInfo{Qfi: 9, MaxBitrateUL: 12345})
+	if err != nil {
+		t.Fatal(err)
+	}
+	urr, err := tx.NewUrr(UrrInfo{UplinkVolume: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: far, QerIDs: []uint32{qer}, UrrIDs: []uint32{urr}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.publishPDRs(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback did not wait for old readers")
+	}
+	var fv IpEntrypointFarInfo
+	var qv IpEntrypointQerInfo
+	if err := b.FarMap.Lookup(far, &fv); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.QerMap.Lookup(qer, &qv); err != nil {
+		t.Fatal(err)
+	}
+	if fv.Action != 2 || fv.Teid != 200 || fv.Remoteip != 1234 {
+		t.Errorf("rollback overwrote a FAR still held by readers: %+v", fv)
+	}
+	if qv.Qfi != 9 || qv.UlMaximumBitrate != 12345 {
+		t.Errorf("rollback overwrote a QER still held by readers: %+v", qv)
+	}
+	var uv IpEntrypointUrrInfo
+	if err := b.UrrMap.Lookup(urr, &uv); err != nil {
+		t.Fatal(err)
+	}
+	if uv.Ul != 42 {
+		t.Errorf("rollback overwrote a URR before the grace: %+v", uv)
+	}
+	unblock()
+	if err := b.SynchronizeRules(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.FarMap.Lookup(far, &fv); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.QerMap.Lookup(qer, &qv); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.UrrMap.Lookup(urr, &uv); err != nil {
+		t.Fatal(err)
+	}
+	if fv != (IpEntrypointFarInfo{}) || qv != (IpEntrypointQerInfo{}) || uv != (IpEntrypointUrrInfo{}) {
+		t.Fatal("rollback leaked unreachable configuration")
+	}
+}
+
+func TestConfigurationWritesRequireFreshSlots(t *testing.T) {
+	b := loadDatapath(t)
+	tx, err := b.BeginRuleTransaction(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := tx.UpdateFar(1, FarInfo{Action: 1}); err == nil {
+		t.Error("overwrote a live FAR without replacement")
+	}
+	if err := tx.UpdateQer(1, QerInfo{GateStatusUL: 1}); err == nil {
+		t.Error("overwrote a live QER without replacement")
+	}
+	id, err := tx.NewFar(FarInfo{Action: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.UpdateFar(id, FarInfo{Action: 1}); err == nil {
+		t.Error("rewrote an initialized configuration version")
+	}
+}

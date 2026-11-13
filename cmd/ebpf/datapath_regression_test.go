@@ -416,7 +416,7 @@ func TestDatapathUrrCountsTPDU(t *testing.T) {
 	}
 }
 
-func TestDatapathPublicationPreservesLookupError(t *testing.T) {
+func TestDatapathPublicationPreservesMapError(t *testing.T) {
 	b := loadDatapath(t)
 	if err := b.PdrBuckets.Close(); err != nil {
 		t.Fatal(err)

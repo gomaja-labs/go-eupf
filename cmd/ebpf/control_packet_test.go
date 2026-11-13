@@ -12,7 +12,7 @@ import (
 
 func TestUnknownTunnelErrorIndication(t *testing.T) {
 	b := loadDatapath(t)
-	if err := b.PdrMapTeidIp4.Delete(uint32(10)); err != nil {
+	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 		t.Fatal(err)
 	}
 	packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
@@ -70,7 +70,7 @@ func TestEndMarkerForwarding(t *testing.T) {
 			g[1] = 254
 			binary.BigEndian.PutUint32(g[4:8], 10)
 			if !known {
-				if err := b.PdrMapTeidIp4.Delete(uint32(10)); err != nil {
+				if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -140,7 +140,7 @@ func TestControlReplyDestinationPort(t *testing.T) {
 				g = append(g, 0x12, 0x34, 0, 0)
 				want = 43210
 			case "error":
-				if err := b.PdrMapTeidIp4.Delete(uint32(10)); err != nil {
+				if err := b.DeletePdrUplink(10, 0, 1); err != nil {
 					t.Fatal(err)
 				}
 				g = append(g, udpDatapath(t, false)...)

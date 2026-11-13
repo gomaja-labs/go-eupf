@@ -70,7 +70,7 @@ func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
 			}
 			operations := []func() error{
 				func() error { _, err := tx.NewFar(FarInfo{Action: 1}); return err },
-				func() error { return tx.UpdateQer(1, QerInfo{Qfi: 7, MaxBitrateUL: 1000}) },
+				func() error { _, err := tx.NewQer(QerInfo{PolicerID: 1, Qfi: 7, MaxBitrateUL: 1000}); return err },
 				func() error { _, err := tx.NewUrr(UrrInfo{}); return err },
 				func() error { return tx.PutPdrUplink(11, PdrInfo{PdrID: 9, FarId: 1}) },
 				func() error { return tx.DeletePdrUplink(10, 0, 1) },

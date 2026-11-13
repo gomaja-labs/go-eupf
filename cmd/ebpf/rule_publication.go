@@ -7,6 +7,11 @@ import (
 	cilium "github.com/cilium/ebpf"
 )
 
+type pdrImage struct {
+	value *IpEntrypointPdrInfo
+	slot  uint32
+}
+
 type pdrMutationKey struct {
 	m   *cilium.Map
 	key interface{}
@@ -26,26 +31,22 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 	if draft := tx.pdrs[k]; draft != nil {
 		return draft, nil
 	}
-	var bucket IpEntrypointPdrInfo
-	lookupErr := tx.objects.lookupPDR(m, key, &bucket, true)
-	var previousSlot uint32
-	if lookupErr == nil && m != tx.objects.PdrMapDownlinkIp6 {
-		var index IpEntrypointPdrIndex
-		if err := m.Lookup(key, &index); err != nil {
-			return nil, err
+	// These unpinned maps start empty and every control-plane writer uses this
+	// journal. Keep immutable undo images rather than copying the large kernel
+	// bucket on every request. Diagnostic readers still copy the actual map.
+	image, present := tx.objects.ruleImages[k]
+	draft := &pdrMutation{pdrMutationKey: k, owner: tx.sessionID, previous: image.value, previousSlot: image.slot, present: present}
+	if present {
+		bucket := image.value
+		if bucket.Count > MaxPDRsPerKey {
+			return nil, fmt.Errorf("invalid PDR count %d", bucket.Count)
 		}
-		previousSlot = index.Slot
+		if bucket.Count != 0 && bucket.SessionId != tx.sessionID {
+			return nil, ErrKeyOwned
+		}
+		draft.entries = append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)
 	}
-	if lookupErr != nil && !isKeyAbsent(lookupErr) {
-		return nil, lookupErr
-	}
-	if bucket.Count > MaxPDRsPerKey {
-		return nil, fmt.Errorf("invalid PDR count %d", bucket.Count)
-	}
-	if bucket.Count != 0 && bucket.SessionId != tx.sessionID {
-		return nil, ErrKeyOwned
-	}
-	draft := &pdrMutation{previousSlot: previousSlot, previous: &bucket, present: lookupErr == nil, pdrMutationKey: k, owner: tx.sessionID, entries: append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)}
+
 	if tx.pdrs == nil {
 		tx.pdrs = make(map[pdrMutationKey]*pdrMutation)
 	}
@@ -124,14 +125,15 @@ func (tx *ruleTransaction) publishPDRs() error {
 			value.SessionId, value.Count = draft.owner, uint32(len(draft.entries))
 			copy(value.Entries[:], draft.entries)
 			// PDR values are immutable to packet readers. The transaction's
-			// original key lookup is the exact undo image under ruleMutex;
-			// rereading the large bucket twice adds no information.
+			// immutable publication image is the exact undo image under
+			// ruleMutex; rereading the large kernel bucket adds no information.
 			if tx.beforeWrite != nil {
 				if err := tx.beforeWrite(); err != nil {
 					return err
 				}
 			}
 			var err error
+			var publishedSlot uint32
 			if remove {
 				err = draft.m.Delete(draft.key)
 				if isKeyAbsent(err) {
@@ -143,6 +145,7 @@ func (tx *ruleTransaction) publishPDRs() error {
 				} else {
 					var slot uint32
 					slot, err = tx.allocateBucket()
+					publishedSlot = slot
 					if err == nil {
 						key, kind := tx.objects.bucketKey(draft.m, draft.key)
 						bucket := IpEntrypointPdrBucket{Key: key, Kind: kind, Info: value}
@@ -177,10 +180,21 @@ func (tx *ruleTransaction) publishPDRs() error {
 					}
 				}
 				if err == nil {
-					tx.objects.recordPDRKey(original.m, original.key, original.previous.SessionId, original.present && original.previous.Count > 0)
+					if original.present {
+						tx.objects.ruleImages[original.pdrMutationKey] = pdrImage{original.previous, original.previousSlot}
+						tx.objects.recordPDRKey(original.m, original.key, original.previous.SessionId, original.previous.Count > 0)
+					} else {
+						delete(tx.objects.ruleImages, original.pdrMutationKey)
+						tx.objects.recordPDRKey(original.m, original.key, 0, false)
+					}
 				}
 				return err
 			})
+			if remove {
+				delete(tx.objects.ruleImages, draft.pdrMutationKey)
+			} else {
+				tx.objects.ruleImages[draft.pdrMutationKey] = pdrImage{&value, publishedSlot}
+			}
 			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {
 				tx.retiredKey = true

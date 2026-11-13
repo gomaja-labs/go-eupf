@@ -178,15 +178,7 @@ func (bpfObjects *BpfObjects) NewFar(farInfo FarInfo) (uint32, error) {
 
 	log.Debug().Msgf("EBPF: Put FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
-	farToStore := IpEntrypointFarInfo{
-		Action:                      farInfo.Action,
-		OuterHeaderCreation:         farInfo.OuterHeaderCreation,
-		Teid:                        farInfo.Teid,
-		Remoteip:                    farInfo.RemoteIP,
-		TransportLevelMarking:       farInfo.TransportLevelMarking,
-		DestinationInterface:        farInfo.DestinationInterface,
-		DestinationInterfacePresent: boolByte(farInfo.DestinationInterfacePresent),
-	}
+	farToStore := farMapValue(farInfo)
 	if err := bpfObjects.FarMap.Put(internalId, &farToStore); err != nil {
 		bpfObjects.ReleaseFAR(internalId)
 		return 0, fmt.Errorf("create FAR: %w", err)
@@ -223,15 +215,7 @@ func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) erro
 	}
 	log.Debug().Msgf("EBPF: Update FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
-	farToStore := IpEntrypointFarInfo{
-		Action:                      farInfo.Action,
-		OuterHeaderCreation:         farInfo.OuterHeaderCreation,
-		Teid:                        farInfo.Teid,
-		Remoteip:                    farInfo.RemoteIP,
-		TransportLevelMarking:       farInfo.TransportLevelMarking,
-		DestinationInterface:        farInfo.DestinationInterface,
-		DestinationInterfacePresent: boolByte(farInfo.DestinationInterfacePresent),
-	}
+	farToStore := farMapValue(farInfo)
 	return bpfObjects.FarMap.Update(internalId, &farToStore, ebpf.UpdateExist)
 }
 
@@ -756,4 +740,8 @@ func (tx *ruleTransaction) RetireQer(id uint32) error {
 		return nil
 	})
 	return nil
+}
+
+func farMapValue(info FarInfo) IpEntrypointFarInfo {
+	return IpEntrypointFarInfo{Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
 }

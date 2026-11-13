@@ -32,6 +32,7 @@ type BpfObjects struct {
 	bucketIDs   *IdTracker
 	ruleMutex   sync.Mutex
 	ruleKeys    ruleKeyIndex
+	ruleImages  map[pdrMutationKey]pdrImage
 	rulePoison  error
 	ruleClosed  bool
 	grace       *ruleGrace
@@ -115,6 +116,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
 	bpfObjects.ruleKeys = ruleKeyIndex{}
+	bpfObjects.ruleImages = make(map[pdrMutationKey]pdrImage)
 	bpfObjects.bucketIDs = NewIdTracker(4*bpfObjects.pdrMapSize + 1)
 	loaded := false
 	defer func() {

@@ -28,14 +28,15 @@ type ruleTransaction struct {
 	graced                                   bool
 	undo                                     []func() error
 	allocatedFAR, allocatedQER, allocatedURR []uint32
-	newQER, newURR                           map[uint32]bool
-	finished                                 bool
-	beforeWrite                              func() error
-	resourceReclaim                          func() error
-	usagePending                             bool
-	completion                               chan error
-	pdrs                                     map[pdrMutationKey]*pdrMutation
-	pdrOrder                                 []*pdrMutation
+	// true: reserved but not initialized; false: immutable initialized version.
+	newFAR, newQER, newURR map[uint32]bool
+	finished               bool
+	beforeWrite            func() error
+	resourceReclaim        func() error
+	usagePending           bool
+	completion             chan error
+	pdrs                   map[pdrMutationKey]*pdrMutation
+	pdrOrder               []*pdrMutation
 }
 
 // BeginRuleTransaction serializes control-plane journals without stopping packet
@@ -51,7 +52,7 @@ func (b *BpfObjects) BeginRuleTransaction(sessionID uint64) (RuleTransaction, er
 		b.ruleMutex.Unlock()
 		return nil, fmt.Errorf("rule state requires recovery: %w", errors.Join(b.rulePoison, b.grace.failure()))
 	}
-	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID, newQER: make(map[uint32]bool), newURR: make(map[uint32]bool)}, nil
+	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID, newFAR: make(map[uint32]bool), newQER: make(map[uint32]bool), newURR: make(map[uint32]bool)}, nil
 }
 
 func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, change func() error) error {
@@ -158,6 +159,20 @@ func (tx *ruleTransaction) Rollback() error {
 		}
 	}
 	release := func() error {
+		// New versions can still be held by an invocation that saw a publication
+		// later rolled back. Clear them only here, after unpublication and grace.
+		// Do every fallible clear before releasing any ID: retries must never clear
+		// an identifier another request has already reused.
+		if err := clearInitializedRules[IpEntrypointFarInfo](b.FarMap, tx.allocatedFAR, tx.newFAR); err != nil {
+			return err
+		}
+		if err := clearInitializedRules[IpEntrypointQerInfo](b.QerMap, tx.allocatedQER, tx.newQER); err != nil {
+			return err
+		}
+		if err := clearInitializedRules[IpEntrypointUrrInfo](b.UrrMap, tx.allocatedURR, tx.newURR); err != nil {
+			return err
+		}
+
 		if tx.resourceReclaim != nil {
 			if err := tx.resourceReclaim(); err != nil {
 				return err
@@ -276,55 +291,74 @@ func (tx *ruleTransaction) NewFar(info FarInfo) (uint32, error) {
 	return id, nil
 }
 func (tx *ruleTransaction) NewQer(info QerInfo) (uint32, error) {
-	b := tx.objects
 	id, err := tx.GetNextQER()
 	if err != nil {
 		return 0, err
 	}
-	value := qerMapValue(info)
-	if value.PolicerId == id {
-		value.PolicerId = 0
-	}
-	err = journalRule[IpEntrypointQerInfo](tx, b.QerMap, id, func() error { return b.QerMap.Put(id, &value) })
-	if err != nil {
+	if err := tx.UpdateQer(id, info); err != nil {
 		return 0, err
 	}
 	return id, nil
 }
 func (tx *ruleTransaction) NewUrr(info UrrInfo) (uint32, error) {
-	b := tx.objects
 	id, err := tx.GetNextURR()
 	if err != nil {
 		return 0, err
 	}
-	err = journalRule[IpEntrypointUrrInfo](tx, b.UrrMap, id, func() error {
-		return b.UrrMap.Put(id, &IpEntrypointUrrInfo{Ul: info.UplinkVolume, Dl: info.DownlinkVolume})
-	})
-	if err != nil {
+	value := IpEntrypointUrrInfo{Ul: info.UplinkVolume, Dl: info.DownlinkVolume}
+	if err := initializeRule(tx, tx.objects.UrrMap, id, &value, tx.newURR); err != nil {
 		return 0, err
 	}
 	return id, nil
 }
 func (tx *ruleTransaction) UpdateFar(id uint32, info FarInfo) error {
-	return journalRule[IpEntrypointFarInfo](tx, tx.objects.FarMap, id, func() error { return tx.objects.UpdateFar(id, info) })
+	value := farMapValue(info)
+	return initializeRule(tx, tx.objects.FarMap, id, &value, tx.newFAR)
 }
 func (tx *ruleTransaction) UpdateQer(id uint32, info QerInfo) error {
-	if tx.newQER[id] {
-		value := qerMapValue(info)
-		if value.PolicerId == id {
-			value.PolicerId = 0
-		}
-		return journalRule[IpEntrypointQerInfo](tx, tx.objects.QerMap, id, func() error { return tx.objects.QerMap.Put(id, &value) })
+	value := qerMapValue(info)
+	if value.PolicerId == id {
+		value.PolicerId = 0
 	}
-	return journalRule[IpEntrypointQerInfo](tx, tx.objects.QerMap, id, func() error { return tx.objects.UpdateQer(id, info) })
+	return initializeRule(tx, tx.objects.QerMap, id, &value, tx.newQER)
 }
 func (tx *ruleTransaction) UpdateUrr(id uint32, info UrrInfo) error {
 	if tx.newURR[id] {
-		value := IpEntrypointUrrInfo{}
-		return journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.UrrMap.Put(id, &value) })
+		return initializeRule(tx, tx.objects.UrrMap, id, &IpEntrypointUrrInfo{}, tx.newURR)
 	}
+	// Configuration is held in the control plane, never in live counters.
 	return tx.objects.UpdateUrr(id, info)
 }
+
+// initializeRule writes one newly reserved, unreachable version exactly once.
+// Its old bytes are irrelevant; rollback retires the whole version after grace.
+func initializeRule[T any](tx *ruleTransaction, m *cilium.Map, id uint32, value *T, pending map[uint32]bool) error {
+	if !pending[id] {
+		return fmt.Errorf("rule configuration requires a fresh reserved slot")
+	}
+	if tx.beforeWrite != nil {
+		if err := tx.beforeWrite(); err != nil {
+			return err
+		}
+	}
+	if err := m.Put(id, value); err != nil {
+		return err
+	}
+	pending[id] = false
+	return nil
+}
+func clearInitializedRules[T any](m *cilium.Map, ids []uint32, pending map[uint32]bool) error {
+	for _, id := range ids {
+		if !pending[id] {
+			var empty T
+			if err := m.Put(id, &empty); err != nil {
+				return fmt.Errorf("clear rolled back rule slot %d: %w", id, err)
+			}
+		}
+	}
+	return nil
+}
+
 func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	if id == 0 {
 		return fmt.Errorf("reserved FAR slot")
@@ -441,6 +475,7 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
 	id, err := tx.objects.GetNextFAR()
 	if err == nil {
+		tx.newFAR[id] = true
 		tx.allocatedFAR = append(tx.allocatedFAR, id)
 	}
 	return id, err

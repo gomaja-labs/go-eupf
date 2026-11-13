@@ -185,8 +185,12 @@ Updated PDR.
 PFCP mutations validate into a private session and resource view, reserve every
 new slot, write dependencies, publish final PDR buckets, detach obsolete
 references, and retire unreachable slots. The journal records actual map
-publications. Rollback restores previous bindings and values, then retires newly allocated
-slots after old invocations return. Failed allocations are quarantined until
+publications. Rollback restores previous bindings and detached counter values,
+then retires newly allocated slots after old invocations return. New FAR/QER
+configurations are initialized exactly once in fresh reserved slots. Undo never
+overwrites a version that a packet may still hold; rollback clears all new
+versions after the grace and before releasing any of their IDs. A cleanup retry
+therefore cannot clear a reused ID. Failed allocations are quarantined until
 that retirement, avoiding late callbacks freeing a reused slot. Live URR configuration updates preserve counters throughout.
 The existing PFCP state lock serializes session mutations,
 association cleanup and snapshots; diagnostic map readers also exclude the
@@ -200,7 +204,11 @@ Each request records only its own reservations and active references. Indexed
 FIFO free pools, per-session ownership lists and IPv6 prefix tries avoid pool
 scans. Lease generations prevent a late reclamation callback from freeing a
 new reservation. Rule-plan preflight and detachment use a published-key index
-and touch only the requesting session keys; unchanged PDR buckets are not
+and touch only the requesting session keys. The same journal owns immutable
+PDR publication images in Go, one per live key, restored together with kernel
+bindings on rollback. These unpinned maps start empty and have no independent
+writers; diagnostics still read the kernel map. This avoids large bucket reads
+while preparing each request. Unchanged PDR buckets are not
 republished.
 
 Session Establishment Recovery Time Stamps are associated with CP F-SEID IP,
