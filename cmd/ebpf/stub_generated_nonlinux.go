@@ -9,6 +9,7 @@ import (
 )
 
 type IpEntrypointObjects struct {
+	UpfBufferRenderFunc       *ebpf.Program
 	BufferPendingPacket       *ebpf.Map
 	UpfBufferAdmissionFunc    *ebpf.Program
 	BufferAnchors             *ebpf.Map

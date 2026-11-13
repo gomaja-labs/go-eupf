@@ -453,6 +453,104 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
 }
 
 
+static __always_inline enum xdp_action finish_gtp_forwarding(struct packet_context *ctx, const struct far_info *far, int marking, __u32 removal, __u32 *output) {
+    int from_cp=ctx->source_interface==3;
+
+    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
+    // N9: Only outer header GTP/UDP/IPv4 is supported at the moment
+    if (far->outer_header_creation & OHC_GTP_U_UDP_IPv4)
+    {
+        if (from_cp) {
+            // CP-originated downlink packets need the session's DL QFI and
+            // PDU Session Container, rather than retaining an absent CP QFI.
+            if (remove_gtp_header(ctx)) return XDP_ABORTED;
+            if (add_gtp_over_ip4_headers(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80))) return XDP_ABORTED;
+            if (is_local_ip(ctx->ip4->daddr)) return UPF_LOCAL_TUNNEL;
+            if (!output) increment_counter(ctx->n3_n6_counter,tx_n3);
+            return route_ipv4_output(ctx->xdp_ctx,ctx->eth,ctx->ip4,output);
+        }
+        // TS 29.244 V20.1.0 clause 5.17.3 applies the same container
+        // mapping to G-PDUs and End Markers on forwarding tunnels.
+        if (((removal>>16)&0xff) & 1) {
+            if (delete_gtp_container(ctx)) return XDP_DROP;
+        } else if (!ctx->qfi_present && (marking & 0x80)) {
+            if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
+        }
+        __u32 local=global_config.n9_ipv4_address;
+        if (far->destination_interface_present && far->destination_interface==3) {
+            local=global_config.n3_ipv4_address;
+            ctx->ip4->tos=tos;
+        }
+        update_gtp_tunnel(ctx, local, far->remoteip, 0, far->teid);
+
+        if(is_local_ip(ctx->ip4->daddr)) {
+            return UPF_LOCAL_TUNNEL;
+            //return handle_gtp_packet(ctx);
+        }
+    } else if (((removal>>8)&0xff) && ((removal&0xff) == OHR_GTP_U_UDP_IPv4 || (removal&0xff) == OHR_GTP_U_UDP_IP)) {
+        long result = remove_gtp_header(ctx);
+        if (result) {
+            upf_printk("upf: [n3] handle_gtp_packet: can't remove gtp header: %d", result);
+            return XDP_ABORTED;
+        }
+    }
+
+    /*
+     * Decrement IP TTL and reply TTL exeeded message (debug purspose only)
+     */
+    // if(ctx->ip4 && ctx->ip4->ttl < 2)
+    // {
+    //     if (-1 == add_icmp_over_ip4_headers(ctx, far->localip, ctx->ip4->saddr))
+    //         return XDP_ABORTED;
+
+    //     upf_printk("upf: send icmp ttl exeeded %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+    //     return handle_n6_packet_ipv4(ctx);
+    // }
+
+    /*
+     * Reply to ping requests (debug purspose only)
+     */
+    if(ctx->ip4 && is_local_ip(ctx->ip4->daddr) && ctx->ip4->protocol == IPPROTO_ICMP)
+    {
+        upf_printk("upf: [n3] prepare icmp ping reply to request %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+        if (-1 == prepare_icmp_echo_reply(ctx, ctx->ip4->daddr, ctx->ip4->saddr))
+            return XDP_ABORTED;
+
+        upf_printk("upf: [n3] send icmp ping reply %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+        return UPF_DOWNLINK_IP4;
+    }
+
+    if(global_config.ip6_ra_support && ctx->ip6 && ctx->ip6->nexthdr == IPPROTO_ICMPV6)
+    {
+        const struct in6_addr rs_address = { .in6_u.u6_addr8 = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}};
+        if(*((__u128*)ctx->ip6->daddr.s6_addr) == *((__u128*)rs_address.s6_addr))
+        {
+            const char *data_end = (const char *)(long)ctx->xdp_ctx->data_end;
+            struct icmp6hdr *icmp6 = (struct icmp6hdr *)(ctx->ip6 + 1);
+            if ((const char *)(icmp6 + 1) <= data_end) {
+                if(icmp6->icmp6_type == ICMPV6_ROUTER_SOLICITATION) {
+                    return UPF_ROUTER_SOLICITATION;
+                }
+            }
+        }
+    }
+
+    /*
+     *   Step 4: Route packet finally
+     */
+    if (ctx->ip4) {
+        if (!output) increment_counter(ctx->n3_n6_counter, tx_n6);
+        update_tos_ipv4(ctx->ip4, tos);
+        return route_ipv4_output(ctx->xdp_ctx, ctx->eth, ctx->ip4,output);
+    } else if (ctx->ip6) {
+        if (!output) increment_counter(ctx->n3_n6_counter, tx_n6);
+        update_tos_ipv6(ctx->ip6, tos);
+        return route_ipv6_output(ctx->xdp_ctx, ctx->eth, ctx->ip6,output);
+    }
+
+    return XDP_ABORTED;
+}
+
 static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) {
     if (!ctx->gtp) {
         upf_printk("upf: [n3] unexpected packet context. no gtp header");
@@ -540,100 +638,8 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
     }
     if (!(far->action & FAR_FORW)) return XDP_DROP;
 
-    upf_printk("upf: [n3] session for teid:%u far:%d outer_header_removal:%d", teid, pdr->far_id, pdr->outer_header_removal);
-
-    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
-    // N9: Only outer header GTP/UDP/IPv4 is supported at the moment
-    if (far->outer_header_creation & OHC_GTP_U_UDP_IPv4)
-    {
-        upf_printk("upf: [n3] session for teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);
-        if (from_cp) {
-            // CP-originated downlink packets need the session's DL QFI and
-            // PDU Session Container, rather than retaining an absent CP QFI.
-            if (remove_gtp_header(ctx)) return XDP_ABORTED;
-            return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
-        }
-        // TS 29.244 V20.1.0 clause 5.17.3 applies the same container
-        // mapping to G-PDUs and End Markers on forwarding tunnels.
-        if (pdr->gtp_extension_header_deletion & 1) {
-            if (delete_gtp_container(ctx)) return XDP_DROP;
-        } else if (!ctx->qfi_present && (marking & 0x80)) {
-            if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
-        }
-        __u32 local=global_config.n9_ipv4_address;
-        if (far->destination_interface_present && far->destination_interface==3) {
-            local=global_config.n3_ipv4_address;
-            ctx->ip4->tos=tos;
-        }
-        update_gtp_tunnel(ctx, local, far->remoteip, 0, far->teid);
-
-        if(is_local_ip(ctx->ip4->daddr)) {
-            upf_printk("upf: [n3] process locally teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);
-            return UPF_LOCAL_TUNNEL;
-            //return handle_gtp_packet(ctx);
-        }
-    } else if (pdr->outer_header_removal_present && (pdr->outer_header_removal == OHR_GTP_U_UDP_IPv4 || pdr->outer_header_removal == OHR_GTP_U_UDP_IP)) {
-        long result = remove_gtp_header(ctx);
-        if (result) {
-            upf_printk("upf: [n3] handle_gtp_packet: can't remove gtp header: %d", result);
-            return XDP_ABORTED;
-        }
-    }
-
-    /*
-     * Decrement IP TTL and reply TTL exeeded message (debug purspose only)
-     */
-    // if(ctx->ip4 && ctx->ip4->ttl < 2)
-    // {
-    //     if (-1 == add_icmp_over_ip4_headers(ctx, far->localip, ctx->ip4->saddr))
-    //         return XDP_ABORTED;
-
-    //     upf_printk("upf: send icmp ttl exeeded %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
-    //     return handle_n6_packet_ipv4(ctx);
-    // }
-
-    /*
-     * Reply to ping requests (debug purspose only)
-     */
-    if(ctx->ip4 && is_local_ip(ctx->ip4->daddr) && ctx->ip4->protocol == IPPROTO_ICMP)
-    {
-        upf_printk("upf: [n3] prepare icmp ping reply to request %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
-        if (-1 == prepare_icmp_echo_reply(ctx, ctx->ip4->daddr, ctx->ip4->saddr))
-            return XDP_ABORTED;
-
-        upf_printk("upf: [n3] send icmp ping reply %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
-        return UPF_DOWNLINK_IP4;
-    }
-
-    if(global_config.ip6_ra_support && ctx->ip6 && ctx->ip6->nexthdr == IPPROTO_ICMPV6)
-    {
-        const struct in6_addr rs_address = { .in6_u.u6_addr8 = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}};
-        if(*((__u128*)ctx->ip6->daddr.s6_addr) == *((__u128*)rs_address.s6_addr))
-        {
-            const char *data_end = (const char *)(long)ctx->xdp_ctx->data_end;
-            struct icmp6hdr *icmp6 = (struct icmp6hdr *)(ctx->ip6 + 1);
-            if ((const char *)(icmp6 + 1) <= data_end) {
-                if(icmp6->icmp6_type == ICMPV6_ROUTER_SOLICITATION) {
-                    return UPF_ROUTER_SOLICITATION;
-                }
-            }
-        }
-    }
-
-    /*
-     *   Step 4: Route packet finally
-     */
-    if (ctx->ip4) {
-        increment_counter(ctx->n3_n6_counter, tx_n6);
-        update_tos_ipv4(ctx->ip4, tos);
-        return route_ipv4(ctx->xdp_ctx, ctx->eth, ctx->ip4);
-    } else if (ctx->ip6) {
-        increment_counter(ctx->n3_n6_counter, tx_n6);
-        update_tos_ipv6(ctx->ip6, tos);
-        return route_ipv6(ctx->xdp_ctx, ctx->eth, ctx->ip6);
-    }
-
-    return XDP_ABORTED;
+    __u32 removal=pdr->outer_header_removal | ((__u32)pdr->outer_header_removal_present<<8) | ((__u32)pdr->gtp_extension_header_deletion<<16);
+    return finish_gtp_forwarding(ctx,far,marking,removal,0);
 }
 
 static __noinline enum xdp_action handle_router_solicitation(struct packet_context *ctx) {
@@ -930,5 +936,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
 
     return action;
 }
+
+#include "xdp/buffer_render.h"
 
 char _license[] SEC("license") = "GPL";

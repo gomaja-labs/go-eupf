@@ -41,7 +41,7 @@ static __always_inline enum xdp_action do_route(struct xdp_md *ctx, struct ethhd
     return action == XDP_REDIRECT ? XDP_REDIRECT : XDP_ABORTED;
 }
 
-static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct ethhdr *eth, struct iphdr *ip4) {
+static __always_inline enum xdp_action route_ipv4_output(struct xdp_md *ctx, struct ethhdr *eth, struct iphdr *ip4, __u32 *output) {
     const __u32 key = 0;
     struct route_stat *statistic = bpf_map_lookup_elem(&upf_route_stat, &key);
     if (!statistic) {
@@ -75,6 +75,12 @@ static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct eth
             statistic->fib_lookup_ip4_ok += 1;
 
 
+            if (output) {
+                *output=fib_params.ifindex;
+                __builtin_memcpy(eth->h_source,fib_params.smac,ETH_ALEN);
+                __builtin_memcpy(eth->h_dest,fib_params.dmac,ETH_ALEN);
+                return XDP_REDIRECT;
+            }
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);
 
         case BPF_FIB_LKUP_RET_BLACKHOLE:
@@ -95,7 +101,7 @@ static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct eth
     }
 }
 
-static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct ethhdr *eth, struct ipv6hdr *ip6) {
+static __always_inline enum xdp_action route_ipv6_output(struct xdp_md *ctx, struct ethhdr *eth, struct ipv6hdr *ip6, __u32 *output) {
     const __u32 key = 0;
     struct route_stat *statistic = bpf_map_lookup_elem(&upf_route_stat, &key);
     if (!statistic) {
@@ -125,6 +131,12 @@ static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct eth
             ip6->hop_limit--;
             statistic->fib_lookup_ip6_ok += 1;
 
+            if (output) {
+                *output=fib_params.ifindex;
+                __builtin_memcpy(eth->h_source,fib_params.smac,ETH_ALEN);
+                __builtin_memcpy(eth->h_dest,fib_params.dmac,ETH_ALEN);
+                return XDP_REDIRECT;
+            }
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);
         case BPF_FIB_LKUP_RET_BLACKHOLE:
         case BPF_FIB_LKUP_RET_UNREACHABLE:
@@ -142,4 +154,11 @@ static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct eth
             statistic->fib_lookup_ip6_error_pass += 1;
             return XDP_PASS; /* Let's kernel takes care */
     }
+}
+
+static __always_inline enum xdp_action route_ipv4(struct xdp_md *ctx, struct ethhdr *eth, struct iphdr *ip4) {
+    return route_ipv4_output(ctx,eth,ip4,0);
+}
+static __always_inline enum xdp_action route_ipv6(struct xdp_md *ctx, struct ethhdr *eth, struct ipv6hdr *ip6) {
+    return route_ipv6_output(ctx,eth,ip6,0);
 }
