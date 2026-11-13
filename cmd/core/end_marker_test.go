@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -30,8 +29,9 @@ func TestEndMarkerOnChangedDownstreamFTEID(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer peer.Close()
-			conn, assocID := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
-			conn.n3Address = net.IPv4(127, 0, 0, 1)
+			conn := newProtocolConnection(t)
+			associationSetup(t, conn, "127.0.0.1", 1)
+			assocID := "127.0.0.1"
 			s := NewSession(2, 42, "", "", false)
 			s.NewFar(9, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: binary.LittleEndian.Uint32(remote.To4())})
 			conn.GetAssociation(assocID).Sessions[2] = s
@@ -167,7 +167,7 @@ func TestEndMarkerShutdownReturnsQueuedReservations(t *testing.T) {
 }
 
 func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
-	conn, _ := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
+	conn := newProtocolConnection(t)
 	if len(conn.featuresOctets) < 2 || conn.featuresOctets[1]&1 == 0 {
 		t.Fatal("EMPU not advertised")
 	}
