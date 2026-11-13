@@ -82,7 +82,7 @@ func TestPDRImageRollbackRetainsOtherEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx := controller.(*ruleTransaction)
-	if err := tx.DeletePdrUplink(10, 0, 1); err != nil {
+	if err := tx.DeletePdrUplink(10, 0, 2); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.publishPDRs(); err != nil {
@@ -100,6 +100,14 @@ func TestPDRImageRollbackRetainsOtherEntries(t *testing.T) {
 	}
 	if bucket.Count != 3 {
 		t.Fatalf("rollback left a stale publication image: count=%d", bucket.Count)
+	}
+	want := map[uint32]uint32{1: 1, 2: 2, 3: 2}
+	for _, entry := range bucket.Entries[:bucket.Count] {
+		far, ok := want[entry.PdrId]
+		if !ok || entry.Pdr.FarId != far {
+			t.Fatalf("a draft changed its rollback image: PDR %d FAR %d", entry.PdrId, entry.Pdr.FarId)
+		}
+		delete(want, entry.PdrId)
 	}
 }
 

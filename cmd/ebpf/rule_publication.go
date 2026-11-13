@@ -8,15 +8,18 @@ import (
 )
 
 type pdrImage struct {
-	value           *IpEntrypointPdrInfo
+	owner           uint64
+	entries         []IpEntrypointPdrEntry
 	slot            uint32
 	hasNotification bool
 }
 
-func publicationImage(value *IpEntrypointPdrInfo, slot uint32) pdrImage {
-	image := pdrImage{value: value, slot: slot}
-	for _, entry := range value.Entries[:value.Count] {
-		image.hasNotification = image.hasNotification || entry.Notify != 0
+// entries belongs to a completed draft and is immutable after publication.
+// Retain only populated entries, rather than the kernel's fixed-capacity image.
+func publicationImage(owner uint64, entries []IpEntrypointPdrEntry, slot uint32) pdrImage {
+	image := pdrImage{owner: owner, entries: entries, slot: slot}
+	for i := range entries {
+		image.hasNotification = image.hasNotification || entries[i].Notify != 0
 	}
 	return image
 }
@@ -30,7 +33,7 @@ type pdrMutation struct {
 	owner        uint64
 	entries      []IpEntrypointPdrEntry
 	changed      bool
-	previous     *IpEntrypointPdrInfo
+	previous     pdrImage
 	present      bool
 	previousSlot uint32
 }
@@ -50,18 +53,20 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		if err := tx.objects.lookupPDR(m, key, &snapshot, false); err != nil {
 			return nil, fmt.Errorf("snapshot PDR notification state: %w", err)
 		}
-		image.value = &snapshot
-	}
-	draft := &pdrMutation{pdrMutationKey: k, owner: tx.sessionID, previous: image.value, previousSlot: image.slot, present: present}
-	if present {
-		bucket := image.value
-		if bucket.Count > MaxPDRsPerKey {
-			return nil, fmt.Errorf("invalid PDR count %d", bucket.Count)
+		if snapshot.Count > MaxPDRsPerKey {
+			return nil, fmt.Errorf("invalid PDR count %d", snapshot.Count)
 		}
-		if bucket.Count != 0 && bucket.SessionId != tx.sessionID {
+		image = publicationImage(snapshot.SessionId, append([]IpEntrypointPdrEntry(nil), snapshot.Entries[:snapshot.Count]...), image.slot)
+	}
+	draft := &pdrMutation{pdrMutationKey: k, owner: tx.sessionID, previous: image, previousSlot: image.slot, present: present}
+	if present {
+		if len(image.entries) > MaxPDRsPerKey {
+			return nil, fmt.Errorf("invalid PDR count %d", len(image.entries))
+		}
+		if len(image.entries) != 0 && image.owner != tx.sessionID {
 			return nil, ErrKeyOwned
 		}
-		draft.entries = append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)
+		draft.entries = append([]IpEntrypointPdrEntry(nil), image.entries...)
 	}
 
 	if tx.pdrs == nil {
@@ -131,13 +136,15 @@ func (tx *ruleTransaction) publishPDRs() error {
 			if !draft.changed || (len(draft.entries) == 0) != remove {
 				continue
 			}
-			sort.Slice(draft.entries, func(i, j int) bool {
-				a, b := draft.entries[i], draft.entries[j]
-				if a.Precedence != b.Precedence {
-					return a.Precedence < b.Precedence
-				}
-				return a.PdrId < b.PdrId
-			})
+			if len(draft.entries) > 1 {
+				sort.Slice(draft.entries, func(i, j int) bool {
+					a, b := draft.entries[i], draft.entries[j]
+					if a.Precedence != b.Precedence {
+						return a.Precedence < b.Precedence
+					}
+					return a.PdrId < b.PdrId
+				})
+			}
 			var value IpEntrypointPdrInfo
 			value.SessionId, value.Count = draft.owner, uint32(len(draft.entries))
 			copy(value.Entries[:], draft.entries)
@@ -185,7 +192,9 @@ func (tx *ruleTransaction) publishPDRs() error {
 				var err error
 				if original.present {
 					if original.m == tx.objects.PdrMapDownlinkIp6 {
-						err = original.m.Put(original.key, original.previous)
+						previous := IpEntrypointPdrInfo{SessionId: original.previous.owner, Count: uint32(len(original.previous.entries))}
+						copy(previous.Entries[:], original.previous.entries)
+						err = original.m.Put(original.key, &previous)
 					} else {
 						err = original.m.Update(original.key, &IpEntrypointPdrIndex{Slot: original.previousSlot}, cilium.UpdateLock)
 					}
@@ -197,8 +206,8 @@ func (tx *ruleTransaction) publishPDRs() error {
 				}
 				if err == nil {
 					if original.present {
-						tx.objects.ruleImages[original.pdrMutationKey] = publicationImage(original.previous, original.previousSlot)
-						tx.objects.recordPDRKey(original.m, original.key, original.previous.SessionId, original.previous.Count > 0)
+						tx.objects.ruleImages[original.pdrMutationKey] = original.previous
+						tx.objects.recordPDRKey(original.m, original.key, original.previous.owner, len(original.previous.entries) > 0)
 					} else {
 						delete(tx.objects.ruleImages, original.pdrMutationKey)
 						tx.objects.recordPDRKey(original.m, original.key, 0, false)
@@ -209,7 +218,7 @@ func (tx *ruleTransaction) publishPDRs() error {
 			if remove {
 				delete(tx.objects.ruleImages, draft.pdrMutationKey)
 			} else {
-				tx.objects.ruleImages[draft.pdrMutationKey] = publicationImage(&value, publishedSlot)
+				tx.objects.ruleImages[draft.pdrMutationKey] = publicationImage(draft.owner, draft.entries, publishedSlot)
 			}
 			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {

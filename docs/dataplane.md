@@ -205,10 +205,12 @@ FIFO free pools, per-session ownership lists and IPv6 prefix tries avoid pool
 scans. Lease generations prevent a late reclamation callback from freeing a
 new reservation. Rule-plan preflight and detachment use a published-key index
 and touch only the requesting session keys. The same journal owns immutable
-PDR publication images in Go, one per live key, restored together with kernel
-bindings on rollback. These unpinned maps start empty and have no independent
-writers; diagnostics still read the kernel map. This avoids large bucket reads
-while preparing each request. Unchanged PDR buckets are not
+slices of published PDR entries in Go, one per live key, restored together with
+kernel bindings on rollback. Drafts copy those slices before editing. Buckets
+with packet-mutated notification flags are read from the kernel when preparing
+their undo image; other configurations need no large bucket read. These unpinned
+maps start empty and have no independent writers; diagnostics still read the
+kernel map. Unchanged PDR buckets are not
 republished.
 
 Session Establishment Recovery Time Stamps are associated with CP F-SEID IP,
