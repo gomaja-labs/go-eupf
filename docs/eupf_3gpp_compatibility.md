@@ -19,8 +19,10 @@ data-plane grace period, using the old tunnel's destination, port, and TEID.
 The source is the local N3/N9 address currently programmed for G-PDUs, including
 REST changes; advertised F-TEID, S1-U/S5S8 and PA addresses do not select it
 (TS 29.281 V19.2.0 clause 4.4.3.6).
-EMPU is advertised. Labeled N3/N9 data-forwarding tunnels requiring inter-system
-QFI/E-RAB mapping remain unsupported for SNDEM; N19 does not emit End Markers
+EMPU is advertised. Labeled N3/N9 data-forwarding tunnels use the old PDR
+container-deletion instruction or a mapped QER QFI for SNDEM. Received markers
+select the E-RAB by QFI and apply the same insertion/deletion as G-PDUs.
+N19 and N19mb do not emit or relay End Markers
 (TS 29.244 V20.1.0 clause 5.3.2; TS 29.281 V19.2.0 clause 7.3.2).
 
 BUFF, NOCP, BAR, and the buffering capability bits remain unsupported.

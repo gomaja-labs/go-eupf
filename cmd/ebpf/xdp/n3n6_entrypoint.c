@@ -26,6 +26,7 @@
 #include "xdp/utils/parsers.h"
 #include "xdp/utils/csum.h"
 #include "xdp/utils/gtp_utils.h"
+#include "xdp/utils/gtp_handover.h"
 #include "xdp/utils/routing.h"
 #include "xdp/utils/icmp.h"
 
@@ -533,6 +534,13 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
             if (remove_gtp_header(ctx)) return XDP_ABORTED;
             return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
         }
+        // TS 29.244 V20.1.0 clause 5.17.3 applies the same container
+        // mapping to G-PDUs and End Markers on forwarding tunnels.
+        if (pdr->gtp_extension_header_deletion & 1) {
+            if (delete_gtp_container(ctx)) return XDP_DROP;
+        } else if (!ctx->qfi_present && (marking & 0x80)) {
+            if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
+        }
         __u32 local=global_config.n9_ipv4_address;
         if (far->destination_interface_present && far->destination_interface==3) {
             local=global_config.n3_ipv4_address;
@@ -619,22 +627,52 @@ static __noinline enum xdp_action handle_router_solicitation(struct packet_conte
     return UPF_DOWNLINK_IP6;
 }
 
+// TS 29.244 V20.1.0 clauses 5.17.3 and 5.2.3.1 NOTE 4: End
+// Markers select the E-RAB by ingress interface and QFI, without a T-PDU,
+// QoS policing, usage accounting or downlink-data notification.
 static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) {
     if (!ctx->gtp || !ctx->ip4 || !ctx->udp) return XDP_ABORTED;
-            // TS 29.281 V19.2.0 clause 7.3.2: ignore unknown End Markers.
-            // An intermediate tunnel forwards via the default FAR without
-            // applying user-data QERs or charging URRs. A terminal UPF consumes it.
-            increment_counter(ctx->counters, rx_gtp_other);
-            __u32 teid=bpf_ntohl(ctx->gtp->teid);
-            int stale=0;
-        struct pdr_info *pdr=lookup_pdr4(&pdr_map_teid_ip4,teid,0,&stale);
-            if (!pdr || !pdr->entries[0].pdr.far_id) return XDP_DROP;
-            struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->entries[0].pdr.far_id);
-            if (!far || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
-            update_gtp_tunnel(ctx,global_config.n9_ipv4_address,far->remoteip,0,far->teid);
-            if (is_local_ip(ctx->ip4->daddr)) return UPF_LOCAL_TUNNEL;
-            return route_ipv4(ctx->xdp_ctx,ctx->eth,ctx->ip4);
-
+    increment_counter(ctx->counters,rx_gtp_other);
+    __u32 teid=bpf_ntohl(ctx->gtp->teid);
+    int stale=0;
+    struct pdr_info *session=lookup_pdr4(&pdr_map_teid_ip4,teid,0,&stale);
+    if (!session) return XDP_DROP;
+    __u8 source=ctx->ip4->daddr==global_config.n9_ipv4_address && global_config.n9_ipv4_address!=global_config.n3_ipv4_address ? 1 : 0;
+    const struct pdr *pdr=0;
+    for (int i=0;i<PDR_LIST_SIZE;i++) {
+        if (i>=session->count) break;
+        const struct pdr_entry *entry=&session->entries[i];
+        if (entry->source_interface_present && entry->source_interface!=source) continue;
+        if (entry->qfi_count) {
+            int matches=0;
+            for (int j=0;j<QFI_LIST_SIZE;j++) {
+                if (j>=entry->qfi_count) break;
+                if (ctx->qfi_present && entry->qfis[j]==ctx->qfi) matches=1;
+            }
+            if (!matches) continue;
+        }
+        pdr=&entry->pdr;break;
+    }
+    if (!pdr || !pdr->far_id) return XDP_DROP;
+    struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->far_id);
+    if (!far || far->end_marker_suppressed || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
+    if (pdr->gtp_extension_header_deletion & 1) {
+        if (delete_gtp_container(ctx)) return XDP_DROP;
+    } else if (!ctx->qfi_present) {
+        for (int i=0;i<4;i++) {
+            if (i>=pdr->qer_count) break;
+            __u32 id=pdr->qer_id[i];
+            struct qer_info *qer=bpf_map_lookup_elem(&qer_map,&id);
+            if (qer && qer->qfi_present) {
+                if (insert_gtp_container(ctx,qer->qfi)) return XDP_DROP;
+                break;
+            }
+        }
+    }
+    __u32 local=far->destination_interface_present && far->destination_interface==3 ? global_config.n3_ipv4_address : global_config.n9_ipv4_address;
+    update_gtp_tunnel(ctx,local,far->remoteip,0,far->teid);
+    if (is_local_ip(ctx->ip4->daddr)) return UPF_LOCAL_TUNNEL;
+    return route_ipv4(ctx->xdp_ctx,ctx->eth,ctx->ip4);
 }
 
 static __always_inline enum xdp_action handle_gtpu(struct packet_context *ctx) {

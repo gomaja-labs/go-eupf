@@ -44,24 +44,26 @@ type IpEntrypointPdrEntry struct {
 	MatchMode uint8
 	_         [3]byte
 	Pdr       struct {
-		FarId                     uint32
-		QerId                     [4]uint32
-		QerCount                  uint8
-		_                         [3]byte
-		UrrId                     [3]uint32
-		OuterHeaderRemoval        uint8
-		OuterHeaderRemovalPresent uint8
-		_                         [2]byte
+		FarId                      uint32
+		QerId                      [4]uint32
+		QerCount                   uint8
+		_                          [3]byte
+		UrrId                      [3]uint32
+		OuterHeaderRemoval         uint8
+		OuterHeaderRemovalPresent  uint8
+		GtpExtensionHeaderDeletion uint8
+		_                          [1]byte
 	}
 	ReturnPdr struct {
-		FarId                     uint32
-		QerId                     [4]uint32
-		QerCount                  uint8
-		_                         [3]byte
-		UrrId                     [3]uint32
-		OuterHeaderRemoval        uint8
-		OuterHeaderRemovalPresent uint8
-		_                         [2]byte
+		FarId                      uint32
+		QerId                      [4]uint32
+		QerCount                   uint8
+		_                          [3]byte
+		UrrId                      [3]uint32
+		OuterHeaderRemoval         uint8
+		OuterHeaderRemovalPresent  uint8
+		GtpExtensionHeaderDeletion uint8
+		_                          [1]byte
 	}
 	ReturnNrFlag           uint8
 	_                      [3]byte
@@ -144,6 +146,7 @@ type IpEntrypointQerInfo struct {
 type IpEntrypointFarInfo struct {
 	Action                      uint8
 	OuterHeaderCreation         uint8
+	EndMarkerSuppressed         uint8
 	Teid                        uint32
 	Remoteip                    uint32
 	TransportLevelMarking       uint16

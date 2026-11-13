@@ -149,10 +149,17 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 	}
 	if isNullIE(removal) {
 		spdrInfo.PdrInfo.OuterHeaderRemovalPresent = false
+		spdrInfo.PdrInfo.GtpExtensionHeaderDeletion = 0
 	}
 	if outerHeaderRemoval, err := removal.OuterHeaderRemovalDescription(); err == nil {
 		spdrInfo.PdrInfo.OuterHeaderRemovalPresent = true
 		spdrInfo.PdrInfo.OuterHeaderRemoval = outerHeaderRemoval
+		// TS 29.244 V20.1.0 clause 8.2.64: absent deletion octet
+		// preserves the container; spare bits are ignored.
+		spdrInfo.PdrInfo.GtpExtensionHeaderDeletion = 0
+		if deletion, err := removal.GTPUExtensionHeaderDeletion(); err == nil {
+			spdrInfo.PdrInfo.GtpExtensionHeaderDeletion = deletion & 1
+		}
 	}
 	if farid, err := farID.FARID(); err == nil {
 		spdrInfo.FARID = &farid

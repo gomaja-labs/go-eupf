@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,6 +26,8 @@ var endMarkerFailures = promauto.NewCounter(prometheus.CounterOpts{
 type endMarker struct {
 	source, destination net.IP
 	teid                uint32
+	qfi                 uint8
+	withQFI             bool
 }
 type endMarkerSender struct {
 	mu         sync.Mutex
@@ -128,7 +131,7 @@ func (s *endMarkerSender) close() {
 
 // TS 29.281 V19.2.0 clauses 4.4.2.6, 4.4.3.6 and 7.3.2:
 // use the old tunnel's addresses/ports and TEID, with no T-PDU or Private IE.
-// Ordinary N3/N9/EPC End Markers have no PDU Session Container.
+// A 5GS handover forwarding tunnel includes its selected mapped QFI.
 func sendEndMarker(packet endMarker) error {
 	listen := net.ListenConfig{Control: reuseGTPSourcePort}
 	socket, err := listen.ListenPacket(context.Background(), "udp4", net.JoinHostPort(packet.source.String(), fmt.Sprint(gtpTunnelSourcePort(packet.teid))))
@@ -139,9 +142,13 @@ func sendEndMarker(packet endMarker) error {
 	if err := socket.SetWriteDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		return fmt.Errorf("bound End Marker send: %w", err)
 	}
-	wire := [8]byte{0x30, 254}
+	wire := []byte{0x30, 254, 0, 0, 0, 0, 0, 0}
+	if packet.withQFI {
+		wire[0], wire[3] = 0x34, 8
+		wire = append(wire, 0, 0, 0, 0x85, 1, 0, packet.qfi&0x3f, 0)
+	}
 	binary.BigEndian.PutUint32(wire[4:], packet.teid)
-	if _, err := socket.WriteTo(wire[:], &net.UDPAddr{IP: packet.destination, Port: 2152}); err != nil {
+	if _, err := socket.WriteTo(wire, &net.UDPAddr{IP: packet.destination, Port: 2152}); err != nil {
 		return fmt.Errorf("transmit End Marker: %w", err)
 	}
 	return nil
@@ -180,14 +187,18 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 			switch before.InterfaceType {
 			case ie.TGPPInterfaceTypeN19, ie.TGPPInterfaceTypeN19mb:
 				continue // TS 29.281 V19.2.0 clause 7.3.2.3.
-			case ie.TGPPInterfaceTypeN3ForDataForwarding, ie.TGPPInterfaceTypeN9DataForwarding:
-				// Inter-system data forwarding requires E-RAB/QFI context;
-				// do not send a container-free marker on such a tunnel.
-				return nil, &ruleFailure{ie.RuleIDTypeFAR, id, unsupportedRuleIE(ie.PFCPSMReqFlags)}
 			}
 		}
+
 		a, b := before.FarInfo, after.FarInfo
 		if a.Teid == b.Teid && a.RemoteIP == b.RemoteIP {
+			continue
+		}
+		qfi, withQFI, active, err := handoverMarkerQFI(old, id, before)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
 			continue
 		}
 		destination := make(net.IP, 4)
@@ -202,7 +213,7 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 				continue
 			}
 			seen[key] = true
-			packets = append(packets, endMarker{source, destination, a.Teid})
+			packets = append(packets, endMarker{source: source, destination: destination, teid: a.Teid, qfi: qfi, withQFI: withQFI})
 		}
 	}
 	if len(packets) == 0 {
@@ -245,6 +256,7 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 	}
 	if isNullIE(value) {
 		far.InterfaceType, far.InterfaceTypePresent = 0, false
+		far.FarInfo.EndMarkerSuppressed = false
 		return nil
 	}
 	typ, err := value.TGPPInterfaceType()
@@ -257,6 +269,7 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 		return nil
 	}
 	far.InterfaceType, far.InterfaceTypePresent = typ, true
+	far.FarInfo.EndMarkerSuppressed = typ == ie.TGPPInterfaceTypeN19 || typ == ie.TGPPInterfaceTypeN19mb
 	return nil
 }
 
@@ -306,3 +319,38 @@ func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SF
 // TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6: the same
 // per-tunnel source port is used by XDP forwarding and End Markers.
 func gtpTunnelSourcePort(teid uint32) uint16 { return 49152 | uint16(teid&0x3fff) }
+
+// TS 29.244 V20.1.0 clause 5.17.3 and TS 29.281 V19.2.0 clause
+// 7.3.2.3: a 5GS data-forwarding tunnel carries one mapped flow. Ordinary
+// old tunnels (including Dual Connectivity transfers) have no container.
+func handoverMarkerQFI(session *Session, farID uint32, far SFarInfo) (uint8, bool, bool, error) {
+	if !far.InterfaceTypePresent || (far.InterfaceType != ie.TGPPInterfaceTypeN3ForDataForwarding && far.InterfaceType != ie.TGPPInterfaceTypeN9DataForwarding) {
+		return 0, false, true, nil
+	}
+	ids := make([]uint32, 0, len(session.PDRs))
+	for id := range session.PDRs {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	active := false
+	for _, id := range ids {
+		pdr := session.PDRs[id]
+		if pdr.FARID == nil || *pdr.FARID != farID {
+			continue
+		}
+		active = true
+		if pdr.PdrInfo.GtpExtensionHeaderDeletion&1 != 0 {
+			return 0, false, true, nil
+		}
+		for _, qid := range pdr.QERIDs {
+			qer, ok := session.QERs[qid]
+			if ok && qer.QerInfo.QFIPresent {
+				return qer.QerInfo.Qfi & 0x3f, true, true, nil
+			}
+		}
+	}
+	if !active {
+		return 0, false, false, nil
+	}
+	return 0, false, true, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
+}

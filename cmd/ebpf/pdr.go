@@ -39,31 +39,32 @@ var ErrKeyOwned = errors.New("lookup key belongs to another session")
 var ErrUnsupportedRuleContent = errors.New("rule content is not supported")
 
 type PdrInfo struct {
-	ReturnFarID               uint32      `json:"return_far_id"`
-	ReturnQerIDs              []uint32    `json:"return_qer_ids"`
-	ReturnNR                  bool        `json:"return_nr"`
-	SessionID                 uint64      `json:"session_id"`
-	PdrID                     uint32      `json:"pdr_id"`
-	Precedence                uint32      `json:"precedence"`
-	OuterHeaderRemovalPresent bool        `json:"outer_header_removal_present"`
-	OuterHeaderRemoval        uint8       `json:"outer_header_removal"`
-	FarId                     uint32      `json:"far_id"`
-	QerIDs                    []uint32    `json:"qer_ids"`
-	UrrIDs                    []uint32    `json:"urr_ids"`
-	SdfFilter                 []SdfFilter `json:"sdf_filters"`
-	QFIs                      []uint8     `json:"qfis"`
-	AssignedIPv4              net.IP      `json:"assigned_ipv4"`
-	AssignedIPv6              net.IP      `json:"assigned_ipv6"`
-	AssignedIPv6Mask          net.IPMask  `json:"assigned_ipv6_mask"`
-	UEIPv4                    net.IP      `json:"ue_ipv4"`
-	UEIPv6                    net.IP      `json:"ue_ipv6"`
-	UEIPv6Mask                net.IPMask  `json:"ue_ipv6_mask"`
-	UEDestination             bool        `json:"ue_destination"`
-	SourceInterface           uint8       `json:"source_interface"`
-	SourceInterfacePresent    bool        `json:"source_interface_present"`
-	TraceFlag                 bool        `json:"trace"`
-	NotifyFlag                bool        `json:"notify"`
-	NRFlag                    bool        `json:"nr"`
+	ReturnFarID                uint32      `json:"return_far_id"`
+	ReturnQerIDs               []uint32    `json:"return_qer_ids"`
+	ReturnNR                   bool        `json:"return_nr"`
+	SessionID                  uint64      `json:"session_id"`
+	PdrID                      uint32      `json:"pdr_id"`
+	Precedence                 uint32      `json:"precedence"`
+	GtpExtensionHeaderDeletion uint8       `json:"gtp_extension_header_deletion"`
+	OuterHeaderRemovalPresent  bool        `json:"outer_header_removal_present"`
+	OuterHeaderRemoval         uint8       `json:"outer_header_removal"`
+	FarId                      uint32      `json:"far_id"`
+	QerIDs                     []uint32    `json:"qer_ids"`
+	UrrIDs                     []uint32    `json:"urr_ids"`
+	SdfFilter                  []SdfFilter `json:"sdf_filters"`
+	QFIs                       []uint8     `json:"qfis"`
+	AssignedIPv4               net.IP      `json:"assigned_ipv4"`
+	AssignedIPv6               net.IP      `json:"assigned_ipv6"`
+	AssignedIPv6Mask           net.IPMask  `json:"assigned_ipv6_mask"`
+	UEIPv4                     net.IP      `json:"ue_ipv4"`
+	UEIPv6                     net.IP      `json:"ue_ipv6"`
+	UEIPv6Mask                 net.IPMask  `json:"ue_ipv6_mask"`
+	UEDestination              bool        `json:"ue_destination"`
+	SourceInterface            uint8       `json:"source_interface"`
+	SourceInterfacePresent     bool        `json:"source_interface_present"`
+	TraceFlag                  bool        `json:"trace"`
+	NotifyFlag                 bool        `json:"notify"`
+	NRFlag                     bool        `json:"nr"`
 }
 
 // SDFProtocolAny is distinct from all eight-bit IP protocol numbers.
@@ -145,6 +146,8 @@ func (b *BpfObjects) DeleteDownlinkPdrIp6(ip net.IP, owner uint64, id, prefix ui
 }
 
 type FarInfo struct {
+	// EndMarkerSuppressed is derived from the N19/N19mb destination label.
+	EndMarkerSuppressed         bool
 	DestinationInterface        uint8
 	DestinationInterfacePresent bool
 	Action                      uint8
@@ -158,6 +161,7 @@ func (f FarInfo) MarshalJSON() ([]byte, error) {
 	remoteIP := make(net.IP, 4)
 	binary.LittleEndian.PutUint32(remoteIP, f.RemoteIP)
 	data := map[string]interface{}{
+		"end_marker_suppressed":         f.EndMarkerSuppressed,
 		"action":                        f.Action,
 		"outer_header_creation":         f.OuterHeaderCreation,
 		"teid":                          f.Teid,
@@ -194,6 +198,7 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	}
 
 	farInfo := FarInfo{
+		EndMarkerSuppressed:         farToStore.EndMarkerSuppressed != 0,
 		Action:                      farToStore.Action,
 		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
 		Teid:                        farToStore.Teid,
@@ -455,6 +460,7 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 	if info.OuterHeaderRemovalPresent {
 		entry.Pdr.OuterHeaderRemovalPresent = 1
 	}
+	entry.Pdr.GtpExtensionHeaderDeletion = info.GtpExtensionHeaderDeletion
 	entry.Pdr.OuterHeaderRemoval, entry.Pdr.FarId = info.OuterHeaderRemoval, info.FarId
 	entry.Pdr.QerCount = uint8(len(info.QerIDs))
 	copy(entry.Pdr.QerId[:], info.QerIDs)
@@ -554,7 +560,7 @@ func DecodePDRBucket(bucket IpEntrypointPdrInfo) []PdrInfo {
 	count := int(min(bucket.Count, uint32(MaxPDRsPerKey)))
 	result := make([]PdrInfo, 0, count)
 	for _, entry := range bucket.Entries[:count] {
-		info := PdrInfo{ReturnFarID: entry.ReturnPdr.FarId, ReturnQerIDs: append([]uint32(nil), entry.ReturnPdr.QerId[:min(int(entry.ReturnPdr.QerCount), MaxQERsPerPDR)]...), ReturnNR: entry.ReturnNrFlag != 0, SessionID: bucket.SessionId, PdrID: entry.PdrId, Precedence: entry.Precedence, FarId: entry.Pdr.FarId, QerIDs: append([]uint32(nil), entry.Pdr.QerId[:min(int(entry.Pdr.QerCount), MaxQERsPerPDR)]...), OuterHeaderRemoval: entry.Pdr.OuterHeaderRemoval, OuterHeaderRemovalPresent: entry.Pdr.OuterHeaderRemovalPresent != 0, TraceFlag: entry.TraceFlag != 0, NRFlag: entry.NrFlag != 0, NotifyFlag: entry.Notify != 0, SourceInterfacePresent: entry.SourceInterfacePresent != 0, SourceInterface: entry.SourceInterface, UEDestination: entry.UeDestination != 0}
+		info := PdrInfo{ReturnFarID: entry.ReturnPdr.FarId, ReturnQerIDs: append([]uint32(nil), entry.ReturnPdr.QerId[:min(int(entry.ReturnPdr.QerCount), MaxQERsPerPDR)]...), ReturnNR: entry.ReturnNrFlag != 0, SessionID: bucket.SessionId, PdrID: entry.PdrId, Precedence: entry.Precedence, FarId: entry.Pdr.FarId, QerIDs: append([]uint32(nil), entry.Pdr.QerId[:min(int(entry.Pdr.QerCount), MaxQERsPerPDR)]...), GtpExtensionHeaderDeletion: entry.Pdr.GtpExtensionHeaderDeletion, OuterHeaderRemoval: entry.Pdr.OuterHeaderRemoval, OuterHeaderRemovalPresent: entry.Pdr.OuterHeaderRemovalPresent != 0, TraceFlag: entry.TraceFlag != 0, NRFlag: entry.NrFlag != 0, NotifyFlag: entry.Notify != 0, SourceInterfacePresent: entry.SourceInterfacePresent != 0, SourceInterface: entry.SourceInterface, UEDestination: entry.UeDestination != 0}
 		for _, id := range entry.Pdr.UrrId {
 			if id != 0 {
 				info.UrrIDs = append(info.UrrIDs, id)
@@ -755,5 +761,5 @@ func (tx *ruleTransaction) RetireQer(id uint32) error {
 }
 
 func farMapValue(info FarInfo) IpEntrypointFarInfo {
-	return IpEntrypointFarInfo{Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
+	return IpEntrypointFarInfo{EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
 }

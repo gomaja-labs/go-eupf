@@ -986,6 +986,7 @@ func createFARs(
 				return err
 			}
 			session.FARs[farID] = saved
+			farInfo = saved.FarInfo
 		}
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
 			Reserve: func() error {

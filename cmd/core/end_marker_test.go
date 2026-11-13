@@ -113,7 +113,7 @@ func TestEndMarkerSharesSourcePortWithEchoProbe(t *testing.T) {
 		t.Fatalf("Echo request n=%d err=%v", n, err)
 	}
 	echo := append([]byte(nil), data[:n]...)
-	if err := sendEndMarker(endMarker{local, peer.LocalAddr().(*net.UDPAddr).IP, 200}); err != nil {
+	if err := sendEndMarker(endMarker{source: local, destination: peer.LocalAddr().(*net.UDPAddr).IP, teid: 200}); err != nil {
 		t.Fatal(err)
 	}
 	n, _, err = peer.ReadFromUDP(data)
@@ -189,8 +189,8 @@ func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-		} else if err == nil {
-			t.Fatalf("data forwarding interface %d was silently accepted", typ)
+		} else if err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -224,11 +224,11 @@ func TestEndMarkerRetainsTunnelInterfaceThroughRuleTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseServiceNotSupported {
-		t.Fatalf("unsupported data-forwarding switch cause=%d", cause)
+	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseRequestAccepted {
+		t.Fatalf("data-forwarding switch cause=%d", cause)
 	}
-	if got := assoc.Sessions[fseid.SEID].FARs[9]; got != original {
-		t.Fatal("rejected marker switch changed the FAR")
+	if got := assoc.Sessions[fseid.SEID].FARs[9]; got.InterfaceType != original.InterfaceType || !got.InterfaceTypePresent || got.FarInfo.Teid != 201 {
+		t.Fatal("accepted switch lost interface or new tunnel")
 	}
 	result, _, err = HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(fseid.SEID, 4,
 		ie.NewUpdateFAR(ie.NewFARID(9), ie.NewUpdateForwardingParameters(ie.New(ie.TGPPInterfaceType, nil)))), "127.0.0.1")

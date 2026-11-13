@@ -140,13 +140,14 @@ type SUrrInfo struct {
 }
 
 type PdrInfo struct {
-	SessionID          uint64      `json:"session_id"`
-	PdrID              uint32      `json:"pdr_id"`
-	Precedence         uint32      `json:"precedence"`
-	OuterHeaderRemoval uint8       `json:"outer_header_removal"`
-	SdfFilter          []SdfFilter `json:"sdf_filters"`
-	TraceFlag          bool        `json:"trace"`
-	NotifyFlag         bool        `json:"notify"`
+	SessionID                  uint64      `json:"session_id"`
+	PdrID                      uint32      `json:"pdr_id"`
+	Precedence                 uint32      `json:"precedence"`
+	GtpExtensionHeaderDeletion uint8       `json:"gtp_extension_header_deletion"`
+	OuterHeaderRemoval         uint8       `json:"outer_header_removal"`
+	SdfFilter                  []SdfFilter `json:"sdf_filters"`
+	TraceFlag                  bool        `json:"trace"`
+	NotifyFlag                 bool        `json:"notify"`
 }
 
 type SdfFilter struct {
@@ -169,6 +170,7 @@ type PortRange struct {
 }
 
 type FarInfo struct {
+	EndMarkerSuppressed         bool   `json:"end_marker_suppressed"`
 	Action                      uint8  `json:"action"`
 	OuterHeaderCreation         uint8  `json:"outer_header_creation"`
 	Teid                        uint32 `json:"teid"`

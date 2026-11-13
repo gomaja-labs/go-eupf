@@ -24,7 +24,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 | PDR ID | Implemented | Session-local identity. | 7.5.2.2-1, 7.5.4.2-1 |
 | Precedence | Implemented | Lower numeric value wins. | 7.5.2.2-1, 7.5.4.2-1 |
 | PDI | Implemented | Complete replacement when supplied in Update PDR. | 7.5.2.2-1, 7.5.4.2-1 |
-| Outer Header Removal | Implemented | IPv4/UDP/GTP-U or GTP-U/UDP/IP removal only. | 7.5.2.2-1, 7.5.4.2-1 |
+| Outer Header Removal | Implemented | IPv4/UDP/GTP-U or GTP-U/UDP/IP removal, including PDU Session Container deletion for handover relay. | 7.5.2.2-1, 7.5.4.2-1 |
 | FAR ID | Implemented | Session-local forwarding binding. | 7.5.2.2-1, 7.5.4.2-1 |
 | URR ID | Implemented | Up to three session-local usage bindings. | 7.5.2.2-1, 7.5.4.2-1 |
 | QER ID | Implemented | Up to four session-local QoS bindings. | 7.5.2.2-1, 7.5.4.2-1 |
@@ -102,13 +102,13 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 | Header Enrichment | Rejected | Header enrichment is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | Linked Traffic Endpoint ID | Rejected | Traffic endpoint indirection is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | Proxying | Rejected | Requested ARP/ND proxying is not implemented. | 7.5.2.3-2 |
-| Destination Interface Type | Implemented | Retained for End Marker interface restrictions; 3GPP interface label; Destination Interface and the supplied tunnel/FIB determine output. No MAR or redundant forwarding is supported. | 7.5.2.3-2, 7.5.4.3-2 |
+| Destination Interface Type | Implemented | Retained for End Marker container selection and N19 suppression; 3GPP interface label; Destination Interface and the supplied tunnel/FIB determine output. No MAR or redundant forwarding is supported. | 7.5.2.3-2, 7.5.4.3-2 |
 | Data Network Access Identifier | Ignored | N16a local-PSA identifier, not an N4 packet-handling instruction; no alternate routing domains or PSA-selection behavior are exposed. | 7.5.2.3-2, 7.5.4.3-2 |
 | IP Address and Port Number Replacement | Rejected | Address/port replacement is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | N6 Routing Information | Rejected | HR-SBO N6 tunnel selection is not implemented. | 7.5.2.3-2 |
 | Header Handling Control Rule | Rejected | Payload header handling is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | On-path N6 Connection Information | Rejected | Media-information proxy connections are not advertised. | 7.5.2.3-2 |
-| PFCPSMReq-Flags | Implemented | SNDEM inside Update Forwarding Parameters for ordinary N3/N9/EPC path switches; data-forwarding containers remain unsupported. | 7.5.4.3-2 |
+| PFCPSMReq-Flags | Implemented | SNDEM inside Update Forwarding Parameters for ordinary and mapped N3/N9 data-forwarding path switches. | 7.5.4.3-2 |
 
 ## QER
 
@@ -290,7 +290,7 @@ CIoT) are outside this supported subset. Their basic IP-payload forwarding can
 overlap the rows above, but full extension-header preservation, nested End
 Marker semantics and CIoT procedures are not claimed. BUFF/NOCP/BAR controls
 remain rejected with Cause 76; there is no separate scenario discriminator
-that makes every overlapping ordinary FORW rule reject. UP-constructed ordinary N3/N9/EPC End Markers are supported and advertised as EMPU. The per-FAR SNDEM flag in Update Forwarding Parameters sends to the old F-TEID after rule publication and a data-plane grace period. Unchanged F-TEIDs and requests without SNDEM send nothing. N19 emits no marker. SNDEM for labeled N3/N9 data-forwarding tunnels returns Cause 76 until E-RAB/QFI container handling is implemented (TS 29.281 V19.2.0 clause 7.3.2.3).
+that makes every overlapping ordinary FORW rule reject. UP-constructed ordinary N3/N9/EPC End Markers are supported and advertised as EMPU. The per-FAR SNDEM flag in Update Forwarding Parameters sends to the old F-TEID after rule publication and a data-plane grace period. Unchanged F-TEIDs and requests without SNDEM send nothing. N19 emits no marker. Labeled N3/N9 data-forwarding tunnels use the PDR deletion instruction or one mapped QER QFI (TS 29.281 V19.2.0 clause 7.3.2.3).
 
 N3, N9 and N4-u outer tunnel endpoints remain IPv4. N4-u uses the configured N3
 IPv4 address. CHOOSE offering V4 and V6 receives V4 only; a V6-only offer returns
@@ -321,6 +321,20 @@ within the memory plan's existing 32 MiB transient allowance. UDP sends have a
 `upf_gtp_end_marker_failures_total`. Shutdown cancels queued sends and returns
 the reservations. Echo probes and End Marker senders use the same source-port reuse policy.
 
-Labeled N3/N9 data-forwarding tunnels remain unsupported for SNDEM because the
-PDU Session Container depends on inter-system E-RAB/QFI mapping. N19 End Markers
-are prohibited. This does not add REEMR reporting, which remains rejected.
+For inter-system handover, received End Markers select the PDR by ingress
+interface and its QFI list, without attempting to parse an inner IP packet.
+The PDR's Outer Header Removal deletion bit removes only the PDU Session
+Container; other extension headers and signalling IEs survive. In the reverse
+direction, a QER with a QFI inserts the DL container. Markers do not apply QER
+gates or rates, charge URRs, or trigger a downlink-data notification.
+G-PDUs use the same container insertion/deletion instruction (TS 29.244
+V20.1.0 clause 5.17.3 and table 8.2.64-2; TS 38.415 V19.1.0 clause 5.5.2.1).
+
+Generated markers on labeled N3/N9 data-forwarding tunnels include one QFI
+selected in PDR-ID and QER-binding order from the old rules. A deletion
+instruction selects an EPS output without a container. An active labeled
+forwarding tunnel missing its required mapped QFI rejects SNDEM with Cause 67
+and Offending IE QFI. An inactive labeled FAR has no old packet stream and
+sends no marker. Ordinary old tunnels, including Dual Connectivity path
+switches, use no container. N19 and N19mb suppress both received and generated
+End Markers. REEMR reporting remains rejected (TS 29.281 V19.2.0 clause 7.3.2.3).

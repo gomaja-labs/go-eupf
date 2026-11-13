@@ -33,6 +33,7 @@ struct pdr {
     __u32 urr_id[URR_LIST_SIZE];
     __u8 outer_header_removal;
  __u8 outer_header_removal_present;
+    __u8 gtp_extension_header_deletion;
 };
 
 // TS 29.244 V20.1.0 clauses 5.2.1 and 8.2.11: one independently
@@ -167,6 +168,7 @@ enum outer_header_creation_values {
 struct far_info {
     __u8 action;
     __u8 outer_header_creation;
+    __u8 end_marker_suppressed;
     __u32 teid;
     __u32 remoteip;
     /* first octet DSCP value in the Type-of-Service, second octet shall contain the ToS/Traffic Class mask field, which shall be set to "0xFC". */
