@@ -121,6 +121,7 @@ func PreparePfcpConnectionWithMockAndProfile(t *testing.T, ebpfMock ebpf.Forward
 
 	pfcpConn := PfcpConnection{
 		NodeAssociations:  make(map[string]*NodeAssociation),
+		ResourceManager:   emptyResources(t),
 		nodeId:            "test-node",
 		mapOperations:     ebpfMock,
 		pfcpHandlerMap:    pfcpHandlers,

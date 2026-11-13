@@ -28,6 +28,7 @@ func TestSessionUEIpOverwrite(t *testing.T) {
 	smfIP := "127.0.0.1"
 	pfcpConn := PfcpConnection{
 		NodeAssociations: make(map[string]*NodeAssociation),
+		ResourceManager:  emptyResources(t),
 		nodeId:           "test-node",
 		mapOperations:    &mapOps,
 		pfcpHandlerMap:   pfcpHandlers,

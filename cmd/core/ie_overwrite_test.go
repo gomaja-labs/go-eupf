@@ -112,6 +112,7 @@ func TestSessionOverwrite(t *testing.T) {
 	// Create pfcp connection struct
 	pfcpConn := PfcpConnection{
 		NodeAssociations: make(map[string]*NodeAssociation),
+		ResourceManager:  emptyResources(t),
 		nodeId:           "test-node",
 		mapOperations:    &mapOps,
 		n3Address:        net.ParseIP("127.0.0.1"),
