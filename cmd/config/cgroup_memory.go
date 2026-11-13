@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ type CgroupMemoryState struct {
 // cgroup v1 Memory Resource Controller, sections 5.1 and 6 (hierarchy).
 func CgroupMemory() (CgroupMemoryState, error) {
 	membership, err := os.ReadFile("/proc/self/cgroup")
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return CgroupMemoryState{}, nil
 	}
 	if err != nil {
@@ -78,7 +79,7 @@ func resolveCgroupMemory(membership, mounts string) (CgroupMemoryState, error) {
 		result := CgroupMemoryState{Path: own}
 		var err error
 		result.Current, err = readCgroupValue(filepath.Join(own, usageName), false)
-		if os.IsNotExist(err) && own == mount {
+		if errors.Is(err, os.ErrNotExist) && own == mount {
 			continue
 		} // No memory controller.
 		if err != nil {
@@ -88,7 +89,7 @@ func resolveCgroupMemory(membership, mounts string) (CgroupMemoryState, error) {
 			file := filepath.Join(dir, limitName)
 			limit, err := readCgroupValue(file, true)
 			// The v2 hierarchy root has no memory.max. A v1 root can also omit it.
-			if err != nil && !(dir == mount && os.IsNotExist(err)) {
+			if err != nil && !(dir == mount && errors.Is(err, os.ErrNotExist)) {
 				return result, err
 			}
 			if limit > 0 && (result.Limit == 0 || limit < result.Limit) {

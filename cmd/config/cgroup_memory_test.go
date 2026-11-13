@@ -74,11 +74,33 @@ func TestCgroupMemoryMissingControllerAndInvalidCharge(t *testing.T) {
 	}
 	for _, charge := range []string{"max", "-1", "bad"} {
 		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("max"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(root, "memory.current"), []byte(charge), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := resolveCgroupMemory("0::/", "1 0 0:1 / "+root+" rw - cgroup2 cgroup rw"); err == nil {
 			t.Fatal("accepted charge", charge)
 		}
+	}
+}
+
+func TestCgroupMemoryRootWithoutLimit(t *testing.T) {
+	root := t.TempDir()
+	mounts := "1 0 0:1 / " + root + " rw - cgroup2 cgroup rw"
+	if err := os.WriteFile(filepath.Join(root, "memory.current"), []byte("12345"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := resolveCgroupMemory("0::/", mounts)
+	if err != nil || state.Limit != 0 || state.LimitSource != "" || state.Path != root || state.Current != 12345 {
+		t.Fatalf("unlimited hierarchy root %+v: %v", state, err)
+	}
+	if err := os.Remove(filepath.Join(root, "memory.current")); err != nil {
+		t.Fatal(err)
+	}
+	state, err = resolveCgroupMemory("0::/", mounts)
+	if err != nil || state != (CgroupMemoryState{}) {
+		t.Fatalf("missing memory controller %+v: %v", state, err)
 	}
 }
