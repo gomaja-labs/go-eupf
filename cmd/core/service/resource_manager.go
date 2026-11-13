@@ -10,6 +10,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/korylprince/ipnetgen"
 )
@@ -31,10 +32,11 @@ type ResourceManager struct {
 	FTEIDM        *FTEIDM
 }
 type FTEIDM struct {
-	parent     *FTEIDM
-	ownerTEIDs map[uint64]map[uint32]bool
-	leaseEpoch map[uint32]uint64
-	nextEpoch  uint64
+	allocateAfter time.Time
+	parent        *FTEIDM
+	ownerTEIDs    map[uint64]map[uint32]bool
+	leaseEpoch    map[uint32]uint64
+	nextEpoch     uint64
 	sync.RWMutex
 	freeTEIDs     freeChain
 	busyTEIDs     map[uint64]map[uint32]uint32
@@ -47,6 +49,7 @@ type ipPrefixLease struct {
 }
 
 type IPAM struct {
+	allocateAfter  time.Time
 	baseIPv4       uint32
 	claims         *reservationTrie
 	activePrefixes map[uint64]map[string]ipPrefixLease
@@ -123,6 +126,9 @@ func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
 	defer pool.Unlock()
 	if ip, ok := pool.busyIPs[owner]; ok {
 		return append(net.IP(nil), ip...), nil
+	}
+	if time.Now().Before(pool.allocateAfter) {
+		return nil, ErrResourceExhausted
 	}
 	if pool.freeIPs.len() == 0 {
 		return nil, ErrResourceExhausted
@@ -255,6 +261,9 @@ func (pool *FTEIDM) AllocateTEID(owner uint64, pdr uint32) (uint32, error) {
 	defer pool.Unlock()
 	if teid, ok := pool.busyTEIDs[owner][pdr]; ok {
 		return teid, nil
+	}
+	if time.Now().Before(pool.allocateAfter) {
+		return 0, ErrResourceExhausted
 	}
 	if pool.freeTEIDs.len() == 0 {
 		return 0, ErrResourceExhausted

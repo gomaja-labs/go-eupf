@@ -24,6 +24,7 @@ type UpfConfig struct {
 	PfcpMaxReplayEntries      uint32         `json:"pfcp_max_replay_entries" yaml:"pfcp_max_replay_entries"`
 	PfcpMaxOriginatedRequests uint32         `json:"pfcp_max_originated_requests" yaml:"pfcp_max_originated_requests"`
 	PfcpReplayMemoryMiB       uint32         `json:"pfcp_replay_memory_mib" yaml:"pfcp_replay_memory_mib"`
+	ResourceReuseDelay        uint32         `json:"resource_reuse_delay" yaml:"resource_reuse_delay"`
 	PfcpMaxAssociations       uint32         `json:"pfcp_max_associations" yaml:"pfcp_max_associations"`
 	HeartbeatFailureGrace     uint32         `json:"heartbeat_failure_grace" yaml:"heartbeat_failure_grace"`
 	InterfaceName             []string       `json:"interface_name" yaml:"interface_name"`

@@ -229,6 +229,15 @@ func run(ctx context.Context) (runErr error) {
 		return fmt.Errorf("create resource manager: %w", err)
 	}
 
+	// TS 23.527 V20.0.0 clause 4.3.2; TS 23.007 V19.2.0 clauses
+	// 16.1b/17.1b: no automatic reuse during the startup restoration window,
+	// even without persistent container state. Explicit RESTI reservations work.
+	delay := config.Conf.ResourceReuseDelay
+	if delay == 0 {
+		delay = 60
+	}
+	resourceManager.HoldAutomaticAllocationsUntil(time.Now().Add(time.Duration(delay) * time.Second))
+
 	// Select PFCP profile based on the pfcp_profile config key.
 	var profile core.PfcpProfile
 	switch config.Conf.PfcpProfile {

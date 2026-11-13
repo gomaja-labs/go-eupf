@@ -125,6 +125,7 @@ type UpfConfig struct {
 	LoggingCaller           bool           `mapstructure:"logging_caller" json:"logging_caller"`
 	UEIPPool                string         `mapstructure:"ueip_pool" validate:"omitempty,cidr" json:"ueip_pool"`
 	FTEIDPool               uint32         `mapstructure:"teid_pool" json:"teid_pool"`
+	ResourceReuseDelay      uint32         `mapstructure:"resource_reuse_delay" json:"resource_reuse_delay"`
 	FeatureUEIP             bool           `mapstructure:"feature_ueip" json:"feature_ueip"`
 	Qci2DscpMapping         map[string]int `mapstructure:"qci_dscp_mapping" json:"qci_dscp_mapping"`
 	AllowedApns             string         `mapstructure:"allowed_apns" json:"allowed_apns"`
@@ -223,6 +224,7 @@ func defineFlags() {
 	pflag.Bool("ueip", false, "Enable or disable UEIP feature")
 	pflag.String("ueippool", "10.60.0.0/24", "IP pool for UEIP feature")
 	pflag.Uint32("teidpool", 65535, "TEID pool for FTUP feature")
+	pflag.Uint32("resource-reuse-delay", 60, "Seconds after startup reserved for explicit session restoration before automatic TEID/UE IP allocation")
 	pflag.StringArray("pfcprnode", []string{}, "Address of remote PFCP node")
 	pflag.StringArray("sxanode", []string{}, "Address of remote Sxa node")
 	pflag.StringArray("sxbnode", []string{}, "Address of remote Sxb node")
@@ -320,6 +322,7 @@ func initCommonConfig() error {
 	_ = commonConfigV.BindPFlag("pfcp_max_replay_entries", pflag.Lookup("pfcp-max-replay-entries"))
 	_ = commonConfigV.BindPFlag("pfcp_max_originated_requests", pflag.Lookup("pfcp-max-originated-requests"))
 	_ = commonConfigV.BindPFlag("pfcp_replay_memory_mib", pflag.Lookup("pfcp-replay-memory-mib"))
+	_ = commonConfigV.BindPFlag("resource_reuse_delay", pflag.Lookup("resource-reuse-delay"))
 	_ = commonConfigV.BindPFlag("pfcp_max_associations", pflag.Lookup("pfcp-max-associations"))
 	_ = commonConfigV.BindPFlag("heartbeat_failure_grace", pflag.Lookup("heartbeat-failure-grace"))
 	_ = commonConfigV.BindPFlag("heartbeat_retries", pflag.Lookup("hbretries"))
