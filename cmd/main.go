@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -125,6 +126,13 @@ func run(ctx context.Context) (runErr error) {
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		return fmt.Errorf("increase resource limits: %w", err)
 	}
+	memoryLimit, beforeMaps, err := config.CgroupMemory("/sys/fs/cgroup")
+	if err != nil {
+		return fmt.Errorf("read container memory budget: %w", err)
+	}
+	if _, err := config.Conf.PFCPMemoryPlan(memoryLimit, beforeMaps); err != nil {
+		return err
+	}
 
 	bpfObjects := ebpf.NewBpfObjects()
 	bpfObjects.SetPdrMapSize(config.Conf.PdrMapSize)
@@ -136,8 +144,29 @@ func run(ctx context.Context) (runErr error) {
 	}
 
 	defer func() { runErr = errors.Join(runErr, bpfObjects.Close()) }()
+	// SetMemoryLimit excludes kernel BPF memory. Keep the observed cgroup
+	// baseline outside Go's allowance, including the default startup peak.
+	debug.FreeOSMemory()
+	_, baseline, err := config.CgroupMemory("/sys/fs/cgroup")
+	if err != nil {
+		return fmt.Errorf("read loaded map memory charge: %w", err)
+	}
+	softLimit, err := config.Conf.PFCPMemoryPlan(memoryLimit, baseline)
+	if err != nil {
+		return err
+	}
+	if softLimit > 0 {
+		configured := debug.SetMemoryLimit(-1)
+		if configured < softLimit {
+			if _, err := config.Conf.PFCPMemoryPlan(configured+max(baseline, 64<<20)+(32<<20), baseline); err != nil {
+				return fmt.Errorf("GOMEMLIMIT: %w", err)
+			}
+			softLimit = configured
+		}
+		debug.SetMemoryLimit(softLimit)
+	}
+	log.Info().Int64("container_limit_bytes", memoryLimit).Int64("cgroup_before_maps_bytes", beforeMaps).Int64("cgroup_loaded_baseline_bytes", baseline).Int64("go_memory_limit_bytes", softLimit).Msg("PFCP process memory budget")
 
-	var err error
 	dumper, err := newStartupDumper(
 		"dumps/",
 		config.Conf.TraceMaxDumpFiles,
@@ -228,7 +257,6 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("create resource manager: %w", err)
 	}
-
 	// TS 23.527 V20.0.0 clause 4.3.2; TS 23.007 V19.2.0 clauses
 	// 16.1b/17.1b: no automatic reuse during the startup restoration window,
 	// even without persistent container state. Explicit RESTI reservations work.

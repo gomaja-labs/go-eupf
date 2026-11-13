@@ -306,13 +306,20 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
+# One process-wide replay budget serves N4, Sxa and Sxb. At 2000 cacheable
+# requests/s * 60 s: 120000 entries fit 131072 entries / 128 MiB accounting.
+# Memory floor: 2 * 128 MiB replay (GC) + max(64 MiB startup/maps, observed
+# cgroup baseline) + 3 * 16 MiB originated queues + 32 MiB transient = 400 MiB.
+# 512 MiB leaves 112 MiB headroom at default map sizes. The process derives
+# its Go soft limit from the cgroup limit, excluding baseline/kernel charges.
+# CPU is sized for the sustained PFCP workload; forwarding needs separate sizing.
 resources:
   limits:
-    cpu: 100m
-    memory: 128Mi
+    cpu: "1"
+    memory: 512Mi
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 500m
+    memory: 512Mi
 
 livenessProbe:
   tcpSocket:

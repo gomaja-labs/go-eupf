@@ -16,8 +16,8 @@ change `heartbeat_timeout` and `association_setup_timeout` while running.
 | `pfcp_request_retries` | `3` | N1 retransmissions after the initial request, 0–100. Zero sends once. |
 | `pfcp_response_retention` | `60` | Duplicate request response cache lifetime in seconds, 20–86400. Zero selects 60. Must cover the configured local retry windows; align it with the peer's maximum retransmission window too. |
 | `pfcp_max_originated_requests` | `4096` | Outstanding originated requests per connection, 1–65536; zero selects 4096. |
-| `pfcp_max_replay_entries` | `131072` | Retained request outcomes per connection, 1–1048576; zero selects 131072. |
-| `pfcp_replay_memory_mib` | `128` | Replay accounting budget per connection in MiB, 16–1024; zero selects 128. |
+| `pfcp_max_replay_entries` | `131072` | Retained request outcomes across the process, 1–1048576; zero selects 131072. |
+| `pfcp_replay_memory_mib` | `128` | Replay accounting budget across the process in MiB, 16–1024; zero selects 128. |
 | `pfcp_max_associations` | `1024` | Maximum simultaneous associations per connection. At most 65536; zero selects 1024. Existing Node IDs may replace their association at this limit. |
 | `heartbeat_failure_grace` | `0` | Extra unreachable seconds after exhausting heartbeat retransmissions, at most 86400. During this interval sessions remain installed and probes continue. Zero deletes the failed peer and its sessions after the retry budget. A valid heartbeat clears the failure period. |
 
@@ -53,7 +53,7 @@ final-usage response is still waiting is dropped until that response is ready.
 Its state change has already committed, so a later request sees the changed
 session. Responses can leave in sequence-independent order.
 
-Replay entries and memory have independent connection-wide bounds. Accounting
+Replay entries and memory have independent process-wide bounds, shared by N4, Sxa and Sxb through their common resource manager. Accounting
 charges the encoded response, stored peer/entity strings and 640 bytes of
 metadata per completed outcome. A pending final-usage response reserves the
 maximum 65535-byte encoding plus metadata. This covers the measured retained
@@ -80,8 +80,7 @@ A Linux/amd64 Go 1.27.4 heap probe retaining 120000 80-byte replies measured
 approximately 75 MB of heap, with approximately 90 MB charged by the cache.
 Large replies consume the memory bound sooner. Reproduce the heap measurement
 with `EUPF_REPLAY_HEAP=/tmp/replay.heap go test ./cmd/core -run
-TestReplayOutcomeHeapProfile -count=1 -v`. Budget each PFCP connection separately
-and leave deployment headroom for sessions, maps and transient allocations.
+TestReplayOutcomeHeapProfile -count=1 -v`. The budgets do not multiply when Sxa/Sxb are enabled. The chart uses a 512 MiB memory limit and one CPU, with a 500m CPU request. Its memory floor is `2 * replay budget + max(64 MiB, observed startup/map baseline) + 3 * 16 MiB originated payloads + 32 MiB transient headroom`: 400 MiB at defaults. The 64 MiB baseline floor covers the measured default-map startup peak, including memory charged by the kernel. The process reads the cgroup memory limit and current charge before and after loading maps, refuses a budget that cannot fit, and derives a Go soft limit by subtracting the baseline and 32 MiB headroom. It honors a smaller `GOMEMLIMIT` only if that can fit the configured replay and queues. Go does not account for BPF kernel memory in its soft limit. Larger map/session configurations need a larger cgroup limit; the observed baseline raises the floor automatically.
 
 Expiry and association invalidation unlink entries from both indexes in O(1)
 per removed outcome. Every address of one Node ID uses the same budget.
@@ -186,9 +185,9 @@ CP Association Release is always accepted, including unknown Node IDs and
 retransmissions. Its response precedes cleanup. Admission to that association
 stops immediately, and receive-loop maintenance deletes sessions in batches of
 64, releasing locks between batches. Successful progress has no cleanup time
-limit. An actual deletion failure starts a three-second retry window, with
+limit. Each session that actually fails deletion starts its own three-second retry window, with
 100, 200, 400 and then at most 500 ms backoff. Retired-map reclamation and failed
-rollback use the same bounded recovery policy. Affected IDs stay reserved.
+rollback use the same bounded recovery policy. A successful deletion clears that session's failure history; a transient error cannot give healthy remaining sessions a deadline. Affected IDs stay reserved.
 Exhaustion logs affected sessions and exits non-zero through the supervisor;
 it never silently leaves admission poisoned indefinitely.
 
@@ -206,15 +205,20 @@ Every originated procedure has one terminal completion: accepted, rejected,
 invalid, timed out, or canceled. Changing heartbeat timeout cancels every old
 probe through that completion path. A failed Setup backs off for a setup
 interval. A Session Report accepted by the CP marks its information delivered
-(clause 6.3.5.2). Cause 65 queues local deletion of exactly its original local
-session. Other failures and timeouts are logged and counted in
+(clause 6.3.5.2). Cause 65 queues local deletion only while the addressed CP F-SEID (SEID and IP) remains current. A failed transfer to a superseded CP F-SEID is immediately re-originated with the same report information, the current CP F-SEID and a new sequence number (table 7.5.4.1-1; clauses 6.3.5.3 and 6.4). The address is rechecked before queued local deletion. Other failures and timeouts are logged and counted in
 `upf_pfcp_report_failures_total`. Admitted usage from a failed transfer is added
 to the live URR's next report, including a later termination report.
 
-If the session or the original global URR slot has already been removed or
+A retained URR carries its generation across counter-slot swaps; only Remove/Create URR ends that identity. If the session or that URR generation has already been removed or
 replaced when failure arrives, those reported octets cannot be merged into a
 new rule. They are logged and counted in
 `upf_pfcp_undelivered_usage_octets_total`. A timeout cannot establish whether the
 CP processed a report whose responses were lost; retrying its information in a
 new report can therefore duplicate usage in that case. Association Update
 completion never substitutes for the CP Release procedure.
+
+Setup replacement and changed CP recovery timestamps invalidate affected session contexts immediately and reclaim their rules in maintenance batches of 64. Setup/Heartbeat responses precede deletion. Only sessions requested for retention remain active; PSREI confirms that operation. Requests for an invalidated local SEID receive Cause 65 while its detached context awaits cleanup. New establishments use the current association immediately; identifiers still held for reclamation can produce No resources available, or the restoration resource-unavailable cause for an explicit RESTI reservation. `upf_pfcp_cleanup_sessions` counts detached contexts still awaiting deletion.
+
+`resource_reuse_delay` (default 60 seconds, range 1–86400; zero selects 60) reserves a startup restoration window. Every actual process startup holds automatic TEID and UE IPv4 allocation until that window ends; Setup and explicit RESTI reservations remain available. This implements TS 23.527 V20.0.0 clause 4.3.2 and TS 23.007 V19.2.0 clauses 16.1b/17.1b without relying on persistent container state or probabilistic random starts. For any pool size or churn, a previous instance's automatically allocated identifier cannot be automatically reused during the configured interval. After it, allocation resumes from the FIFO free chain; an unrestored old identifier may be the first allocation. The delay must cover the deployment's restoration time. It also applies to the first startup and new sessions requesting automatic resources receive Cause 75 until it expires. It does not create a further delay after that interval, reserve identifiers against a different UPF process, or add automatic IPv6 pool allocation; explicit IPv6 address/prefix reservation remains supported.
+
+`upf_pfcp_final_usage_wait_seconds{message_type=...}` measures each response's wait from deferred-response construction until its final-usage completion signal. It excludes subsequent encoding and socket transmission.
