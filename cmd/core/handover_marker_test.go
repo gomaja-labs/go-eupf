@@ -148,3 +148,22 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 		})
 	}
 }
+
+// TS 29.244 V20.1.0 table 8.2.64-1 NOTE 7 distinguishes unknown
+// descriptions from assigned header formats outside this implementation.
+func TestUnknownOuterRemovalUsesMandatoryIEIncorrect(t *testing.T) {
+	for _, description := range []uint8{9, 255} {
+		fields := ruleFailureIEs(validateOuterRemoval(ie.NewOuterHeaderRemoval(description, 0)))
+		cause, err := fields[0].Cause()
+		if err != nil || cause != ie.CauseMandatoryIEIncorrect {
+			t.Fatalf("description %d: cause=%d err=%v", description, cause, err)
+		}
+	}
+	for _, description := range []uint8{1, 2, 3, 4, 5, 7, 8} {
+		fields := ruleFailureIEs(validateOuterRemoval(ie.NewOuterHeaderRemoval(description, 0)))
+		cause, err := fields[0].Cause()
+		if err != nil || cause != ie.CauseServiceNotSupported {
+			t.Fatalf("assigned unsupported description %d: cause=%d err=%v", description, cause, err)
+		}
+	}
+}

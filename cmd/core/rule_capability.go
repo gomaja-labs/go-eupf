@@ -397,6 +397,11 @@ func validateOuterRemoval(field *ie.IE) error {
 	if err != nil {
 		return err
 	}
+	// TS 29.244 V20.1.0 table 8.2.64-1 NOTE 7: unknown
+	// descriptions are incorrect, rather than assigned unsupported formats.
+	if value >= 9 {
+		return &requestIEError{ie.CauseMandatoryIEIncorrect, ie.OuterHeaderRemoval, ie.ErrInvalidValue}
+	}
 	if value != 0 && value != 6 {
 		return unsupportedRuleIE(ie.OuterHeaderRemoval)
 	}
