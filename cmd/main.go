@@ -132,7 +132,7 @@ func run(ctx context.Context) (runErr error) {
 		return fmt.Errorf("read container memory budget: %w", err)
 	}
 	memoryLimit, beforeMaps := memoryState.Limit, memoryState.Current
-	log.Info().Str("cgroup_path", memoryState.Path).Str("cgroup_limit_source", memoryState.LimitSource).Int64("container_limit_bytes", memoryLimit).Msg("Resolved process memory cgroup")
+	log.Info().Str("cgroup_path", memoryState.Path).Str("cgroup_limit_source", memoryState.LimitSource).Str("cgroup_charge_source", memoryState.ChargeSource).Int64("container_limit_bytes", memoryLimit).Msg("Resolved process memory cgroup")
 	if _, err := config.Conf.PFCPMemoryPlan(memoryLimit, beforeMaps); err != nil {
 		return err
 	}

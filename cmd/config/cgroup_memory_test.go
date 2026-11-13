@@ -45,7 +45,7 @@ func TestCgroupMemoryResolvesMembershipAndAncestorLimits(t *testing.T) {
 						expected = 128 * mib
 						source = filepath.Join(own, limitName)
 					}
-					if err != nil || state.Path != own || state.Current != 12345 || state.Limit != expected || state.LimitSource != source {
+					if err != nil || state.Path != own || state.ChargeSource != filepath.Join(own, usageName) || state.Current != 12345 || state.Limit != expected || state.LimitSource != source {
 						t.Fatalf("state %+v: %v", state, err)
 					}
 					if mountRoot != "/" {
@@ -102,5 +102,42 @@ func TestCgroupMemoryRootWithoutLimit(t *testing.T) {
 	state, err = resolveCgroupMemory("0::/", mounts)
 	if err != nil || state != (CgroupMemoryState{}) {
 		t.Fatalf("missing memory controller %+v: %v", state, err)
+	}
+}
+
+func TestCgroupMemoryFindsTheChargingAncestor(t *testing.T) {
+	root := t.TempDir()
+	own := filepath.Join(root, "child", "leaf")
+	if err := os.MkdirAll(own, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("memory.max", "268435456")
+	write("memory.current", "12345")
+	state, err := resolveCgroupMemory("0::/child/leaf", "1 0 0:1 / "+root+" rw - cgroup2 cgroup rw")
+	if err != nil || state.Limit != 256*mib || state.Current != 12345 || state.Path != own || state.ChargeSource != filepath.Join(root, "memory.current") {
+		t.Fatalf("charging ancestor %+v: %v", state, err)
+	}
+	write("memory.max", "max")
+	state, err = resolveCgroupMemory("0::/child/leaf", "1 0 0:1 / "+root+" rw - cgroup2 cgroup rw")
+	if err != nil || state.Limit != 0 || state.Current != 12345 {
+		t.Fatalf("unlimited ancestor %+v: %v", state, err)
+	}
+}
+
+func TestCgroupZeroHardLimitIsNotUnlimited(t *testing.T) {
+	root := t.TempDir()
+	for name, value := range map[string]string{"memory.max": "0", "memory.current": "0"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := resolveCgroupMemory("0::/", "1 0 0:1 / "+root+" rw - cgroup2 cgroup rw"); err == nil {
+		t.Fatal("zero-byte hard limit treated as unlimited")
 	}
 }

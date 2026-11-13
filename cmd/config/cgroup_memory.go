@@ -12,8 +12,8 @@ import (
 // CgroupMemoryState records the process's charge and the tightest visible
 // ancestor limit. Limit zero means that no visible cgroup imposes a hard limit.
 type CgroupMemoryState struct {
-	Limit, Current    int64
-	Path, LimitSource string
+	Limit, Current                  int64
+	Path, LimitSource, ChargeSource string
 }
 
 // CgroupMemory resolves membership and mount roots rather than assuming that
@@ -77,19 +77,24 @@ func resolveCgroupMemory(membership, mounts string) (CgroupMemoryState, error) {
 		}
 		own := filepath.Join(mount, filepath.Clean("/"+relative))
 		result := CgroupMemoryState{Path: own}
-		var err error
-		result.Current, err = readCgroupValue(filepath.Join(own, usageName), false)
-		if errors.Is(err, os.ErrNotExist) && own == mount {
-			continue
-		} // No memory controller.
-		if err != nil {
-			return result, err
-		}
+
+		charged := false
 		for dir := own; ; dir = filepath.Dir(dir) {
+			// A cgroup without this controller's interface is charged to the
+			// nearest ancestor which has it. Preserve the membership path and log
+			// the actual charge source, which can include sibling processes.
+			if !charged {
+				source := filepath.Join(dir, usageName)
+				current, err := readCgroupValue(source, false)
+				if err == nil {
+					result.Current, result.ChargeSource, charged = current, source, true
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return result, err
+				}
+			}
 			file := filepath.Join(dir, limitName)
 			limit, err := readCgroupValue(file, true)
-			// The v2 hierarchy root has no memory.max. A v1 root can also omit it.
-			if err != nil && (dir != mount || !errors.Is(err, os.ErrNotExist)) {
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return result, err
 			}
 			if limit > 0 && (result.Limit == 0 || limit < result.Limit) {
@@ -98,6 +103,12 @@ func resolveCgroupMemory(membership, mounts string) (CgroupMemoryState, error) {
 			if dir == mount {
 				break
 			}
+		}
+		if !charged {
+			if result.Limit > 0 {
+				return result, fmt.Errorf("no memory charge exposed for limited cgroup %s", own)
+			}
+			return CgroupMemoryState{}, nil
 		}
 		return result, nil
 	}
@@ -127,6 +138,9 @@ func readCgroupValue(path string, limit bool) (int64, error) {
 	n, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || n < 0 {
 		return 0, fmt.Errorf("invalid cgroup memory value in %s", path)
+	}
+	if limit && n == 0 {
+		return 0, fmt.Errorf("zero cgroup memory limit in %s cannot fit this process", path)
 	}
 	if limit && n >= 1<<60 {
 		return 0, nil
