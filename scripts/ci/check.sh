@@ -78,7 +78,9 @@ PY
 	go build -o bin/mapfault ./cmd/core/testtools/mapfault
 	go build -race -o bin/eupf-race ./cmd
 	for binary in eupf eupf-race; do
-		timeout 180 sudo env EUPF_REGRESSION_BINARY="/src/bin/$binary" \
+		# Each process exercises the restoration hold; race binaries also wait
+		# during teardown. Bound the complete suite without cutting those waits.
+		timeout 300 sudo env EUPF_REGRESSION_BINARY="/src/bin/$binary" \
 			EUPF_REGRESSION_EVIDENCE="/src/ci-results/$binary-regressions" \
 			/opt/py/bin/pytest -v ./pytest/test_pfcp_regressions.py ./pytest/test_pfcp_transport.py
 	done
