@@ -89,7 +89,7 @@ func resolveCgroupMemory(membership, mounts string) (CgroupMemoryState, error) {
 			file := filepath.Join(dir, limitName)
 			limit, err := readCgroupValue(file, true)
 			// The v2 hierarchy root has no memory.max. A v1 root can also omit it.
-			if err != nil && !(dir == mount && errors.Is(err, os.ErrNotExist)) {
+			if err != nil && (dir != mount || !errors.Is(err, os.ErrNotExist)) {
 				return result, err
 			}
 			if limit > 0 && (result.Limit == 0 || limit < result.Limit) {

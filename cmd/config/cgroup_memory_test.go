@@ -39,7 +39,7 @@ func TestCgroupMemoryResolvesMembershipAndAncestorLimits(t *testing.T) {
 					escaped := strings.ReplaceAll(root, " ", `\040`)
 					mounts := fmt.Sprintf("1 0 0:1 %s %s rw - %s cgroup %s", mountRoot, escaped, mountType, options)
 					state, err := resolveCgroupMemory(member, mounts)
-					expected := int64(256 * mib)
+					expected := 256 * mib
 					source := filepath.Join(filepath.Dir(own), limitName)
 					if ownLimit == "134217728" {
 						expected = 128 * mib
