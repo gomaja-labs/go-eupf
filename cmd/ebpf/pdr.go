@@ -151,7 +151,6 @@ type FarInfo struct {
 	OuterHeaderCreation         uint8
 	Teid                        uint32
 	RemoteIP                    uint32
-	Trigger                     uint8 // trigger for applying the FAR // todo maxim: change to ringbuffer
 	TransportLevelMarking       uint16
 }
 
@@ -199,7 +198,6 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
 		Teid:                        farToStore.Teid,
 		RemoteIP:                    farToStore.Remoteip,
-		Trigger:                     farToStore.Trigger,
 		TransportLevelMarking:       farToStore.TransportLevelMarking,
 		DestinationInterface:        farToStore.DestinationInterface,
 		DestinationInterfacePresent: farToStore.DestinationInterfacePresent != 0,

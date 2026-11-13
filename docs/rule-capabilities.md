@@ -13,7 +13,8 @@ Rejections normally use Cause 76 (Service not supported), Failed Rule ID and
 Offending IE. Capacity exhaustion uses Cause 75 (No resources available) and
 Failed Rule ID. Invalid new CP F-TEID allocation uses Cause 71. Missing/invalid
 mandatory fields retain the procedural causes specified in clauses 7.5–7.6.
-BUFF/NOCP, BAR provisioning and buffering controls stay rejected until buffering
+The old FAR-trigger polling path is removed; usage polling never reads or mutates
+published FARs. BUFF/NOCP, BAR provisioning and buffering controls stay rejected until buffering
 is implemented. These tables do not claim compatibility with every SMF feature.
 
 ## PDR

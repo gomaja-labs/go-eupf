@@ -760,7 +760,6 @@ func (connection *PfcpConnection) SendReports() {
 		trace  bool
 	}
 	var admitted []admittedReport
-	var outgoing []queuedMessage
 	defer func() {
 		connection.stateMu.Unlock()
 		for _, r := range admitted {
@@ -768,7 +767,6 @@ func (connection *PfcpConnection) SendReports() {
 				log.Warn().Err(err).Msg("Send admitted usage report; reliable delivery retains it")
 			}
 		}
-		connection.sendQueued(outgoing)
 	}()
 
 	for _, association := range connection.NodeAssociations {
@@ -813,33 +811,6 @@ func (connection *PfcpConnection) SendReports() {
 
 			}
 
-			for pdrID, pdr := range session.PDRs {
-				internalFarID := pdr.PdrInfo.FarId
-				if internalFarID == 0 {
-					continue
-				}
-				currentFar, err := connection.mapOperations.GetFar(internalFarID)
-				if err != nil {
-					continue
-				}
-
-				if currentFar.Action&0x08 == 0 { // todo maxim: const
-					continue
-				}
-
-				if currentFar.Trigger == 1 {
-					currentFar.Trigger = 2
-					err := connection.mapOperations.UpdateFar(internalFarID, currentFar)
-					if err != nil {
-						log.Warn().Uint32("farID", internalFarID).Msgf("can`t update far")
-
-						continue
-					}
-
-					traced := session.IsSessionTraced()
-					outgoing = append(outgoing, queuedMessage{message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(ie.NewPDRID(uint16(pdrID)))), association.ID, traced, seid})
-				}
-			}
 		}
 
 	}

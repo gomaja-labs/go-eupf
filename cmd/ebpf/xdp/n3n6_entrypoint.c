@@ -329,9 +329,6 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
 
     upf_printk("upf: [n6] downlink session for ip:%pI4  far:%d action:%d", &ip4->daddr, pdr->far_id, far->action);
 
-    if ((far->action & FAR_NOCP) && far->trigger == 0) {
-          far->trigger = 1;
-    }
 
     // Only forwarding action is supported at the moment
     if (!(far->action & FAR_FORW))
@@ -377,8 +374,6 @@ static __noinline enum xdp_action forward_n6_packet_ipv6(struct packet_context *
         return XDP_DROP;
     }
 
-    if ((far->action & FAR_NOCP) && far->trigger == 0)
-        far->trigger = 1;
 
     upf_printk("upf: [n6] downlink session for ip:%pI6c far:%d action:%d", &ip6->daddr, pdr->far_id, far->action);
 
@@ -503,9 +498,6 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
 
     upf_printk("upf: [n3] far:%d action:%d outer_header_creation:%d", pdr->far_id, far->action, far->outer_header_creation);
 
-    if ((far->action & FAR_NOCP) && far->trigger == 0) {
-          far->trigger = 1;
-    }
 
     // Only forwarding action supported at the moment
     if (!(far->action & FAR_FORW))
