@@ -16,6 +16,9 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 // Parsing and validation finish before map publication. Commit then
 // reserves every rule slot before applying the first map write.
 func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessionMutationKind) (func() error, func(bool) error) {
+	if session.buffers != nil {
+		waitBufferIO(session.buffers.owner)
+	}
 	maps, resources := conn.mapOperations, conn.ResourceManager
 	unlockReservations := resources.LockReservations()
 	owner := session.LocalSEID

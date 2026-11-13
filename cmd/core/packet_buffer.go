@@ -25,12 +25,18 @@ type BufferingOptions struct {
 
 const noBufferedPacket = uint32(math.MaxUint32)
 
+type packetBufferSender interface {
+	Send(ebpf.RenderedBuffer) error
+	Close() error
+}
+
 type bufferedPacket struct {
 	record  ebpf.BufferRecord
 	arrived time.Time
 	next    uint32
 	owner   *bufferOwner
 	cycle   *bufferCycle
+	sent    bool
 }
 type bufferCycle struct {
 	farID               uint32
@@ -42,6 +48,9 @@ type bufferCycle struct {
 	canceled            bool
 	draining, terminal  bool
 	grace               <-chan struct{}
+	ready               bool
+	ioDone              <-chan struct{}
+	failedAt            time.Time
 }
 type packetBufferSession struct {
 	owner    *bufferOwner
@@ -65,6 +74,8 @@ type bufferOwner struct {
 // mu protects only shared registry, admission reservations and free slot IDs.
 type PacketBuffering struct {
 	plane      *ebpf.BpfObjects
+	sender     packetBufferSender
+	complete   func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
 	reader     *ebpf.BufferReader
 	options    BufferingOptions
 	mu         sync.Mutex
@@ -98,11 +109,15 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 	if err != nil {
 		return nil, err
 	}
-	reader, err := plane.NewBufferReader()
+	sender, err := newBufferPacketSender()
 	if err != nil {
 		return nil, err
 	}
-	buffering := &PacketBuffering{plane: plane, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
+	reader, err := plane.NewBufferReader()
+	if err != nil {
+		return nil, errors.Join(err, sender.Close())
+	}
+	buffering := &PacketBuffering{plane: plane, sender: sender, complete: plane.BufferControl, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
 	for i := range buffering.free {
 		buffering.free[i] = uint32(len(buffering.free) - 1 - i)
 	}
@@ -245,7 +260,7 @@ func (buffering *PacketBuffering) takePacket(owner *bufferOwner, cycle *bufferCy
 	index := buffering.free[len(buffering.free)-1]
 	buffering.free = buffering.free[:len(buffering.free)-1]
 	offset := uint64(index) * uint64(buffering.options.FrameBytes)
-	payload := buffering.storage[offset : offset+uint64(len(record.Packet))]
+	payload := buffering.storage[offset : offset+uint64(len(record.Packet)) : offset+uint64(buffering.options.FrameBytes)]
 	copy(payload, record.Packet)
 	record.Packet = payload
 	arrived := buffering.baseTime
@@ -347,9 +362,7 @@ func (buffering *PacketBuffering) servicePackets() {
 		case <-ticker.C:
 		}
 		for _, owner := range buffering.ownerSnapshot() {
-			owner.conn.stateMu.Lock()
-			buffering.serviceOwner(owner, time.Now())
-			owner.conn.stateMu.Unlock()
+			buffering.serviceOutput(owner)
 		}
 	}
 }
@@ -365,6 +378,14 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 		if cycle == nil {
 			continue
 		}
+		if cycle.draining && !cycle.canceled && !owner.canceled && !cycle.ready && bufferGraceDone(cycle.grace) {
+			_, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 1, Mode: ebpf.BufferDrain, Ready: 1})
+			if err != nil {
+				buffering.ioFailure(cycle, now, err)
+				continue
+			}
+			cycle.ready = true
+		}
 		for cycle.head != noBufferedPacket {
 			packet := &buffering.entries[cycle.head]
 			if packet.record.Sequence != cycle.completed+1 {
@@ -375,19 +396,23 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				if !canDiscard {
 					break
 				}
-			} else if now.Before(packet.arrived.Add(buffering.options.Retention)) {
+			} else if !packet.sent && now.Before(packet.arrived.Add(buffering.options.Retention)) {
 				break
 			}
-			_, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence})
+			_, err := buffering.complete(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence})
 			if err != nil {
-				buffering.fail(fmt.Errorf("complete discarded buffer: %w", err))
+				buffering.ioFailure(cycle, now, fmt.Errorf("complete admitted buffer: %w", err))
 				break
 			}
+			cycle.failedAt = time.Time{}
 			index := cycle.head
 			cycle.head = packet.next
 			cycle.completed = packet.record.Sequence
 			buffering.releasePacket(index)
 			buffering.signal()
+		}
+		if !owner.canceled && cycle.draining && cycle.ready && !cycle.canceled && cycle.head == noBufferedPacket {
+			buffering.retireDrainedCycle(owner, cycle)
 		}
 		if cycle.canceled && cycle.terminal && bufferGraceDone(cycle.grace) && cycle.head == noBufferedPacket {
 			state, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 3})
@@ -395,7 +420,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				buffering.fail(err)
 				continue
 			}
-			if cycle.received == state.Produced && cycle.completed == state.Produced {
+			if state.Preparing == 0 && cycle.received == state.Produced && cycle.completed == state.Produced {
 				if _, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 6}); err != nil {
 					buffering.fail(err)
 					continue
@@ -414,7 +439,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				buffering.fail(err)
 				return
 			}
-			if cycle.head != noBufferedPacket || cycle.received != state.Produced || cycle.completed != state.Produced {
+			if cycle.head != noBufferedPacket || state.Preparing != 0 || cycle.received != state.Produced || cycle.completed != state.Produced {
 				return
 			}
 		}
@@ -446,6 +471,7 @@ func (buffering *PacketBuffering) Close() error {
 		owners := buffering.ownerSnapshot()
 		for _, owner := range owners {
 			owner.conn.stateMu.Lock()
+			waitBufferIO(owner)
 			owner.canceled = true
 			owner.terminal = true
 			delete(owner.conn.downlinkSessions, owner.session.LocalSEID)
@@ -499,6 +525,92 @@ func (buffering *PacketBuffering) Close() error {
 		close(buffering.stop)
 		buffering.closeError = errors.Join(buffering.closeError, buffering.reader.Close())
 		buffering.wg.Wait()
+		buffering.closeError = errors.Join(buffering.closeError, buffering.sender.Close())
 	})
 	return buffering.closeError
+}
+
+func waitBufferIO(owner *bufferOwner) {
+	for _, cycle := range owner.cycles {
+		if cycle != nil && cycle.ioDone != nil {
+			<-cycle.ioDone
+		}
+	}
+}
+
+func (buffering *PacketBuffering) ioFailure(cycle *bufferCycle, now time.Time, err error) {
+	if cycle.failedAt.IsZero() {
+		cycle.failedAt = now
+	}
+	if now.Sub(cycle.failedAt) >= 3*time.Second {
+		buffering.fail(err)
+	}
+}
+
+// The sole output worker owns rendering/transmission. It closes I/O completion
+// before taking stateMu again, so journal mutation can wait while holding it.
+// A successful send is remembered independently of its idempotent kernel ACK.
+func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
+	conn := owner.conn
+	for range 64 {
+		conn.stateMu.Lock()
+		buffering.serviceOwner(owner, time.Now())
+		var chosen *bufferCycle
+		var index uint32
+		if owner.active && !owner.canceled && !owner.released {
+			for _, cycle := range owner.cycles {
+				if cycle == nil || !cycle.draining || !cycle.ready || cycle.canceled || cycle.head == noBufferedPacket {
+					continue
+				}
+				packet := &buffering.entries[cycle.head]
+				if packet.sent || packet.record.Sequence != cycle.completed+1 {
+					continue
+				}
+				chosen, index = cycle, cycle.head
+				break
+			}
+		}
+		if chosen == nil {
+			conn.stateMu.Unlock()
+			return
+		}
+		current := owner.association.Sessions[owner.session.LocalSEID]
+		if current == nil || current.buffers == nil || current.buffers.owner != owner || current.buffers.cycles[chosen.farID] != chosen {
+			conn.stateMu.Unlock()
+			return
+		}
+		far := current.FARs[chosen.farID]
+		if far.FarInfo.Action&2 == 0 || far.FarInfo.BufferCookie != chosen.cookie {
+			conn.stateMu.Unlock()
+			return
+		}
+		record := buffering.entries[index].record
+		done := make(chan struct{})
+		chosen.ioDone = done
+		conn.stateMu.Unlock()
+		rendered, err := buffering.plane.RenderBufferedPacket(record, far.GlobalId)
+		sent := false
+		if err == nil && rendered.Action == 4 && rendered.Ifindex != 0 {
+			err = buffering.sender.Send(rendered)
+			sent = err == nil
+		} else if err == nil && rendered.Action == 1 {
+			sent = true
+		}
+		close(done)
+		conn.stateMu.Lock()
+		packet := &buffering.entries[index]
+		if packet.owner == owner && packet.cycle == chosen && packet.record.Sequence == record.Sequence {
+			if sent {
+				packet.sent = true
+				chosen.failedAt = time.Time{}
+			} else if err != nil {
+				buffering.ioFailure(chosen, time.Now(), err)
+			}
+		}
+		chosen.ioDone = nil
+		conn.stateMu.Unlock()
+		if !sent {
+			return
+		}
+	}
 }

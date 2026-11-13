@@ -159,7 +159,10 @@ func (plan *packetBufferPlan) publish(conn *PfcpConnection, tx ebpf.RuleTransact
 		changed = true
 	}
 	if changed {
-		return conn.rebindSessionRules(plan.after)
+		if err := conn.rebindSessionRules(plan.after); err != nil {
+			return err
+		}
+		return conn.bindSessionReplies(plan.after)
 	}
 	return nil
 }
@@ -191,14 +194,22 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 	owner := plan.owner
 	if committed {
 		owner.session = plan.after
+		if state := plan.after.downlink; state != nil {
+			for id := range state.fars {
+				far, exists := plan.after.FARs[id]
+				if !exists || far.FarInfo.Action&12 != 12 {
+					delete(state.fars, id)
+				}
+			}
+		}
 		for _, cycle := range plan.cancel {
 			cycle.canceled, cycle.terminal, cycle.grace = true, terminal, plan.grace
 		}
 		for _, cycle := range plan.drain {
-			cycle.draining, cycle.grace = true, plan.grace
+			cycle.draining, cycle.grace, cycle.ready = true, plan.grace, false
 		}
 		for _, cycle := range plan.hold {
-			cycle.draining = false
+			cycle.draining, cycle.ready = false, false
 		}
 		if plan.kind == deleteSessionMutation || plan.after.bar == nil && len(plan.after.buffers.cycles) == 0 {
 			owner.canceled, owner.terminal, owner.grace = true, terminal, plan.grace
