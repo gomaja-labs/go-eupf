@@ -18,6 +18,7 @@ struct upf_counters {
     __u64 rx_gtp_pdu;
     __u64 rx_gtp_other;
     __u64 rx_gtp_unexp;
+    __u64 gtp_error_suppressed;
 };
 
 struct n3_n6_counters {

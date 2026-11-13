@@ -24,6 +24,7 @@ type IpEntrypointObjects struct {
 	UpfPipeline               *ebpf.Map
 	UpfRouteStat              *ebpf.Map
 	GlobalConfig              *ebpf.Variable
+	GtpErrorSuppressUntil     *ebpf.Variable
 }
 
 type IpEntrypointDataplaneConfig struct {

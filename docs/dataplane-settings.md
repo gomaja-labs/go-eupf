@@ -78,3 +78,8 @@ Debug `bpf_trace_printk` logging is still a build option (`ENABLE_LOG` via
 `BPF_CFLAGS`); it is distinct from packet capture. See the generation directive
 in [`cmd/ebpf/objects.go`](../cmd/ebpf/objects.go) and
 [`cmd/ebpf/xdp/utils/trace.h`](../cmd/ebpf/xdp/utils/trace.h).
+
+The startup `restoration_period` also suppresses GTP-U Error Indications for
+unknown tunnels until session restoration can complete. See
+[the restoration policy](pfcp-transport.md) for the
+shared setting, timer and `upf_gtp_error_indications_suppressed_total` counter.

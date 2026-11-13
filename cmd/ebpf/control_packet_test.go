@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/gopacket/gopacket/layers"
+
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 )
 
 func TestUnknownTunnelErrorIndication(t *testing.T) {
@@ -156,6 +158,55 @@ func TestControlReplyDestinationPort(t *testing.T) {
 			}
 			if port := binary.BigEndian.Uint16(out[36:38]); port != want {
 				t.Errorf("%s destination port=%d, want %d", kind, port, want)
+			}
+		})
+	}
+}
+
+// TS 23.527 V20.0.0 clause 4.3.2: allow session restoration before
+// unknown G-PDUs can make the RAN release the corresponding bearers.
+func TestRestartSuppressesUnknownTunnelErrorIndication(t *testing.T) {
+	original := config.Conf
+	t.Cleanup(func() { config.Conf = original })
+	for _, period := range []uint32{0, 86400} {
+		t.Run(map[uint32]string{0: "disabled", 86400: "restoring"}[period], func(t *testing.T) {
+			config.Conf.RestorationPeriod = period
+			b := loadDatapath(t)
+			if err := b.DeletePdrUplink(10, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
+			action, _ := runDatapath(t, b, packet)
+			want := uint32(3)
+			if period != 0 {
+				want = 1
+			}
+			if action != want {
+				t.Fatalf("restoration_period=%d: action=%d, want %d", period, action, want)
+			}
+			stats := UpfXdpActionStatistic{BpfObjects: b}
+			if got := stats.GetUpfExtStat().GtpErrorSuppressed; got != uint64(3-want)/2 {
+				t.Fatalf("suppressed counter=%d for action=%d", got, action)
+			}
+			if period != 0 {
+				var budget uint64
+				if err := b.GtpErrorBudget.Lookup(uint32(0), &budget); err != nil {
+					t.Fatal(err)
+				}
+				if budget != 0 {
+					t.Fatal("suppression consumed the error reflection budget")
+				}
+				// An expired monotonic deadline permits the normal control path.
+				if err := b.GtpErrorSuppressUntil.Set(uint64(1)); err != nil {
+					t.Fatal(err)
+				}
+				action, _ = runDatapath(t, b, packet)
+				if action != 3 {
+					t.Fatalf("expired restoration deadline still suppressed: action=%d", action)
+				}
+				if got := stats.GetUpfExtStat().GtpErrorSuppressed; got != 1 {
+					t.Fatalf("expired packet charged suppression: %d", got)
+				}
 			}
 		})
 	}

@@ -36,18 +36,26 @@ func TestGatherMetricsDoesNotCountPacketsTwice(t *testing.T) {
 	}
 	values := make([]dataplane.IpEntrypointUpfStatistic, ncpu)
 	values[0].UpfCounters.RxIp4 = 7
+	values[0].UpfCounters.GtpErrorSuppressed = 3
 	if err := bpf.UpfExtStat.Put(uint32(0), values); err != nil {
 		t.Fatal(err)
 	}
 	stats := dataplane.UpfXdpActionStatistic{BpfObjects: bpf}
 	counter := UpfRx.WithLabelValues("ip4")
 	before := counterValue(t, counter)
+	beforeSuppressed := counterValue(t, GtpErrorIndicationsSuppressed)
 	GatherMetrics(stats)
 	first := counterValue(t, counter)
 	if first-before != 7 {
 		t.Fatalf("first scrape added %v, want 7", first-before)
 	}
+	if got := counterValue(t, GtpErrorIndicationsSuppressed) - beforeSuppressed; got != 3 {
+		t.Fatalf("first scrape counted %v suppressed indications, want 3", got)
+	}
 	GatherMetrics(stats)
+	if got := counterValue(t, GtpErrorIndicationsSuppressed) - beforeSuppressed; got != 3 {
+		t.Fatalf("repeated scrape counted %v suppressed indications, want 3", got)
+	}
 	if second := counterValue(t, counter); second != first {
 		t.Errorf("unchanged map counted again: first %v, second %v", first, second)
 	}

@@ -110,6 +110,9 @@ func (bpfObjects *BpfObjects) Load() error {
 		}
 		spec.Maps[name].MaxEntries = size
 	}
+	if err := configureGTPRestoration(spec); err != nil {
+		return err
+	}
 	if err := spec.LoadAndAssign(&bpfObjects.IpEntrypointObjects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
 		return err
 	}

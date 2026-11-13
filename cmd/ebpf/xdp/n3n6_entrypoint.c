@@ -69,6 +69,8 @@ struct dataplane_config {
     __u16  ip6_ra_prefix_length;
 } global_config;
 
+__u64 gtp_error_suppress_until;
+
 static __always_inline int is_local_ip(__u32 ip)
 {
     return (ip == global_config.n3_ipv4_address || ip == global_config.n9_ipv4_address);
@@ -458,6 +460,12 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
         // TS 29.281 V19.2.0 clause 7.3.1: discard unknown tunnels, with
         // Error Indication only for a nonzero TEID (subject to error policing).
         if (!teid || stale) return XDP_DROP;
+        // TS 23.527 V20.0.0 clause 4.3.2; TS 23.007 V19.2.0
+        // clauses 16.1A.4/17.1b.1: restoration must not tear down bearers.
+        if (gtp_error_suppress_until && bpf_ktime_get_ns() < gtp_error_suppress_until) {
+            ctx->counters->gtp_error_suppressed++;
+            return XDP_DROP;
+        }
         return UPF_ERROR_INDICATION;
     }
 

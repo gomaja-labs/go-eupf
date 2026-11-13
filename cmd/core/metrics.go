@@ -138,6 +138,13 @@ func RegisterMetrics(stats ebpf.UpfXdpActionStatistic, conn []*PfcpConnection) {
 // Packet and route metrics share one process-wide dataplane, like the metric
 // vectors themselves. Serialize the previous absolute snapshot across scrapes;
 // the UpfXdpActionStatistic argument is a value and cannot own this history.
+// GtpErrorIndicationsSuppressed counts the startup restoration guard separately
+// from diagnostic rate limiting. TS 23.527 V20.0.0 clause 4.3.2.
+var GtpErrorIndicationsSuppressed = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "upf_gtp_error_indications_suppressed_total",
+	Help: "Unknown-tunnel G-PDUs discarded without Error Indication during startup restoration",
+})
+
 var metricSnapshots struct {
 	sync.Mutex
 	source  *ebpf.BpfObjects
@@ -175,6 +182,11 @@ func GatherMetrics(stats ebpf.UpfXdpActionStatistic) {
 	add(UpfRx, "gtp-pdu", packets.RxGtpPdu, previous.RxGtpPdu)
 	add(UpfRx, "gtp-other", packets.RxGtpOther, previous.RxGtpOther)
 	add(UpfRx, "gtp-unexp", packets.RxGtpUnexp, previous.RxGtpUnexp)
+	deltaSuppressed := packets.GtpErrorSuppressed
+	if deltaSuppressed >= previous.GtpErrorSuppressed {
+		deltaSuppressed -= previous.GtpErrorSuppressed
+	}
+	GtpErrorIndicationsSuppressed.Add(float64(deltaSuppressed))
 	prior := metricSnapshots.routes
 	add(UpfRoute, "ip4-ok", routes.FibLookupIp4Ok, prior.FibLookupIp4Ok)
 	add(UpfRoute, "ip4-error-drop", routes.FibLookupIp4ErrorDrop, prior.FibLookupIp4ErrorDrop)

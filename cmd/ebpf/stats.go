@@ -14,18 +14,19 @@ type UpfXdpActionStatistic struct {
 }
 
 type UpfCounters struct {
-	RxArp      uint64
-	RxIcmp     uint64
-	RxIcmp6    uint64
-	RxIp4      uint64
-	RxIp6      uint64
-	RxTcp      uint64
-	RxUdp      uint64
-	RxOther    uint64
-	RxGtpEcho  uint64
-	RxGtpPdu   uint64
-	RxGtpOther uint64
-	RxGtpUnexp uint64
+	RxArp              uint64
+	RxIcmp             uint64
+	RxIcmp6            uint64
+	RxIp4              uint64
+	RxIp6              uint64
+	RxTcp              uint64
+	RxUdp              uint64
+	RxOther            uint64
+	RxGtpEcho          uint64
+	RxGtpPdu           uint64
+	RxGtpOther         uint64
+	RxGtpUnexp         uint64
+	GtpErrorSuppressed uint64
 }
 
 type UpfStatistic struct {
@@ -46,6 +47,7 @@ func (current *UpfCounters) Add(new UpfCounters) {
 	current.RxGtpPdu += new.RxGtpPdu
 	current.RxGtpOther += new.RxGtpOther
 	current.RxGtpUnexp += new.RxGtpUnexp
+	current.GtpErrorSuppressed += new.GtpErrorSuppressed
 }
 
 func (current *UpfCounters) Delta(new UpfCounters) UpfCounters {
@@ -64,6 +66,7 @@ func (current *UpfCounters) Delta(new UpfCounters) UpfCounters {
 	delta.RxGtpPdu = new.RxGtpPdu - current.RxGtpPdu
 	delta.RxGtpOther = new.RxGtpOther - current.RxGtpOther
 	delta.RxGtpUnexp = new.RxGtpUnexp - current.RxGtpUnexp
+	delta.GtpErrorSuppressed = new.GtpErrorSuppressed - current.GtpErrorSuppressed
 	return delta
 }
 
@@ -119,18 +122,19 @@ func (stat *UpfXdpActionStatistic) GetUpfExtStat() UpfCounters {
 
 	for _, statistic := range statistics {
 		counters.Add(UpfCounters{
-			RxArp:      statistic.UpfCounters.RxArp,
-			RxIcmp:     statistic.UpfCounters.RxIcmp,
-			RxIcmp6:    statistic.UpfCounters.RxIcmp6,
-			RxIp4:      statistic.UpfCounters.RxIp4,
-			RxIp6:      statistic.UpfCounters.RxIp6,
-			RxTcp:      statistic.UpfCounters.RxTcp,
-			RxUdp:      statistic.UpfCounters.RxUdp,
-			RxOther:    statistic.UpfCounters.RxOther,
-			RxGtpEcho:  statistic.UpfCounters.RxGtpEcho,
-			RxGtpPdu:   statistic.UpfCounters.RxGtpPdu,
-			RxGtpOther: statistic.UpfCounters.RxGtpOther,
-			RxGtpUnexp: statistic.UpfCounters.RxGtpUnexp,
+			RxArp:              statistic.UpfCounters.RxArp,
+			RxIcmp:             statistic.UpfCounters.RxIcmp,
+			RxIcmp6:            statistic.UpfCounters.RxIcmp6,
+			RxIp4:              statistic.UpfCounters.RxIp4,
+			RxIp6:              statistic.UpfCounters.RxIp6,
+			RxTcp:              statistic.UpfCounters.RxTcp,
+			RxUdp:              statistic.UpfCounters.RxUdp,
+			RxOther:            statistic.UpfCounters.RxOther,
+			RxGtpEcho:          statistic.UpfCounters.RxGtpEcho,
+			RxGtpPdu:           statistic.UpfCounters.RxGtpPdu,
+			RxGtpOther:         statistic.UpfCounters.RxGtpOther,
+			RxGtpUnexp:         statistic.UpfCounters.RxGtpUnexp,
+			GtpErrorSuppressed: statistic.UpfCounters.GtpErrorSuppressed,
 		})
 	}
 
@@ -150,18 +154,19 @@ func (stat *UpfXdpActionStatistic) GetUpfExtStatDelta() UpfCounters {
 
 	for _, statistic := range statistics {
 		counters.Add(UpfCounters{
-			RxArp:      statistic.UpfCounters.RxArp,
-			RxIcmp:     statistic.UpfCounters.RxIcmp,
-			RxIcmp6:    statistic.UpfCounters.RxIcmp6,
-			RxIp4:      statistic.UpfCounters.RxIp4,
-			RxIp6:      statistic.UpfCounters.RxIp6,
-			RxTcp:      statistic.UpfCounters.RxTcp,
-			RxUdp:      statistic.UpfCounters.RxUdp,
-			RxOther:    statistic.UpfCounters.RxOther,
-			RxGtpEcho:  statistic.UpfCounters.RxGtpEcho,
-			RxGtpPdu:   statistic.UpfCounters.RxGtpPdu,
-			RxGtpOther: statistic.UpfCounters.RxGtpOther,
-			RxGtpUnexp: statistic.UpfCounters.RxGtpUnexp,
+			RxArp:              statistic.UpfCounters.RxArp,
+			RxIcmp:             statistic.UpfCounters.RxIcmp,
+			RxIcmp6:            statistic.UpfCounters.RxIcmp6,
+			RxIp4:              statistic.UpfCounters.RxIp4,
+			RxIp6:              statistic.UpfCounters.RxIp6,
+			RxTcp:              statistic.UpfCounters.RxTcp,
+			RxUdp:              statistic.UpfCounters.RxUdp,
+			RxOther:            statistic.UpfCounters.RxOther,
+			RxGtpEcho:          statistic.UpfCounters.RxGtpEcho,
+			RxGtpPdu:           statistic.UpfCounters.RxGtpPdu,
+			RxGtpOther:         statistic.UpfCounters.RxGtpOther,
+			RxGtpUnexp:         statistic.UpfCounters.RxGtpUnexp,
+			GtpErrorSuppressed: statistic.UpfCounters.GtpErrorSuppressed,
 		})
 	}
 
