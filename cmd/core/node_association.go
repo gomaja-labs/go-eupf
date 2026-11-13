@@ -28,7 +28,6 @@ type NodeAssociation struct {
 	releaseRetryAt     time.Time
 	cleaning           bool
 	retired            bool
-	cleanupDeadline    time.Time
 	cleanupNext        time.Time
 	cleanupAttempts    uint32
 	cleanupError       error

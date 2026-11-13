@@ -242,3 +242,19 @@ func TestReplayBelowByteShareAdmitsWhileGlobalRoomRemains(t *testing.T) {
 		t.Fatal("below-share association denied available global capacity")
 	}
 }
+
+func TestCompletingReservedReplyKeepsExpiryOrder(t *testing.T) {
+	conn := newProtocolConnection(t)
+	a := requestKey{peer: "198.18.0.1:8805", sequence: 1, typ: 52}
+	b := requestKey{peer: "198.18.0.2:8805", sequence: 2, typ: 52}
+	conn.cacheReply(a, [32]byte{}, nil, "198.18.0.1", "a")
+	conn.cacheReply(b, [32]byte{}, []byte{1}, "198.18.0.2", "b")
+	conn.transport.responses[b].expires = time.Now().Add(-time.Second)
+	conn.cacheReply(a, [32]byte{}, []byte{1}, "198.18.0.1", "a")
+	conn.transport.mu.Lock()
+	conn.expireResponsesLocked(time.Now())
+	conn.transport.mu.Unlock()
+	if len(conn.transport.responses) != 1 || conn.transport.responses[a] == nil {
+		t.Fatal("late response completion blocked expiration of an older completed outcome")
+	}
+}

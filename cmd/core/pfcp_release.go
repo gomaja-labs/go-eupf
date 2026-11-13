@@ -202,7 +202,9 @@ func (conn *PfcpConnection) finishAssociationCleanupLocked(assoc *NodeAssociatio
 	if assoc.retired {
 		for i, current := range conn.retiredAssociations {
 			if current == assoc {
-				conn.retiredAssociations = append(conn.retiredAssociations[:i], conn.retiredAssociations[i+1:]...)
+				copy(conn.retiredAssociations[i:], conn.retiredAssociations[i+1:])
+				conn.retiredAssociations[len(conn.retiredAssociations)-1] = nil
+				conn.retiredAssociations = conn.retiredAssociations[:len(conn.retiredAssociations)-1]
 				break
 			}
 		}
@@ -264,7 +266,6 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 			}
 			log.Error().Err(err).Str("node", assoc.ID).Uint64("session", id).Uint32("attempt", assoc.cleanupAttempts).Msg("Rule cleanup failed; retain session ownership and IDs")
 		} else {
-			delete(assoc.cleanupFailures, id)
 			conn.forgetSession(assoc, id)
 		}
 	}

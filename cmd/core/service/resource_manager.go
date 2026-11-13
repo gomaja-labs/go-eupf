@@ -378,6 +378,9 @@ func (pool *FTEIDM) ReleaseUnused(owner uint64, active map[uint32]uint32) {
 	delete(pool.busyTEIDs, owner)
 	for pdr, teid := range active {
 		if current, ok := pool.reservedTEIDs[teid]; (ok && current == owner) || pool.parent != nil {
+			if pool.busyTEIDs == nil {
+				pool.busyTEIDs = make(map[uint64]map[uint32]uint32)
+			}
 			if pool.busyTEIDs[owner] == nil {
 				pool.busyTEIDs[owner] = make(map[uint32]uint32)
 			}

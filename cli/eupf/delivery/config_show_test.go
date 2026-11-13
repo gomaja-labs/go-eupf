@@ -15,7 +15,7 @@ import (
 )
 
 func TestConfigShowPreservesServerFields(t *testing.T) {
-	serverConfig := serverconfig.UpfConfig{PfcpPeerAllowList: []string{"192.0.2.0/24"}, PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxReplayEntries: 128, PfcpMaxOriginatedRequests: 64, PfcpReplayMemoryMiB: 32, PfcpMaxAssociations: 16, HeartbeatFailureGrace: 15}
+	serverConfig := serverconfig.UpfConfig{PfcpPeerAllowList: []string{"192.0.2.0/24"}, PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxReplayEntries: 128, PfcpMaxOriginatedRequests: 64, PfcpReplayMemoryMiB: 32, ResourceReuseDelay: 60, PfcpMaxAssociations: 16, HeartbeatFailureGrace: 15}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(serverConfig)

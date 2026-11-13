@@ -383,3 +383,22 @@ func TestTransientCleanupFailureDoesNotLimitHealthyProgress(t *testing.T) {
 		t.Fatalf("slow but successful cleanup declared terminal after one transient failure: %v", err)
 	}
 }
+
+func TestCleanupFailureHistoryEndsWithSuccessfulDeletion(t *testing.T) {
+	conn := newProtocolConnection(t)
+	conn.mapOperations = &releaseCleanupMaps{failures: 1}
+	assoc := NewNodeAssociation("cleanup.example", "127.0.0.92")
+	s := NewSession(11, 77, "", "", false)
+	s.NewFar(1, 1, ebpf.FarInfo{Action: 1})
+	assoc.Sessions[11] = s
+	conn.NodeAssociations[assoc.ID] = assoc
+	conn.DeleteAssociation(assoc.ID)
+	conn.serviceHeartbeats(time.Now())
+	if len(assoc.cleanupFailures) != 1 {
+		t.Fatal("first failure was not retained for retry")
+	}
+	conn.serviceHeartbeats(time.Now().Add(200 * time.Millisecond))
+	if len(assoc.cleanupFailures) != 0 || conn.GetAssiciationCount() != 0 {
+		t.Fatal("successful deletion retained its failure history")
+	}
+}

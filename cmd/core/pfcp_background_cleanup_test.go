@@ -64,8 +64,13 @@ func TestReplacementAndRestartAnswerBeforeRuleCleanup(t *testing.T) {
 			if cause := pipelineCause(t, identityRead(t, cp)); cause != ie.CauseSessionContextNotFound {
 				t.Fatalf("invalidated session cause %d, want 65", cause)
 			}
+			otherEntity := identityPeer(t, "127.0.0.27", 0)
+			conn.Handle(protocolWire(t, message.NewSessionModificationRequest(11, 42)), otherEntity.LocalAddr().(*net.UDPAddr))
+			if cause := pipelineCause(t, identityRead(t, otherEntity)); cause != ie.CauseSessionContextNotFound {
+				t.Fatalf("invalidated session from another admitted address cause %d", cause)
+			}
 			// Admission uses the replacement immediately, independently of cleanup.
-			pipelineEstablish(t, conn, cp, assoc.ID, 700, "127.0.0.25", 1, 4)
+			newSEID := pipelineEstablish(t, conn, cp, assoc.ID, 700, "127.0.0.25", 1, 4)
 			current := conn.associationByID(assoc.ID)
 			if mode == "selective" && current.Sessions[140] == nil {
 				t.Fatal("selectively retained session missing")
@@ -79,6 +84,12 @@ func TestReplacementAndRestartAnswerBeforeRuleCleanup(t *testing.T) {
 			}
 			for range 3 {
 				conn.serviceHeartbeats(time.Now())
+			}
+			if current.Sessions[newSEID] == nil || conn.associationByID(assoc.ID) != current {
+				t.Fatal("old cleanup removed the new association or its session")
+			}
+			if replayed := pipelineEstablish(t, conn, cp, assoc.ID, 700, "127.0.0.25", 1, 4); replayed != newSEID {
+				t.Fatal("old cleanup invalidated the new association's replay outcomes")
 			}
 			if err := resources.FTEIDM.ReserveTEID(999, 1, 11); err != nil {
 				t.Fatalf("completed cleanup retained TEID: %v", err)

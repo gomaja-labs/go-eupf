@@ -20,7 +20,7 @@ func TestRestoreRejectsChangedStartupPolicyBeforeEdits(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{BackupPath: t.TempDir()}
 	storage := file.NewFileRepository(cfg)
-	saved := &domain.UpfConfig{PfcpPeerAllowList: []string{"192.0.2.0/24"}, PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxReplayEntries: 128, PfcpMaxOriginatedRequests: 64, PfcpReplayMemoryMiB: 32, PfcpMaxAssociations: 16, HeartbeatFailureGrace: 15, GtpEchoInterval: 60}
+	saved := &domain.UpfConfig{PfcpPeerAllowList: []string{"192.0.2.0/24"}, PfcpRequestTimeout: 2, PfcpRequestRetries: 4, PfcpResponseRetention: 30, PfcpMaxReplayEntries: 128, PfcpMaxOriginatedRequests: 64, PfcpReplayMemoryMiB: 32, ResourceReuseDelay: 60, PfcpMaxAssociations: 16, HeartbeatFailureGrace: 15, GtpEchoInterval: 60}
 	if err := storage.SaveUpfConfig(ctx, saved); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestRestoreRejectsChangedStartupPolicyBeforeEdits(t *testing.T) {
 	}
 	u := NewEupf(repo, storage, cfg)
 	err = u.BackupRestore(ctx, "", backups[0].Name)
-	for _, key := range []string{"pfcp_peer_allow_list", "pfcp_request_timeout", "pfcp_request_retries", "pfcp_response_retention", "pfcp_max_replay_entries", "pfcp_max_originated_requests", "pfcp_replay_memory_mib", "pfcp_max_associations", "heartbeat_failure_grace"} {
+	for _, key := range []string{"pfcp_peer_allow_list", "pfcp_request_timeout", "pfcp_request_retries", "pfcp_response_retention", "pfcp_max_replay_entries", "pfcp_max_originated_requests", "pfcp_replay_memory_mib", "pfcp_max_associations", "heartbeat_failure_grace", "resource_reuse_delay"} {
 		if err == nil || !strings.Contains(err.Error(), key) {
 			t.Errorf("missing restart requirement for %s: %v", key, err)
 		}
