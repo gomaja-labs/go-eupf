@@ -246,8 +246,8 @@ func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, en
 	}
 	if budget := state.responseBudgets[id]; budget != nil {
 		for element := budget.entries.Front(); element != nil; {
-			next := element.Next()
-			e := element.Value.(*responseIndex)
+			next := element.ownerNext
+			e := element
 			entry := state.responses[e.key]
 			if (!keepSetup || e.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entry.entity == entity) {
 				state.removeResponse(e)

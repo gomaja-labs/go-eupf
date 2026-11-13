@@ -513,7 +513,7 @@ func (conn *PfcpConnection) bundleAssociation(msg message.Message, peer *net.UDP
 	}
 	key := requestKey{peer: peer.String(), sequence: msg.Sequence(), typ: msg.MessageType(), digest: sha256.Sum256(wire)}
 	if entry, ok := conn.transport.responses[key]; ok {
-		return activeAssociation(conn.associationByID(entry.index.budget.host))
+		return activeAssociation(conn.associationByID(entry.budget.host))
 	}
 	return nil
 }

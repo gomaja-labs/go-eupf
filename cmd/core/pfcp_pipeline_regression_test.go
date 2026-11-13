@@ -196,8 +196,8 @@ func TestReplayRetentionProtectsDelayedRetransmissions(t *testing.T) {
 	pipelineDrain(a)
 	pipelineDrain(b)
 	conn.transport.mu.Lock()
-	for e := conn.transport.responseExpiry.Front(); e != nil; e = e.Next() {
-		index := e.Value.(*responseIndex)
+	for e := conn.transport.responseExpiry.Front(); e != nil; e = e.expiryNext {
+		index := e
 		age := 25 * time.Second
 		if index.key.typ == message.MsgTypeAssociationSetupRequest {
 			age = 61 * time.Second

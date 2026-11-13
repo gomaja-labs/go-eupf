@@ -108,7 +108,7 @@ func TestReplayFairShareNeverEvictsUnexpiredOutcomes(t *testing.T) {
 		t.Fatal("below-share entrant denied available capacity")
 	}
 	conn.cacheReply(next, [32]byte{}, []byte{1}, "light", "light")
-	created := conn.transport.responseExpiry.Front().Value.(*responseIndex).created
+	created := conn.transport.responseExpiry.Front().created
 	next.sequence++
 	if _, _, err := conn.cachedReplyAt(next, [32]byte{}, created.Add(25*time.Second), "light"); err == nil {
 		t.Fatal("evicted an unexpired outcome")

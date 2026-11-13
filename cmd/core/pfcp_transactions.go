@@ -4,7 +4,6 @@
 package core
 
 import (
-	"container/list"
 	"errors"
 	"fmt"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
@@ -28,10 +27,10 @@ type transportState struct {
 	mu              sync.Mutex
 	next            uint32
 	pending         map[uint32]*pendingRequest
-	responses       map[requestKey]cachedResponse
+	responses       map[requestKey]*responseIndex
 	bytes           int
 	pendingBytes    int
-	responseExpiry  list.List
+	responseExpiry  responseList
 	responseBudgets map[string]*responseBudget
 }
 type requestKey struct {
@@ -39,12 +38,6 @@ type requestKey struct {
 	sequence uint32
 	typ      uint8
 	digest   [32]byte
-}
-type cachedResponse struct {
-	wire    []byte
-	expires time.Time
-	entity  string
-	index   *responseIndex
 }
 type pendingRequest struct {
 	wire          []byte
@@ -344,15 +337,74 @@ const responseReservation = 65535 + responseMetadataBytes + 512
 
 type responseBudget struct {
 	host    string // Association Node ID; host only in isolated index tests.
-	entries list.List
+	entries responseList
 	bytes   int
 }
 type responseIndex struct {
-	key                    requestKey
-	created, expires       time.Time
-	budget                 *responseBudget
-	element, expiryElement *list.Element
-	size                   int
+	key                        requestKey
+	wire                       []byte
+	entity                     string
+	created, expires           time.Time
+	budget                     *responseBudget
+	ownerPrevious, ownerNext   *responseIndex
+	expiryPrevious, expiryNext *responseIndex
+	size                       int
+}
+
+// responseList embeds both indexes in their existing cache entry, avoiding
+// interface-valued list elements and their extra allocations and GC roots.
+type responseList struct {
+	head, tail *responseIndex
+	count      int
+}
+
+func (l *responseList) Front() *responseIndex { return l.head }
+func (l *responseList) Len() int              { return l.count }
+func (l *responseList) append(e *responseIndex, expiry bool) {
+	if expiry {
+		e.expiryPrevious = l.tail
+		e.expiryNext = nil
+		if l.tail != nil {
+			l.tail.expiryNext = e
+		}
+	} else {
+		e.ownerPrevious = l.tail
+		e.ownerNext = nil
+		if l.tail != nil {
+			l.tail.ownerNext = e
+		}
+	}
+	if l.head == nil {
+		l.head = e
+	}
+	l.tail = e
+	l.count++
+}
+func (l *responseList) remove(e *responseIndex, expiry bool) {
+	previous, next := e.ownerPrevious, e.ownerNext
+	if expiry {
+		previous, next = e.expiryPrevious, e.expiryNext
+	}
+	if previous == nil {
+		l.head = next
+	} else if expiry {
+		previous.expiryNext = next
+	} else {
+		previous.ownerNext = next
+	}
+	if next == nil {
+		l.tail = previous
+	} else if expiry {
+		next.expiryPrevious = previous
+	} else {
+		next.ownerPrevious = previous
+	}
+	if expiry {
+		e.expiryPrevious, e.expiryNext = nil, nil
+	} else {
+		e.ownerPrevious, e.ownerNext = nil, nil
+	}
+	l.count--
 }
 
 // Both indexes are intrusive lists: expiration and per-association invalidation
@@ -365,8 +417,8 @@ func (state *transportState) removeResponse(e *responseIndex) {
 func (state *transportState) unlinkResponse(e *responseIndex) {
 	state.bytes -= e.size
 	delete(state.responses, e.key)
-	state.responseExpiry.Remove(e.expiryElement)
-	e.budget.entries.Remove(e.element)
+	state.responseExpiry.remove(e, true)
+	e.budget.entries.remove(e, false)
 	e.budget.bytes -= e.size
 	if e.budget.entries.Len() == 0 {
 		delete(state.responseBudgets, e.budget.host)
@@ -375,7 +427,7 @@ func (state *transportState) unlinkResponse(e *responseIndex) {
 func (conn *PfcpConnection) expireResponsesLocked(now time.Time) {
 	state := &conn.transport
 	for front := state.responseExpiry.Front(); front != nil; front = state.responseExpiry.Front() {
-		e := front.Value.(*responseIndex)
+		e := front
 		if now.Before(e.expires) {
 			break
 		}
@@ -439,19 +491,31 @@ func (conn *PfcpConnection) cacheReplyLocked(key requestKey, wire []byte, entity
 	state := &conn.transport
 	budgetAccount := conn.replayBudgetLocked()
 	if state.responses == nil {
-		state.responses = make(map[requestKey]cachedResponse)
+		state.responses = make(map[requestKey]*responseIndex)
 	}
 	if state.responseBudgets == nil {
 		state.responseBudgets = make(map[string]*responseBudget)
 	}
+	ttl := conn.responseRetention
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	now := time.Now()
 	cost := len(wire) + len(key.peer) + len(entity) + responseMetadataBytes
 	if wire == nil {
 		cost = responseReservation
 	}
 	if old, ok := state.responses[key]; ok {
-		budgetAccount.Change(owner, 0, cost-old.index.size)
-		state.unlinkResponse(old.index)
-	} else if !reserved {
+		delta := cost - old.size
+		budgetAccount.Change(owner, 0, delta)
+		state.bytes += delta
+		old.budget.bytes += delta
+		old.wire, old.entity, old.created, old.expires, old.size = wire, entity, now, now.Add(ttl), cost
+		state.responseExpiry.remove(old, true)
+		state.responseExpiry.append(old, true)
+		return
+	}
+	if !reserved {
 		budgetAccount.Change(owner, 1, cost)
 	}
 	budget := state.responseBudgets[owner]
@@ -459,16 +523,11 @@ func (conn *PfcpConnection) cacheReplyLocked(key requestKey, wire []byte, entity
 		budget = &responseBudget{host: owner}
 		state.responseBudgets[owner] = budget
 	}
-	ttl := conn.responseRetention
-	if ttl <= 0 {
-		ttl = time.Minute
-	}
-	now := time.Now()
-	e := &responseIndex{key: key, created: now, expires: now.Add(ttl), budget: budget, size: cost}
-	e.element = budget.entries.PushBack(e)
-	e.expiryElement = state.responseExpiry.PushBack(e)
+	e := &responseIndex{key: key, wire: wire, entity: entity, created: now, expires: now.Add(ttl), budget: budget, size: cost}
+	budget.entries.append(e, false)
+	state.responseExpiry.append(e, true)
 	budget.bytes += cost
-	state.responses[key] = cachedResponse{wire: wire, expires: e.expires, entity: entity, index: e}
+	state.responses[key] = e
 	state.bytes += cost
 }
 
@@ -489,13 +548,13 @@ func (conn *PfcpConnection) discardReply(key requestKey, digest [32]byte) {
 	defer conn.transport.mu.Unlock()
 	key.digest = digest
 	if entry, ok := conn.transport.responses[key]; ok {
-		conn.transport.removeResponse(entry.index)
+		conn.transport.removeResponse(entry)
 	}
 }
 
 func (state *transportState) clearResponses() {
 	for _, entry := range state.responses {
-		state.removeResponse(entry.index)
+		state.removeResponse(entry)
 	}
 }
 

@@ -167,7 +167,7 @@ func TestResponseBudgetsProtectConfiguredRetention(t *testing.T) {
 	conn.maxReplayEntries = 1
 	key := requestKey{peer: "127.0.0.1:8805", sequence: 1, typ: 5}
 	conn.cacheReply(key, [32]byte{1}, []byte{1})
-	created := conn.transport.responseExpiry.Front().Value.(*responseIndex).created
+	created := conn.transport.responseExpiry.Front().created
 	next := requestKey{peer: "127.0.0.1:9999", sequence: 2, typ: 5}
 	if _, _, err := conn.cachedReplyAt(next, [32]byte{2}, created.Add(conn.responseRetention-time.Nanosecond)); err == nil {
 		t.Fatal("evicted within minimum replay window")
