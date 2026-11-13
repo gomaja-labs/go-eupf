@@ -149,9 +149,7 @@ func (conn *PfcpConnection) serviceReleasesLocked(now time.Time) []admittedReque
 	var outgoing []admittedRequest
 	for _, assoc := range conn.NodeAssociations {
 		if assoc.cleaning {
-			if !assoc.cleanupDeadline.IsZero() && !now.Before(assoc.cleanupDeadline) {
-				conn.cleanupFailedLocked(assoc)
-			} else if !now.Before(assoc.cleanupNext) {
+			if !now.Before(assoc.cleanupNext) {
 				conn.cleanupAssociationLocked(assoc, now)
 			}
 			continue
@@ -209,41 +207,70 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 	}
 	assoc.cleanupAttempts++
 	batch := 0
-	failed := false
-	for id, session := range assoc.Sessions {
-		if batch >= 64 {
-			break
-		}
+	attempt := func(id uint64, session *Session) {
 		batch++
 		if err := conn.DeleteSession(session); err != nil {
-			failed = true
-			if assoc.cleanupDeadline.IsZero() {
-				assoc.cleanupDeadline = time.Now().Add(AssociationCleanupTimeout)
+			failure := assoc.cleanupFailures[id]
+			if failure.first.IsZero() {
+				failure.first = time.Now()
 			}
+			failure.attempts++
+			failure.err = err
+			delay := 100 * time.Millisecond
+			for n := uint32(1); n < failure.attempts && delay < 500*time.Millisecond; n++ {
+				delay = min(500*time.Millisecond, delay*2)
+			}
+			failure.next = maxTime(now, time.Now()).Add(delay)
+			if assoc.cleanupFailures == nil {
+				assoc.cleanupFailures = make(map[uint64]cleanupFailure)
+			}
+			assoc.cleanupFailures[id] = failure
 			assoc.cleanupError = err
+			if now.Sub(failure.first) >= AssociationCleanupTimeout {
+				conn.cleanupFailedLocked(assoc)
+			}
 			log.Error().Err(err).Str("node", assoc.ID).Uint64("session", id).Uint32("attempt", assoc.cleanupAttempts).Msg("Rule cleanup failed; retain session ownership and IDs")
 		} else {
+			delete(assoc.cleanupFailures, id)
 			conn.forgetSession(assoc, id)
+		}
+	}
+	// Retry failed sessions first so a large healthy backlog cannot starve them.
+	for id, failure := range assoc.cleanupFailures {
+		if batch >= 64 || conn.terminalError != nil {
+			break
+		}
+		if !now.Before(failure.next) {
+			attempt(id, assoc.Sessions[id])
+		}
+	}
+	for id, session := range assoc.Sessions {
+		if batch >= 64 || conn.terminalError != nil {
+			break
+		}
+		if _, failed := assoc.cleanupFailures[id]; !failed {
+			attempt(id, session)
 		}
 	}
 	if len(assoc.Sessions) == 0 {
 		conn.finishAssociationCleanupLocked(assoc)
 		return
 	}
-	if !failed {
-		assoc.cleanupNext = time.Time{}
-		return
+	assoc.cleanupNext = time.Time{}
+	if len(assoc.cleanupFailures) == len(assoc.Sessions) {
+		for _, failure := range assoc.cleanupFailures {
+			if assoc.cleanupNext.IsZero() || failure.next.Before(assoc.cleanupNext) {
+				assoc.cleanupNext = failure.next
+			}
+		}
 	}
-	delay := 100 * time.Millisecond
-	for n := uint32(1); n < assoc.cleanupAttempts && delay < 500*time.Millisecond; n++ {
-		delay = min(500*time.Millisecond, delay*2)
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
 	}
-	// Journal work can take time; start backoff after the failed attempt.
-	retryBase := time.Now()
-	if now.After(retryBase) {
-		retryBase = now
-	}
-	assoc.cleanupNext = retryBase.Add(delay)
+	return b
 }
 func (conn *PfcpConnection) cleanupFailedLocked(assoc *NodeAssociation) {
 	if conn.terminalError != nil {

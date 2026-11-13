@@ -31,6 +31,13 @@ type NodeAssociation struct {
 	cleanupNext        time.Time
 	cleanupAttempts    uint32
 	cleanupError       error
+	cleanupFailures    map[uint64]cleanupFailure
+}
+
+type cleanupFailure struct {
+	first, next time.Time
+	attempts    uint32
+	err         error
 }
 
 func NewNodeAssociation(remoteNodeID, addr string) *NodeAssociation {

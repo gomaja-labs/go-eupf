@@ -338,3 +338,48 @@ func TestShutdownCancelsPendingAndRefusesRacingOriginatedSetup(t *testing.T) {
 		t.Fatal("originated Setup sent during shutdown")
 	}
 }
+
+func TestTransientCleanupFailureDoesNotLimitHealthyProgress(t *testing.T) {
+	conn := newProtocolConnection(t)
+	maps := &releaseCleanupMaps{failures: 1}
+	conn.mapOperations = maps
+	peer := identityPeer(t, "127.0.0.93", 0)
+	identitySetup(t, conn, peer, "slow.example")
+	assoc := conn.associationByID("slow.example")
+	const sessions = 64*4 + 1
+	for id := uint64(1); id <= sessions; id++ {
+		s := NewSession(id, 1000+id, "", "", false)
+		s.NewFar(1, uint32(id), ebpf.FarInfo{Action: 1})
+		assoc.Sessions[id] = s
+	}
+	conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(2, ie.NewNodeIDFQDN("slow.example"))), peer.LocalAddr().(*net.UDPAddr))
+	if response := identityRead(t, peer).(*message.AssociationReleaseResponse); pipelineCause(t, response) != ie.CauseRequestAccepted {
+		t.Fatal("release not accepted")
+	}
+	step := func(at time.Time) (int, error) {
+		conn.stateMu.Lock()
+		conn.serviceReleasesLocked(at)
+		remaining := len(assoc.Sessions)
+		err := conn.terminalError
+		conn.stateMu.Unlock()
+		return remaining, err
+	}
+	start := time.Now()
+	// Batch 1: the first deletion fails once (transient), 63 succeed.
+	remaining, err := step(start)
+	t.Logf("after batch 1: remaining=%d deletions=%d err=%v", remaining, len(maps.attempts), err)
+	// Batches 2 and 3 succeed completely (pacing as on the real data plane).
+	for i, at := range []time.Duration{200 * time.Millisecond, 400 * time.Millisecond} {
+		remaining, err = step(start.Add(at))
+		t.Logf("after batch %d at +%s: remaining=%d deletions=%d err=%v", i+2, at, remaining, len(maps.attempts), err)
+		if err != nil {
+			t.Fatalf("early fatal: %v", err)
+		}
+	}
+	// A later healthy batch, 3.5 s after the single failure: progress continues.
+	remaining, err = step(start.Add(3500 * time.Millisecond))
+	t.Logf("after batch at +3.5s: remaining=%d deletions=%d failures_injected=%d err=%v", remaining, len(maps.attempts), maps.failures, err)
+	if err != nil {
+		t.Fatalf("slow but successful cleanup declared terminal after one transient failure: %v", err)
+	}
+}
