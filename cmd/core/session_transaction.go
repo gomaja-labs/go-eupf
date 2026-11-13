@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"net"
+	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
@@ -14,10 +15,11 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 // prepareSessionMutation creates the private reservation view under stateMu.
 // Parsing and validation finish before map publication. Commit then
 // reserves every rule slot before applying the first map write.
-func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() error, func(bool) error) {
+func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessionMutationKind) (func() error, func(bool) error) {
 	maps, resources := conn.mapOperations, conn.ResourceManager
 	unlockReservations := resources.LockReservations()
-	journal := resources.BeginReservation(session.LocalSEID)
+	owner := session.LocalSEID
+	journal := resources.BeginReservation(owner)
 	reserved := journal.View()
 	proxy := &sessionMapProxy{maps}
 	conn.mapOperations, conn.ResourceManager = proxy, reserved
@@ -52,15 +54,34 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() err
 		finished = true
 		defer unlockReservations()
 		defer func() { conn.mapOperations, conn.ResourceManager = maps, resources }()
+		retirement := func(reclaim func() error, committing bool) (func() error, func()) {
+			release := kind == createSessionMutation && !committing || kind == deleteSessionMutation && committing
+			if !release {
+				return reclaim, func() {}
+			}
+			completion := &sessionRetirement{release: func() { resources.ReleaseSession(owner) }}
+			return func() error {
+				err := reclaimReservations(reclaim)
+				if err == nil {
+					completion.retired()
+				}
+				return err
+			}, completion.allow
+		}
 		if tx == nil {
-			return reclaimReservations(journal.Rollback())
+			reclaim, allow := retirement(journal.Rollback(), false)
+			err := reclaimReservations(reclaim)
+			if err == nil {
+				allow()
+			}
+			return err
 		}
 		async, deferred := tx.(interface {
 			RetireResources(func() error)
 			UsageCompletion() <-chan error
 		})
-		if !commit {
-			reclaim := journal.Rollback()
+		rollback := func() error {
+			reclaim, allow := retirement(journal.Rollback(), false)
 			if deferred {
 				async.RetireResources(reclaim)
 			}
@@ -68,40 +89,75 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session) (func() err
 			if !deferred && err == nil {
 				err = reclaimReservations(reclaim)
 			}
+			if err == nil {
+				allow()
+			}
 			return err
+		}
+		if !commit {
+			return rollback()
 		}
 		if !deferred && journal.Releases() {
 			if err := tx.SynchronizeRules(); err != nil {
-				reclaim := journal.Rollback()
-				rollback := tx.Rollback()
-				if rollback == nil {
-					_ = reclaimReservations(reclaim)
-				}
-				return errors.Join(err, rollback)
+				return errors.Join(err, rollback())
 			}
 		}
-		reclaim := journal.Commit()
+		reclaim, allow := retirement(journal.Commit(), true)
 		if deferred {
 			async.RetireResources(reclaim)
 		}
 		if err := tx.Commit(); err != nil {
-			reclaim = journal.Rollback()
-			if deferred {
-				async.RetireResources(reclaim)
-			}
-			rollback := tx.Rollback()
-			if !deferred && rollback == nil {
-				_ = reclaimReservations(reclaim)
-			}
-			return errors.Join(err, rollback)
+			return errors.Join(err, rollback())
 		}
 		if deferred {
+			allow()
 			conn.responseWait = async.UsageCompletion()
 			return nil
 		}
-		return reclaimReservations(reclaim)
+		err := reclaimReservations(reclaim)
+		if err == nil {
+			allow()
+		}
+		return err
 	}
 	return start, finish
+}
+
+type sessionMutationKind uint8
+
+const (
+	updateSessionMutation sessionMutationKind = iota
+	createSessionMutation
+	deleteSessionMutation
+)
+
+// Reclamation may finish before Commit returns. A slot is released only after
+// both reclamation and the successful terminal transaction result are known.
+// A failed deletion keeps its slot; a successfully rolled-back creation frees it.
+type sessionRetirement struct {
+	mu                   sync.Mutex
+	reclaimed, permitted bool
+	release              func()
+}
+
+func (completion *sessionRetirement) retired() { completion.finish(false) }
+func (completion *sessionRetirement) allow()   { completion.finish(true) }
+func (completion *sessionRetirement) finish(permit bool) {
+	completion.mu.Lock()
+	if permit {
+		completion.permitted = true
+	} else {
+		completion.reclaimed = true
+	}
+	var release func()
+	if completion.permitted && completion.reclaimed {
+		release = completion.release
+		completion.release = nil
+	}
+	completion.mu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 // reconcileSessionResources runs on the reservation view after map changes,

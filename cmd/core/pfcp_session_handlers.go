@@ -71,6 +71,16 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if localSEID == 0 {
 		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 	}
+	if err := conn.ResourceManager.AdmitSession(localSEID); err != nil {
+		cause := ie.CauseNoResourcesAvailable
+		// Preserve the requested-restoration resource cause even when the
+		// context bound is full. TS 23.527 V20.0.0 clause 4.3.2;
+		// TS 29.244 V20.1.0 table 8.2.1-1 (Causes 75 and 86).
+		if restorationTEIDCollision(req, conn.ResourceManager) {
+			cause = ie.CauseSessionRestorationResourceUnavailable
+		}
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(cause)), isTraced, nil
+	}
 	session := NewSession(localSEID, remoteSEID.SEID, imsi, msisdn, isTraced)
 	session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(remoteSEID.IPv4Address), slices.Clone(remoteSEID.IPv6Address)
 	if zerolog.GlobalLevel() <= zerolog.DebugLevel {
@@ -86,7 +96,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		Uint64("RemoteSEID", session.RemoteSEID).
 		Logger()
 
-	start, finish := conn.prepareSessionMutation(session)
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -168,6 +178,27 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	return estResp, isTraced, nil
 }
 
+func restorationTEIDCollision(request *message.SessionEstablishmentRequest, resources *service.ResourceManager) bool {
+	if !request.PFCPSEReqFlags.HasRESTI() || resources == nil || resources.FTEIDM == nil {
+		return false
+	}
+	for _, pdr := range request.CreatePDR {
+		fields, err := pdr.CreatePDR()
+		if err != nil {
+			continue
+		}
+		detection, err := fields.PDI.PDI()
+		if err != nil {
+			continue
+		}
+		tunnel, err := detection.LocalFTEID.FTEID()
+		if err == nil && !tunnel.HasCh() && resources.FTEIDM.HasTEID(tunnel.TEID) {
+			return true
+		}
+	}
+	return false
+}
+
 func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message, addr string) (result message.Message, tracedResult bool, handlerErr error) {
 	req := msg.(*message.SessionDeletionRequest)
 	log.Debug().Msgf("Got Session Deletion Request from: %s. \n", addr)
@@ -198,7 +229,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 
 	traced := session.IsSessionTraced()
 
-	start, finish := conn.prepareSessionMutation(session)
+	start, finish := conn.prepareSessionMutation(session, deleteSessionMutation)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -288,7 +319,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		printSessionModificationRequest(req, conn.profile)
 	}
 
-	start, finish := conn.prepareSessionMutation(session)
+	start, finish := conn.prepareSessionMutation(session, updateSessionMutation)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")

@@ -42,7 +42,7 @@ List-valued parameters (e.g. `UPF_INTERFACE_NAME`) are comma-separated strings.
 
 ### Sessions and memory
 
-The chart sets `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
+The chart sets the shared session admission limit `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
 
 eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash maps hold small slot descriptors and IPv6 trie storage grows as rules are installed; the shared PDR bucket array is preallocated with four times each hash map's capacity plus slot zero. Both are charged to the container's memory cgroup. The process includes the observed startup charge and a reserve for growing PDR maps plus 32 KiB per configured session for measured live state and GC when deriving its Go soft memory limit and rejects a hard limit that cannot fit the configured capacity.
 

@@ -19,7 +19,7 @@ func TestReservationCostIndependentOfPoolSize(t *testing.T) {
 		}
 		conn.ResourceManager = resources
 		allocations := testing.AllocsPerRun(3, func() {
-			_, finish := conn.prepareSessionMutation(NewSession(11, 77, "", "", false))
+			_, finish := conn.prepareSessionMutation(NewSession(11, 77, "", "", false), updateSessionMutation)
 			if err := finish(false); err != nil {
 				t.Fatal(err)
 			}
@@ -29,7 +29,7 @@ func TestReservationCostIndependentOfPoolSize(t *testing.T) {
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		for range 64 {
-			_, finish := conn.prepareSessionMutation(NewSession(11, 77, "", "", false))
+			_, finish := conn.prepareSessionMutation(NewSession(11, 77, "", "", false), updateSessionMutation)
 			if err := finish(false); err != nil {
 				t.Fatal(err)
 			}

@@ -125,6 +125,11 @@ func NewPfcpConnection(
 	if resourceManager == nil {
 		return nil, fmt.Errorf("a shared UPF resource manager is required")
 	}
+	if config.Conf.MaxSessions > 0 {
+		if err := resourceManager.SetSessionCapacity(config.Conf.MaxSessions); err != nil {
+			return nil, fmt.Errorf("configure session admission: %w", err)
+		}
+	}
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		log.Warn().Msgf("Can't resolve UDP address: %s", err.Error())
@@ -692,7 +697,7 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 // TS 29.244 V20.1.0 clauses 6.2.8.3 and 6.3.4.
 func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
 	draft := cloneSession(session)
-	start, finish := connection.prepareSessionMutation(draft)
+	start, finish := connection.prepareSessionMutation(draft, deleteSessionMutation)
 	defer func() { err = errors.Join(err, finish(false)) }()
 	pool := NewOperationPool()
 	pool.Before = start

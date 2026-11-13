@@ -288,6 +288,38 @@ def test_fqdn_heartbeat_restart_discards_predecessor_replay(server):
     finally:
         remote.close()
 
+
+def test_session_capacity_counts_empty_contexts_until_reclamation(server):
+    remote = Peer(server(("--maxsessions", "2")))
+    try:
+        remote.associate()
+        first = remote.establish([uplink_far(), uplink_pdr()])
+        assert first[pfcp.IE_Cause].cause == 1
+        first_seid = first[pfcp.IE_FSEID].seid
+        second = remote.establish([uplink_far(), uplink_pdr()])
+        assert second[pfcp.IE_Cause].cause == 1
+        collision = remote.establish([uplink_far(), uplink_pdr(teid=first[pfcp.IE_FTEID].TEID),
+            pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
+        assert collision[pfcp.IE_Cause].cause == 86
+        assert remote.establish([uplink_far(), uplink_pdr()])[pfcp.IE_Cause].cause == 75
+        removed = remote.request(pfcp.PFCPSessionModificationRequest(IE_list=[
+            pfcp.IE_RemovePDR(IE_list=[pfcp.IE_PDR_Id(id=1)]),
+            pfcp.IE_RemoveFAR(IE_list=[pfcp.IE_FAR_Id(id=1)]),
+        ]), first_seid)
+        assert removed[pfcp.IE_Cause].cause == 1
+        assert remote.establish([uplink_far(), uplink_pdr()])[pfcp.IE_Cause].cause == 75
+        assert remote.request(pfcp.PFCPSessionDeletionRequest(), first_seid)[pfcp.IE_Cause].cause == 1
+        deadline = time.monotonic() + 2
+        while True:
+            restored_capacity = remote.establish([uplink_far(), uplink_pdr()])
+            if restored_capacity[pfcp.IE_Cause].cause == 1:
+                break
+            assert restored_capacity[pfcp.IE_Cause].cause == 75
+            assert time.monotonic() < deadline, "completed reclamation retained the session slot"
+            time.sleep(.01)
+    finally:
+        remote.close()
+
 def test_failed_usage_survives_last_pdr_dissociation(server):
     # TS 29.244 V20.1.0 clause 5.2.2.3.1 retains the URR across dissociation.
     remote = Peer(server())
