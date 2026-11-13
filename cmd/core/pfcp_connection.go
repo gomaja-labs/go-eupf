@@ -46,6 +46,7 @@ var pfcpHandlers = PfcpHandlerMap{
 }
 
 type PfcpConnection struct {
+	packetBuffers    *PacketBuffering
 	downlinkSessions map[uint64]*NodeAssociation
 	bufferUpdates    []*bufferReportUpdate
 	socketMu         sync.RWMutex

@@ -18,6 +18,7 @@ var (
 )
 
 type Session struct {
+	buffers       *packetBufferSession
 	downlink      *downlinkNotifications
 	bar           *bufferingActionRule
 	barRevision   uint64
