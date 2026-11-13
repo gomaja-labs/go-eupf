@@ -264,6 +264,30 @@ def test_restart_allocates_new_teid_generation_and_restores_predecessor(server, 
         remote.close()
 
 
+def test_fqdn_heartbeat_restart_discards_predecessor_replay(server):
+    # TS 23.007 V19.2.0 clause 19A associates recovery with the sending entity.
+    remote = Peer(server())
+    node = pfcp.IE_NodeId(id_type=2, id="synthetic.example")
+    try:
+        setup = remote.request(pfcp.PFCPAssociationSetupRequest(IE_list=[node,
+            pfcp.IE_RecoveryTimeStamp(timestamp=3900000000)]))
+        assert setup[pfcp.IE_Cause].cause == 1
+        request = remote.packet(pfcp.PFCPSessionEstablishmentRequest(IE_list=[node,
+            pfcp.IE_FSEID(v4=1, seid=55, ipv4=remote.address), uplink_far(), uplink_pdr()]), seid=0)
+        first = pfcp.PFCP(remote.exchange(request))
+        assert first[pfcp.IE_Cause].cause == 1
+        for stamp in (3900000000, 3900000100):
+            assert remote.request(pfcp.PFCPHeartbeatRequest(IE_list=[
+                pfcp.IE_RecoveryTimeStamp(timestamp=stamp)])).message_type == 2
+        second = pfcp.PFCP(remote.exchange(request))
+        assert second[pfcp.IE_Cause].cause == 1
+        assert second[pfcp.IE_FSEID].seid != first[pfcp.IE_FSEID].seid
+        assert remote.request(pfcp.PFCPSessionModificationRequest(), second[pfcp.IE_FSEID].seid)[pfcp.IE_Cause].cause == 1
+        released = remote.request(pfcp.PFCPAssociationReleaseRequest(IE_list=[node]))
+        assert released[pfcp.IE_Cause].cause == 1
+    finally:
+        remote.close()
+
 def test_failed_usage_survives_last_pdr_dissociation(server):
     # TS 29.244 V20.1.0 clause 5.2.2.3.1 retains the URR across dissociation.
     remote = Peer(server())

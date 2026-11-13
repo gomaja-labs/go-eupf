@@ -149,7 +149,7 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 		for seid, session := range assoc.Sessions {
 			origin := assoc.sessionEntities[seid]
 			if origin == "" {
-				origin = addr
+				origin = assoc.Addr
 			}
 			if origin != entity {
 				continue
@@ -159,7 +159,7 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 			conn.forgetSession(assoc, seid)
 		}
 		conn.retireAssociationLocked(retired)
-		conn.forgetEntityTransactions(addr, entity)
+		conn.forgetEntityTransactions(assoc.ID, entity)
 	}
 	assoc.recoveries[entity] = stamp
 	if entity == assoc.Addr {
@@ -417,8 +417,8 @@ func (conn *PfcpConnection) rememberSessionEntity(request, response message.Mess
 	}
 }
 
-func (conn *PfcpConnection) forgetEntityTransactions(addr, entity string) {
-	conn.forgetPeerTransactions(addr, false, entity, nil)
+func (conn *PfcpConnection) forgetEntityTransactions(associationID, entity string) {
+	conn.forgetPeerTransactions(associationID, false, entity, nil)
 }
 func (conn *PfcpConnection) incomingEntity(msg message.Message, peer string) string {
 	switch request := msg.(type) {
