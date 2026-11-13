@@ -127,10 +127,12 @@ func run(ctx context.Context) (runErr error) {
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		return fmt.Errorf("increase resource limits: %w", err)
 	}
-	memoryLimit, beforeMaps, err := config.CgroupMemory("/sys/fs/cgroup")
+	memoryState, err := config.CgroupMemory()
 	if err != nil {
 		return fmt.Errorf("read container memory budget: %w", err)
 	}
+	memoryLimit, beforeMaps := memoryState.Limit, memoryState.Current
+	log.Info().Str("cgroup_path", memoryState.Path).Str("cgroup_limit_source", memoryState.LimitSource).Int64("container_limit_bytes", memoryLimit).Msg("Resolved process memory cgroup")
 	if _, err := config.Conf.PFCPMemoryPlan(memoryLimit, beforeMaps); err != nil {
 		return err
 	}
@@ -148,10 +150,11 @@ func run(ctx context.Context) (runErr error) {
 	// SetMemoryLimit excludes kernel BPF memory. Keep the observed cgroup
 	// baseline outside Go's allowance, including the default startup peak.
 	debug.FreeOSMemory()
-	_, baseline, err := config.CgroupMemory("/sys/fs/cgroup")
+	loadedMemory, err := config.CgroupMemory()
 	if err != nil {
 		return fmt.Errorf("read loaded map memory charge: %w", err)
 	}
+	baseline := loadedMemory.Current
 	var growingMaps []*kernel.MapInfo
 	for _, m := range []*kernel.Map{bpfObjects.PdrMapDownlinkIp4, bpfObjects.PdrMapDownlinkIp6, bpfObjects.PdrMapTeidIp4} {
 		info, err := m.Info()

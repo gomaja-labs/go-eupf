@@ -36,7 +36,8 @@ func TestCgroupMemoryLimits(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, "memory.current"), []byte("26214400"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			limit, current, err := CgroupMemory(root)
+			state, err := resolveCgroupMemory("0::/", "1 0 0:1 / "+root+" rw - cgroup2 cgroup rw")
+			limit, current := state.Limit, state.Current
 			if (err != nil) != tc.bad || !tc.bad && (limit != tc.want || current != 25*mib) {
 				t.Fatalf("limit %d current %d: %v", limit, current, err)
 			}
