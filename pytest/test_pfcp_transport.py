@@ -152,7 +152,8 @@ def test_failed_report_follows_changed_cp_fseid(server, failure):
         remote.associate()
         seid = remote.session()
         request = urllib.request.Request(
-            f"http://127.0.0.1:18080/api/v1/pfcp_sessions?id={seid}", method="DELETE")
+            f"http://127.0.0.1:18080/api/v1/pfcp_sessions?id={seid}", method="DELETE",
+            headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=2) as response:
             assert response.status == 200
         first = pfcp.PFCP(old_entity.recvfrom(65535)[0])
@@ -194,6 +195,52 @@ def test_startup_hold_preserves_explicit_restoration(server):
             pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
         assert occupied[pfcp.IE_Cause].cause == 86
     finally:
+        remote.close()
+
+
+def test_failed_usage_survives_last_pdr_dissociation(server):
+    # TS 29.244 V20.1.0 clause 5.2.2.3.1 retains the URR across dissociation.
+    remote = Peer(server())
+    entity = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    entity.bind(("127.0.0.6", 8805))
+    entity.settimeout(6)
+    remote.entity_address = "127.0.0.6"
+    traffic = None
+    try:
+        remote.associate()
+        usage = pfcp.IE_CreateURR(IE_list=[pfcp.IE_URR_Id(id=9),
+            pfcp.IE_MeasurementMethod(VOLUM=1),
+            pfcp.IE_ReportingTriggers(volume_threshold=1),
+            pfcp.IE_VolumeThreshold(TOVOL=1, total=1)])
+        response = remote.establish([uplink_far(), usage, uplink_pdr(urrs=(9,))])
+        assert response[pfcp.IE_Cause].cause == 1
+        seid = response[pfcp.IE_FSEID].seid
+        before_slot = get_json("/api/v1/pfcp_sessions")[0]["URRs"]["9"]["GlobalId"]
+        traffic = TunnelTraffic(response[pfcp.IE_FTEID].TEID)
+        octets = traffic.send("usage-before-counter-swap")
+        first = pfcp.PFCP(entity.recvfrom(65535)[0])
+        assert first.message_type == 56
+        assert first[pfcp.IE_VolumeMeasurement].total == octets
+        # Clause 5.6.3: a null URR ID removes that PDR's URR references.
+        modification = remote.request(pfcp.PFCPSessionModificationRequest(IE_list=[
+            pfcp.IE_UpdatePDR(IE_list=[pfcp.IE_PDR_Id(id=1),
+                pfcp.IE_NotImplemented(ietype=81, data=b"")])]), seid)
+        assert modification[pfcp.IE_Cause].cause == 1
+        after_slot = get_json("/api/v1/pfcp_sessions")[0]["URRs"]["9"]["GlobalId"]
+        assert after_slot != before_slot
+        assert modification[pfcp.IE_VolumeMeasurement].total == 0
+        entity.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=first.seq) /
+            pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=77)])), DESTINATION)
+        second = pfcp.PFCP(entity.recvfrom(65535)[0])
+        assert second.message_type == 56 and second.seq != first.seq
+        assert second[pfcp.IE_URR_Id].id == 9
+        assert second[pfcp.IE_VolumeMeasurement].total == octets
+        entity.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=second.seq) /
+            pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=1)])), DESTINATION)
+    finally:
+        if traffic is not None:
+            traffic.close()
+        entity.close()
         remote.close()
 
 
