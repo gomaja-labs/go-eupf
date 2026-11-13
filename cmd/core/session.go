@@ -84,9 +84,9 @@ type SQerInfo struct {
 }
 
 type SUrrInfo struct {
-	// Generation identifies one Create URR lifetime, across counter-slot swaps.
+	// generation identifies one Create URR lifetime, across counter-slot swaps.
 	// TS 29.244 V20.1.0 clause 5.2.2.3.1 retains dissociated URRs.
-	Generation                           uint64
+	generation                           uint64
 	UnreportedUplink, UnreportedDownlink uint64
 	UrrInfo                              ebpf.UrrInfo
 	GlobalId                             uint32
@@ -148,7 +148,7 @@ func (s *Session) RemoveQer(id uint32) (SQerInfo, error) {
 func (s *Session) NewUrr(id uint32, internalId uint32, urrInfo ebpf.UrrInfo) {
 	s.urrGeneration++
 	s.URRs[id] = SUrrInfo{
-		Generation: s.urrGeneration,
+		generation: s.urrGeneration,
 		UrrInfo:    urrInfo,
 		GlobalId:   internalId,
 	}

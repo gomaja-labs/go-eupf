@@ -44,7 +44,7 @@ func (conn *PfcpConnection) bindReportUsageLocked(msg message.Message, assoc *No
 		if !ok {
 			continue
 		}
-		usage = append(usage, reportedUsage{id, urr.Generation, volume.UplinkVolume, volume.DownlinkVolume})
+		usage = append(usage, reportedUsage{id, urr.generation, volume.UplinkVolume, volume.DownlinkVolume})
 	}
 	conn.transport.mu.Lock()
 	if req := conn.transport.pending[msg.Sequence()]; req != nil {
@@ -65,8 +65,9 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 	}
 	if response, ok := result.response.(*message.SessionReportResponse); ok {
 		if cause, err := response.Cause.Cause(); err == nil && cause == ie.CauseSessionContextNotFound {
-			// Clause 6.3.5.3: the CP has no corresponding context. Queue local
-			// deletion; the completion callback never waits for kernel reclamation.
+			// Local policy: delete when the current CP has no context. Clause
+			// 6.3.5.3 prescribes only the CP response, not a UP deletion. Queue
+			// reclamation; the completion callback never waits for kernel reclamation.
 			conn.reportCleanup = append(conn.reportCleanup, reportCleanup{request: req})
 			log.Warn().Uint64("session", session.LocalSEID).Msg("CP has no session context; schedule local rule cleanup")
 			return
@@ -74,7 +75,7 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 	}
 	for _, usage := range req.usage {
 		urr, ok := session.URRs[usage.id]
-		if !ok || urr.Generation != usage.generation {
+		if !ok || urr.generation != usage.generation {
 			PfcpUndeliveredUsage.Add(float64(usage.uplink + usage.downlink))
 			log.Error().Uint64("session", session.LocalSEID).Uint32("urr", usage.id).Uint64("uplink", usage.uplink).Uint64("downlink", usage.downlink).Msg("Failed report belongs to a removed or replaced URR; octets cannot be merged into another rule")
 			continue
