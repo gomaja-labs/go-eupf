@@ -39,20 +39,20 @@ type bufferedPacket struct {
 	sent    bool
 }
 type bufferCycle struct {
-	farID                                       uint32
-	lane                                        uint32
-	cookie                                      uint64
-	head                                        uint32
-	received, completed                         uint64
-	notified                                    uint64
-	canceled                                    bool
-	draining, terminal                          bool
-	grace                                       <-chan struct{}
-	ready                                       bool
-	ioDone                                      <-chan struct{}
-	failedAt                                    time.Time
-	drainStarted, bufferedUntil, bufferedCutoff time.Time
-	bufferedBAR, bufferedInfinite               bool
+	farID                                                   uint32
+	lane                                                    uint32
+	cookie                                                  uint64
+	head                                                    uint32
+	received, completed                                     uint64
+	notified                                                uint64
+	canceled                                                bool
+	draining, terminal                                      bool
+	grace                                                   <-chan struct{}
+	ready                                                   bool
+	ioDone                                                  <-chan struct{}
+	failedAt                                                time.Time
+	drainStarted, drainReady, bufferedUntil, bufferedCutoff time.Time
+	bufferedBAR, bufferedInfinite                           bool
 }
 type packetBufferSession struct {
 	owner    *bufferOwner
@@ -390,6 +390,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				continue
 			}
 			cycle.ready = true
+			cycle.drainReady = time.Now()
 		}
 		for cycle.head != noBufferedPacket {
 			packet := &buffering.entries[cycle.head]
@@ -540,24 +541,36 @@ func (buffering *PacketBuffering) Close() error {
 // a new forwarding instruction ends buffering; it is not policed/accounted again.
 func (buffering *PacketBuffering) packetExpired(owner *bufferOwner, cycle *bufferCycle, packet *bufferedPacket, now time.Time) bool {
 	retention := buffering.options.Retention
-	if cycle.draining && !cycle.drainStarted.IsZero() && !packet.arrived.After(cycle.drainStarted) {
-		if packet.record.Downlink && cycle.bufferedBAR {
-			if !cycle.bufferedCutoff.IsZero() && packet.arrived.Before(cycle.bufferedCutoff) {
-				return true
-			}
-			if !cycle.bufferedInfinite {
-				if !cycle.bufferedUntil.IsZero() {
-					if !cycle.drainStarted.Before(cycle.bufferedUntil) {
-						return true
-					}
-				} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
+	if cycle.draining && !cycle.drainStarted.IsZero() {
+		if !packet.arrived.After(cycle.drainStarted) {
+			if packet.record.Downlink && cycle.bufferedBAR {
+				if !cycle.bufferedCutoff.IsZero() && packet.arrived.Before(cycle.bufferedCutoff) {
 					return true
 				}
+				if !cycle.bufferedInfinite {
+					if !cycle.bufferedUntil.IsZero() {
+						if !cycle.drainStarted.Before(cycle.bufferedUntil) {
+							return true
+						}
+					} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
+						return true
+					}
+				}
+			} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
+				return true
 			}
-		} else if !cycle.drainStarted.Before(packet.arrived.Add(retention)) {
-			return true
 		}
-		return !now.Before(cycle.drainStarted.Add(retention))
+		// Producer grace is a prerequisite for output, not part of its retry
+		// budget. Newer packets must also wait behind this same drain barrier.
+		// TS 29.244 V20.1.0 clause 5.2.4.2: forwarding uses the earlier processing.
+		if cycle.drainReady.IsZero() {
+			return false
+		}
+		start := cycle.drainReady
+		if packet.arrived.After(start) {
+			start = packet.arrived
+		}
+		return !now.Before(start.Add(retention))
 	}
 	if packet.record.Downlink && downlinkBARAssociated(owner.session, owner.session.FARs[cycle.farID]) && owner.session.downlink != nil {
 		state := owner.session.downlink

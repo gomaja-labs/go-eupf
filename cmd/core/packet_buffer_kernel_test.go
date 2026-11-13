@@ -342,7 +342,7 @@ type bufferSenderFunc func(ebpf.RenderedBuffer) error
 func (send bufferSenderFunc) Send(packet ebpf.RenderedBuffer) error { return send(packet) }
 func (send bufferSenderFunc) Close() error                          { return nil }
 
-func switchBufferedFARToForward(t *testing.T, conn *PfcpConnection, assoc *NodeAssociation, before *Session) *Session {
+func switchBufferedFARToForward(t *testing.T, conn *PfcpConnection, assoc *NodeAssociation, before *Session, extraGrace ...<-chan struct{}) *Session {
 	t.Helper()
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
@@ -367,6 +367,16 @@ func switchBufferedFARToForward(t *testing.T, conn *PfcpConnection, assoc *NodeA
 		t.Fatal(err)
 	}
 	assoc.Sessions[after.LocalSEID] = after
+	for _, additional := range extraGrace {
+		cycle := after.buffers.cycles[1]
+		original, joined := cycle.grace, make(chan struct{})
+		cycle.grace = joined
+		go func() {
+			<-original
+			<-additional
+			close(joined)
+		}()
+	}
 	return after
 }
 

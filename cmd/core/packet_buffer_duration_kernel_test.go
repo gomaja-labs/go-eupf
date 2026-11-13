@@ -3,12 +3,69 @@
 package core
 
 import (
+	"encoding/binary"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 )
+
+func TestApplicationBufferGraceWaitPreservesTheDrainWindow(t *testing.T) {
+	plane, buffering, conn, assoc, session, _ := publishPacketBufferFixtureOptions(t, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: 50 * time.Millisecond})
+	packetBufferRoute(t, plane)
+	session = installPacketBufferDuration(t, conn, assoc, session)
+	if err := buffering.sender.Close(); err != nil {
+		t.Fatal(err)
+	}
+	delivered := make(chan uint16, 4)
+	buffering.sender = bufferSenderFunc(func(packet ebpf.RenderedBuffer) error {
+		delivered <- binary.BigEndian.Uint16(packet.Frame[54:56])
+		return nil
+	})
+	if _, _, err := plane.UpfIpEntrypointFunc.Test(bufferKernelPacket(t, 100)); err != nil {
+		t.Fatal(err)
+	}
+	additional := make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(additional) }) })
+	session = switchBufferedFARToForward(t, conn, assoc, session, additional)
+	if _, _, err := plane.UpfIpEntrypointFunc.Test(bufferKernelPacket(t, 101)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		conn.stateMu.RLock()
+		received := session.buffers.cycles[1].received
+		conn.stateMu.RUnlock()
+		if received == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reader did not consume both sides of the forwarding transition")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	buffering.mu.Lock()
+	held := len(buffering.entries) - len(buffering.free)
+	buffering.mu.Unlock()
+	if held != 2 || len(delivered) != 0 {
+		t.Fatalf("grace wait consumed the drain window: held=%d sent=%d", held, len(delivered))
+	}
+	release.Do(func() { close(additional) })
+	for _, want := range []uint16{100, 101} {
+		select {
+		case got := <-delivered:
+			if got != want {
+				t.Fatalf("drain order=%d want=%d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("packet lost its output window while waiting for grace")
+		}
+	}
+}
 
 func installPacketBufferDuration(t *testing.T, conn *PfcpConnection, assoc *NodeAssociation, before *Session) *Session {
 	t.Helper()

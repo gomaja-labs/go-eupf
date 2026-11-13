@@ -261,6 +261,7 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 		for _, cycle := range plan.drain {
 			cycle.draining, cycle.grace, cycle.ready = true, plan.grace, false
 			cycle.drainStarted = plan.activated
+			cycle.drainReady = time.Time{}
 			if plan.before != nil && plan.before.downlink != nil {
 				state := plan.before.downlink
 				cycle.bufferedBAR = downlinkBARAssociated(plan.before, plan.before.FARs[cycle.farID])
@@ -270,6 +271,7 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 		for _, cycle := range plan.hold {
 			cycle.draining, cycle.ready = false, false
 			cycle.drainStarted = time.Time{}
+			cycle.drainReady = time.Time{}
 		}
 		if plan.kind == deleteSessionMutation || plan.after.bar == nil && len(plan.after.buffers.cycles) == 0 {
 			owner.canceled, owner.terminal, owner.grace = true, terminal, plan.grace
