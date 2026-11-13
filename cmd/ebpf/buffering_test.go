@@ -119,6 +119,7 @@ func TestBufferCreditsAreSharedAcrossFARsAndCompletionIsIdempotent(t *testing.T)
 	}
 	command.Operation = 0
 	command.Sequence = 1
+	command.Downlink = true
 	for i := 0; i < 2; i++ {
 		state, err = b.BufferControl(command)
 		if err != nil || state.Outstanding != 1 {
@@ -133,6 +134,7 @@ func TestBufferCreditsAreSharedAcrossFARsAndCompletionIsIdempotent(t *testing.T)
 	}
 	command.Cookie = 99
 	command.Sequence = 1
+	command.Downlink = true
 	if _, err := b.BufferControl(command); err == nil {
 		t.Fatal("stale lifetime completion accepted")
 	}
@@ -152,6 +154,7 @@ func TestBufferCreditsAreSharedAcrossFARsAndCompletionIsIdempotent(t *testing.T)
 	}
 	command.Operation = 0
 	command.Sequence = 1
+	command.Downlink = true
 	command.Mode = 0
 	state, err = b.BufferControl(command)
 	if err != nil || state.Outstanding != 0 {
@@ -349,7 +352,7 @@ func TestBufferJournalRestoresModeWithoutRestoringLiveCounters(t *testing.T) {
 	if err != nil || state.Mode != BufferDiscard {
 		t.Fatalf("staged mode=%+v error=%v", state, err)
 	}
-	if _, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Sequence: 1}); err != nil {
+	if _, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Sequence: 1, Downlink: true}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -382,7 +385,8 @@ func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
 	if err != nil || len(raw) < 52 {
 		t.Fatalf("anchor: %v", err)
 	}
-	binary.LittleEndian.PutUint32(raw[48:], 1)
+	offset := binary.Size(bufferAnchor{}) - BufferFarLanes*binary.Size(bufferFar{}) + 32
+	binary.LittleEndian.PutUint32(raw[offset:], 1)
 	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +394,7 @@ func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
 	if err != nil || state.Mode != BufferDrain {
 		t.Fatalf("prepared producer was bypassed: mode=%d error=%v", state.Mode, err)
 	}
-	binary.LittleEndian.PutUint32(raw[48:], 0)
+	binary.LittleEndian.PutUint32(raw[offset:], 0)
 	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
 		t.Fatal(err)
 	}

@@ -27,6 +27,7 @@ type packetBufferPlan struct {
 	fresh, cancel, drain, hold []*bufferCycle
 	grace                      <-chan struct{}
 	started, finished          bool
+	activated                  time.Time
 }
 
 // Stage only private model values. The common session transaction calls begin
@@ -49,7 +50,14 @@ func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransactio
 	}
 	plan.grace = journal.BufferGrace()
 	plan.started = true
+	plan.activated = time.Now()
 	after := plan.after
+	if after.bar != nil && after.bar.durationPresent && after.bar.duration == 0 {
+		bar := *after.bar
+		bar.durationPresent, bar.dlPacketCountPresent = false, false
+		bar.dlPacketCount = 0
+		after.bar = &bar
+	}
 	if after.buffers == nil {
 		owner, err := conn.reservePacketBuffers(plan.association, after)
 		if err != nil {
@@ -61,7 +69,7 @@ func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransactio
 				plan.fresh = append(plan.fresh, cycle)
 			}
 		}
-		return nil
+		return plan.applyLimits(conn, journal)
 	}
 	owner := after.buffers.owner
 	plan.owner = owner
@@ -128,7 +136,52 @@ func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransactio
 			after.FARs[farID] = far
 		}
 	}
-	return nil
+	return plan.applyLimits(conn, journal)
+}
+
+func (plan *packetBufferPlan) applyLimits(conn *PfcpConnection, journal bufferJournal) error {
+	if plan.kind == deleteSessionMutation {
+		return nil
+	}
+	buffering := conn.packetBuffers
+	limit := buffering.options.PerSession
+	barLimit, dlLimit := limit, limit
+	until := uint64(0)
+	if bar := plan.after.bar; bar != nil {
+		if bar.packetCountPresent {
+			barLimit = min(barLimit, uint32(bar.packetCount))
+		}
+		if bar.dlPacketCountPresent {
+			dlLimit = min(dlLimit, uint32(bar.dlPacketCount))
+		}
+		if bar.durationPresent && bar.duration > 0 && bar.duration != time.Duration(math.MaxInt64) {
+			deadline := plan.activated.Add(bar.duration)
+			if state := plan.after.downlink; state != nil && state.durationRevision == bar.durationRevision && !state.extendedUntil.IsZero() {
+				deadline = state.extendedUntil
+			}
+			delta := deadline.Sub(buffering.baseTime)
+			if delta < 0 {
+				until = buffering.baseNS
+			} else {
+				until = buffering.baseNS + uint64(delta)
+			}
+		}
+	}
+	var first *bufferCycle
+	for id, cycle := range plan.after.buffers.cycles {
+		if first == nil {
+			first = cycle
+		}
+		far := plan.after.FARs[id]
+		uses := far.FarInfo.Action&4 != 0 && downlinkBARAssociated(plan.after, far)
+		if err := journal.JournalBufferControl(ebpf.BufferCommand{SessionID: plan.after.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 7, UsesBAR: uses}); err != nil {
+			return err
+		}
+	}
+	if first == nil {
+		return nil
+	}
+	return journal.JournalBufferControl(ebpf.BufferCommand{SessionID: plan.after.LocalSEID, Cookie: first.cookie, Lane: first.lane, Operation: 2, Limit: limit, BARLimit: barLimit, BARDLLimit: dlLimit, BARUntilNS: until})
 }
 
 // Controls such as DROBU can replace a cookie without an Update FAR IE. Publish
@@ -228,7 +281,7 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 				conn.downlinkSessions = make(map[uint64]*NodeAssociation)
 			}
 			conn.downlinkSessions[owner.session.LocalSEID] = owner.association
-			conn.applyDownlinkDurationLocked(plan.after, time.Now())
+			conn.applyDownlinkDurationLocked(plan.after, plan.activated)
 		}
 	} else {
 		for _, cycle := range plan.fresh {

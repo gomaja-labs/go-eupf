@@ -35,17 +35,21 @@ type bufferFar struct {
 	Cookie, Produced, Completed uint64
 	Mode, Ready                 uint32
 	Preparing, Reserved         uint32
+	UsesBAR, Downlink           uint32
 }
 type bufferAnchor struct {
-	Lock, Outstanding, Limit, Reserved uint32
-	FAR                                [BufferFarLanes]bufferFar
+	Lock, Outstanding, Limit, BAROutstanding         uint32
+	BARLimit, BARDLOutstanding, BARDLLimit, Reserved uint32
+	BARUntilNS                                       uint64
+	FAR                                              [BufferFarLanes]bufferFar
 }
 
 // BufferLane identifies one FAR buffering lifetime independently of FAR slots.
 type BufferLane struct {
-	Index  uint32
-	Cookie uint64
-	Mode   uint32
+	Index   uint32
+	Cookie  uint64
+	Mode    uint32
+	UsesBAR bool
 }
 
 // CreateBufferAnchor initializes unpublished state. Published counters must only
@@ -57,12 +61,15 @@ func (b *BpfObjects) CreateBufferAnchor(session uint64, limit uint32, lanes []Bu
 	if session == 0 {
 		return errors.New("zero buffering session identity")
 	}
-	anchor := bufferAnchor{Limit: limit}
+	anchor := bufferAnchor{Limit: limit, BARLimit: limit, BARDLLimit: limit}
 	for _, lane := range lanes {
 		if lane.Index >= BufferFarLanes || lane.Cookie == 0 || lane.Mode != BufferHold || anchor.FAR[lane.Index].Cookie != 0 {
 			return errors.New("invalid buffering lane")
 		}
 		anchor.FAR[lane.Index] = bufferFar{Cookie: lane.Cookie, Mode: lane.Mode}
+		if lane.UsesBAR {
+			anchor.FAR[lane.Index].UsesBAR = 1
+		}
 	}
 	return b.BufferAnchors.Update(session, &anchor, cilium.UpdateNoExist)
 }
@@ -70,10 +77,13 @@ func (b *BpfObjects) CreateBufferAnchor(session uint64, limit uint32, lanes []Bu
 // BufferCommand changes one lifetime or reads its admission/completion state.
 // Operation zero acknowledges exactly one sequence; retries are idempotent.
 type BufferCommand struct {
-	SessionID, Cookie, Sequence                      uint64
-	Lane, Operation, Mode, Ready, Limit, Outstanding uint32
-	Produced, Completed                              uint64
-	Preparing                                        uint32
+	SessionID, Cookie, Sequence                                       uint64
+	Lane, Operation, Mode, Ready, Limit, Outstanding                  uint32
+	Produced, Completed                                               uint64
+	Preparing                                                         uint32
+	BARLimit, BARDLLimit, BAROutstanding, BARDLOutstanding, DLPending uint32
+	BARUntilNS                                                        uint64
+	UsesBAR, Downlink                                                 bool
 }
 
 // BufferControl uses a private program to serialize with producer admission.
@@ -82,14 +92,24 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	if b.UpfBufferControlFunc == nil || b.UpfBufferControlFunc.FD() < 0 {
 		return BufferCommand{}, errors.New("buffer control is not loaded")
 	}
-	data := make([]byte, 64)
+	data := make([]byte, 96)
 	binary.LittleEndian.PutUint64(data, command.SessionID)
 	binary.LittleEndian.PutUint64(data[8:], command.Cookie)
 	binary.LittleEndian.PutUint64(data[16:], command.Sequence)
 	for i, v := range []uint32{command.Lane, command.Operation, command.Mode, command.Ready, command.Limit} {
 		binary.LittleEndian.PutUint32(data[24+4*i:], v)
 	}
-	output := make([]byte, 64)
+	for i, v := range []uint32{command.BARLimit, command.BARDLLimit} {
+		binary.LittleEndian.PutUint32(data[64+i*4:], v)
+	}
+	if command.UsesBAR {
+		binary.LittleEndian.PutUint32(data[80:], 1)
+	}
+	if command.Downlink {
+		binary.LittleEndian.PutUint32(data[84:], 1)
+	}
+	binary.LittleEndian.PutUint64(data[88:], command.BARUntilNS)
+	output := make([]byte, 96)
 	action, err := b.UpfBufferControlFunc.Run(&cilium.RunOptions{Data: data, DataOut: output})
 	if err != nil {
 		return BufferCommand{}, fmt.Errorf("buffer control: %w", err)
@@ -104,13 +124,20 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	command.Produced = binary.LittleEndian.Uint64(output[48:])
 	command.Completed = binary.LittleEndian.Uint64(output[56:])
 	command.Preparing = uint32(binary.LittleEndian.Uint64(output[16:]))
+	command.BARLimit = binary.LittleEndian.Uint32(output[64:])
+	command.BARDLLimit = binary.LittleEndian.Uint32(output[68:])
+	command.BAROutstanding = binary.LittleEndian.Uint32(output[72:])
+	command.BARDLOutstanding = binary.LittleEndian.Uint32(output[76:])
+	command.UsesBAR = binary.LittleEndian.Uint32(output[80:]) != 0
+	command.DLPending = binary.LittleEndian.Uint32(output[84:])
+	command.BARUntilNS = binary.LittleEndian.Uint64(output[88:])
 	return command, nil
 }
 
 // JournalBufferControl stages admission mode or capacity with rule publication.
 // Rollback preserves counters changed by packet producers and the ring reader.
 func (tx *ruleTransaction) JournalBufferControl(command BufferCommand) error {
-	if tx.finished || command.SessionID != tx.sessionID || (command.Operation != 1 && command.Operation != 2) {
+	if tx.finished || command.SessionID != tx.sessionID || (command.Operation != 1 && command.Operation != 2 && command.Operation != 7) {
 		return errors.New("invalid journal buffering control")
 	}
 	query := command
@@ -130,8 +157,8 @@ func (tx *ruleTransaction) JournalBufferControl(command BufferCommand) error {
 	tx.dirty = true
 	tx.undo = append(tx.undo, func() error {
 		previous.Operation = 4
-		if command.Operation == 2 {
-			previous.Operation = 2
+		if command.Operation == 2 || command.Operation == 7 {
+			previous.Operation = command.Operation
 		}
 		_, err := tx.objects.BufferControl(previous)
 		return err
@@ -171,6 +198,7 @@ type BufferRecord struct {
 	QFIPresent                                                                      bool
 	PPI                                                                             uint8
 	Notify                                                                          bool
+	Downlink                                                                        bool
 	Packet                                                                          []byte
 }
 
@@ -223,7 +251,7 @@ func parseBufferRecord(raw []byte) (BufferRecord, error) {
 	return BufferRecord{
 		SessionID: binary.LittleEndian.Uint64(raw), Cookie: binary.LittleEndian.Uint64(raw[8:]), Sequence: binary.LittleEndian.Uint64(raw[16:]), ReceivedNS: binary.LittleEndian.Uint64(raw[24:]),
 		Lane: binary.LittleEndian.Uint32(raw[32:]), PDRID: binary.LittleEndian.Uint32(raw[36:]), IngressIfindex: binary.LittleEndian.Uint32(raw[44:]), Marking: binary.LittleEndian.Uint16(raw[48:]),
-		Kind: raw[50], NR: raw[51], SourceInterface: raw[52], OuterRemoval: raw[53], OuterRemovalPresent: raw[54], ExtensionDeletion: raw[55], QFI: raw[56], QFIPresent: raw[57] != 0, PPI: raw[58], Notify: raw[59] != 0,
+		Kind: raw[50], NR: raw[51], SourceInterface: raw[52], OuterRemoval: raw[53], OuterRemovalPresent: raw[54], ExtensionDeletion: raw[55], QFI: raw[56], QFIPresent: raw[57] != 0, PPI: raw[58], Notify: raw[59] != 0, Downlink: raw[60]&1 != 0,
 		Packet: raw[64 : 64+length],
 	}, nil
 }

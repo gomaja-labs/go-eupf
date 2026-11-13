@@ -193,6 +193,10 @@ func (conn *PfcpConnection) endDownlinkDurationLocked(session *Session, now time
 		state.durationRevision = 0
 		return
 	}
+	if !session.bar.durationPresent && !session.bar.dlPacketCountPresent {
+		state.durationRevision = session.bar.durationRevision
+		return
+	}
 	bar := *session.bar
 	bar.duration, bar.durationPresent = 0, false
 	bar.dlPacketCount, bar.dlPacketCountPresent = 0, false

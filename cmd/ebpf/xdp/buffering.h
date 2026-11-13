@@ -21,6 +21,8 @@ struct buffer_far {
     __u32 ready;
     __u32 preparing;
     __u32 reserved;
+    __u32 uses_bar;
+    __u32 downlink;
 };
 
 static __always_inline void buffer_maybe_forward(struct buffer_far *far) {
@@ -34,7 +36,12 @@ struct buffer_anchor {
     struct bpf_spin_lock lock;
     __u32 outstanding;
     __u32 limit;
+    __u32 bar_outstanding;
+    __u32 bar_limit;
+    __u32 bar_dl_outstanding;
+    __u32 bar_dl_limit;
     __u32 reserved;
+    __u64 bar_until_ns;
     struct buffer_far far[BUFFER_FAR_LANES];
 };
 struct {
@@ -73,81 +80,87 @@ struct buffer_record {
 };
 
 struct buffer_command {
-    __u64 session_id;
-    __u64 cookie;
-    __u64 sequence;
-    __u32 lane;
-    __u32 operation; // 0: acknowledge, 1: mode/ready, 2: shared limit, 3: read
-    __u32 mode;
-    __u32 ready;
-    __u32 limit;
-    __u32 outstanding;
-    __u64 produced;
-    __u64 completed;
+    __u64 session_id,cookie,sequence;
+    __u32 lane,operation,mode,ready,limit,outstanding;
+    __u64 produced,completed;
+    __u32 bar_limit,bar_dl_limit,bar_outstanding,bar_dl_outstanding,uses_bar,downlink;
+    __u64 bar_until_ns;
 };
+
+static __always_inline void buffer_expire_bar(struct buffer_anchor *anchor, __u64 now) {
+    if (anchor->bar_until_ns && now>=anchor->bar_until_ns) {
+        anchor->bar_until_ns=0;
+        anchor->bar_dl_limit=anchor->limit;
+    }
+}
 
 // Private test-run control entry; never placed in the attached program array.
 SEC("xdp/upf_buffer_control")
 int upf_buffer_control_func(struct xdp_md *ctx) {
     struct buffer_command *command=(void *)(long)ctx->data;
     if ((void *)(command+1)>(void *)(long)ctx->data_end) return XDP_ABORTED;
-    __u64 id=command->session_id, cookie=command->cookie, sequence=command->sequence;
-    __u64 lane=command->lane;
-    __u32 operation=command->operation, mode=command->mode;
-    __u32 ready=command->ready, limit=command->limit;
-    if (lane>=BUFFER_FAR_LANES || operation>6 || mode>BUFFER_DISCARD || ready>1) return XDP_ABORTED;
-    asm volatile("" : "+r"(lane));
-    lane &= BUFFER_FAR_LANES-1;
+    __u64 id=command->session_id,cookie=command->cookie,sequence=command->sequence,lane=command->lane;
+    __u32 operation=command->operation,mode=command->mode,ready=command->ready,limit=command->limit;
+    __u32 bar_limit=command->bar_limit,dl_limit=command->bar_dl_limit;
+    __u32 uses_bar=command->uses_bar,downlink=command->downlink;
+    __u64 until=command->bar_until_ns;
+    if (lane>=BUFFER_FAR_LANES || operation>7 || mode>BUFFER_DISCARD || ready>1 || uses_bar>1 || downlink>1) return XDP_ABORTED;
+    asm volatile("" : "+r"(lane)); lane &= BUFFER_FAR_LANES-1;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
     if (!anchor) return XDP_ABORTED;
+    __u64 now=bpf_ktime_get_ns();
     int action=XDP_ABORTED;
     bpf_spin_lock(&anchor->lock);
+    buffer_expire_bar(anchor,now);
     struct buffer_far *far=&anchor->far[lane];
     if (operation==5 && cookie && !far->cookie && mode==BUFFER_HOLD) {
-        far->cookie=cookie;
-        far->mode=mode;
-        far->ready=0;
-        far->produced=far->completed=0;
-        far->preparing=0;
+        far->cookie=cookie;far->mode=mode;far->ready=0;
+        far->produced=far->completed=0;far->preparing=0;
+        far->uses_bar=uses_bar;far->downlink=0;
         action=XDP_DROP;
     } else if (cookie && far->cookie==cookie) {
         if (!operation) {
             if (sequence<=far->completed) action=XDP_DROP;
-            else if (sequence==far->completed+1 && sequence<=far->produced && anchor->outstanding) {
-                far->completed=sequence;
-                anchor->outstanding--;
+            else if (sequence==far->completed+1 && sequence<=far->produced && anchor->outstanding &&
+                (!downlink || far->downlink) && (!far->uses_bar || (anchor->bar_outstanding && (!downlink || anchor->bar_dl_outstanding)))) {
+                far->completed=sequence;anchor->outstanding--;
+                if (downlink) far->downlink--;
+                if (far->uses_bar) { anchor->bar_outstanding--;if (downlink) anchor->bar_dl_outstanding--; }
                 action=XDP_DROP;
             }
         } else if (operation==1 && (mode==BUFFER_DISCARD ||
             (mode==BUFFER_HOLD && far->mode>=BUFFER_HOLD && far->mode<=BUFFER_FORWARD) ||
             (mode==BUFFER_DRAIN && (far->mode==BUFFER_HOLD || far->mode==BUFFER_DRAIN ||
                 (far->mode==BUFFER_FORWARD && ready && far->produced==far->completed))))) {
-            far->mode=mode;
-            far->ready=ready;
-            action=XDP_DROP;
+            far->mode=mode;far->ready=ready;action=XDP_DROP;
         } else if (operation==2) {
-            anchor->limit=limit;
+            anchor->limit=limit;anchor->bar_limit=bar_limit;anchor->bar_dl_limit=dl_limit;anchor->bar_until_ns=until;
             action=XDP_DROP;
         } else if (operation==3) action=XDP_DROP;
-        // Journal rollback restores controls, never producer/consumer counters.
+        // Rollback restores controls, never producer/consumer counters.
         else if (operation==4 && mode>=BUFFER_HOLD) {
-            far->mode=mode;
-            far->ready=ready;
-            action=XDP_DROP;
-        } else if (operation==6 && !far->preparing && far->produced==far->completed &&
+            far->mode=mode;far->ready=ready;action=XDP_DROP;
+        } else if (operation==6 && !far->preparing && !far->downlink && far->produced==far->completed &&
             (far->mode==BUFFER_DISCARD || far->mode==BUFFER_FORWARD)) {
             far->cookie=far->produced=far->completed=0;
-            far->mode=far->ready=0;
+            far->mode=far->ready=far->uses_bar=0;
             action=XDP_DROP;
+        } else if (operation==7) {
+            __u64 count=far->produced-far->completed;
+            if (count<=~0U) {
+                if (uses_bar && !far->uses_bar) { anchor->bar_outstanding+=count;anchor->bar_dl_outstanding+=far->downlink; }
+                else if (!uses_bar && far->uses_bar) { anchor->bar_outstanding-=count;anchor->bar_dl_outstanding-=far->downlink; }
+                far->uses_bar=uses_bar;action=XDP_DROP;
+            }
         }
+        buffer_expire_bar(anchor,now);
         buffer_maybe_forward(far);
-        command->sequence=far->preparing;
-        command->mode=far->mode;
-        command->ready=far->ready;
-        command->outstanding=anchor->outstanding;
-        command->limit=anchor->limit;
-        command->produced=far->produced;
-        command->completed=far->completed;
+        command->sequence=far->preparing;command->mode=far->mode;command->ready=far->ready;
+        command->outstanding=anchor->outstanding;command->limit=anchor->limit;
+        command->produced=far->produced;command->completed=far->completed;
+        command->bar_limit=anchor->bar_limit;command->bar_dl_limit=anchor->bar_dl_limit;
+        command->bar_outstanding=anchor->bar_outstanding;command->bar_dl_outstanding=anchor->bar_dl_outstanding;
+        command->uses_bar=far->uses_bar;command->downlink=far->downlink;command->bar_until_ns=anchor->bar_until_ns;
     }
     bpf_spin_unlock(&anchor->lock);
     return action;
@@ -158,6 +171,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
 struct buffer_pending {
     __u64 session_id;
     __u64 cookie;
+    __u64 received_ns;
     __u32 lane;
     __u32 pdr_id;
     __u32 ingress_ifindex;
@@ -172,6 +186,7 @@ struct buffer_pending {
     __u8 qfi;
     __u8 qfi_present;
     __u8 notify;
+    __u8 downlink;
 };
 struct {
     __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -191,12 +206,15 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
     if (!anchor) return XDP_DROP;
     int direct=0, eligible=0;
+    __u64 now=bpf_ktime_get_ns();
     bpf_spin_lock(&anchor->lock);
     struct buffer_far *state=&anchor->far[lane];
     if (state->cookie==cookie) {
+        buffer_expire_bar(anchor,now);
         buffer_maybe_forward(state);
         direct=state->mode==BUFFER_FORWARD;
-        eligible=(state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) && state->preparing!=~0U;
+        eligible=(state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) && state->preparing!=~0U && anchor->outstanding<anchor->limit &&
+            (!state->uses_bar || (anchor->bar_outstanding<anchor->bar_limit && (uplink || anchor->bar_dl_outstanding<anchor->bar_dl_limit)));
         if (eligible) state->preparing++;
     }
     bpf_spin_unlock(&anchor->lock);
@@ -211,6 +229,8 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     }
     pending->session_id=id;
     pending->cookie=cookie;
+    pending->received_ns=now;
+    pending->downlink=!uplink;
     pending->lane=lane;
     pending->pdr_id=ctx->pdr_id;
     pending->ingress_ifindex=ctx->xdp_ctx->ingress_ifindex;
@@ -285,7 +305,7 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     }
     record->session_id=id;
     record->cookie=cookie;
-    record->received_ns=bpf_ktime_get_ns();
+    record->received_ns=pending->received_ns;
     record->lane=lane;
     record->pdr_id=pending->pdr_id;
     record->length=length;
@@ -307,16 +327,20 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
         else if ((first>>4)==6) record->ppi=((first&15)<<2)|(second>>6);
     }
     record->notify=pending->notify;
-    record->reserved=0;
+    record->reserved=pending->downlink;
     int admitted=0;
     bpf_spin_lock(&anchor->lock);
     struct buffer_far *state=&anchor->far[lane];
     if (state->cookie==cookie && state->preparing) {
         state->preparing--;
+        buffer_expire_bar(anchor,record->received_ns);
         if ((state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) &&
-            state->produced!=~0ULL && anchor->outstanding<anchor->limit) {
+            state->produced!=~0ULL && anchor->outstanding<anchor->limit &&
+            (!state->uses_bar || (anchor->bar_outstanding<anchor->bar_limit && (!record->reserved || anchor->bar_dl_outstanding<anchor->bar_dl_limit)))) {
             record->sequence=++state->produced;
             anchor->outstanding++;
+            if (record->reserved) state->downlink++;
+            if (state->uses_bar) { anchor->bar_outstanding++;if (record->reserved) anchor->bar_dl_outstanding++; }
             admitted=1;
         }
         buffer_maybe_forward(state);

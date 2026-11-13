@@ -192,7 +192,7 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 		far.FarInfo.BufferCookie = cycle.cookie
 		far.FarInfo.BufferLane = lane
 		session.FARs[farID] = far
-		lanes = append(lanes, ebpf.BufferLane{Index: lane, Cookie: cycle.cookie, Mode: ebpf.BufferHold})
+		lanes = append(lanes, ebpf.BufferLane{Index: lane, Cookie: cycle.cookie, Mode: ebpf.BufferHold, UsesBAR: downlinkBARAssociated(session, far)})
 	}
 	buffering.reserved += buffering.options.PerSession
 	buffering.owners[session.LocalSEID] = owner
@@ -399,7 +399,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			} else if !packet.sent && now.Before(packet.arrived.Add(buffering.options.Retention)) {
 				break
 			}
-			_, err := buffering.complete(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence})
+			_, err := buffering.complete(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence, Downlink: packet.record.Downlink})
 			if err != nil {
 				buffering.ioFailure(cycle, now, fmt.Errorf("complete admitted buffer: %w", err))
 				break
