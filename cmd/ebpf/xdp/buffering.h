@@ -88,7 +88,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     __u64 lane=command->lane;
     __u32 operation=command->operation, mode=command->mode;
     __u32 ready=command->ready, limit=command->limit;
-    if (lane>=BUFFER_FAR_LANES || operation>3 || mode>BUFFER_DISCARD || ready>1) return XDP_ABORTED;
+    if (lane>=BUFFER_FAR_LANES || operation>6 || mode>BUFFER_DISCARD || ready>1) return XDP_ABORTED;
     asm volatile("" : "+r"(lane));
     lane &= BUFFER_FAR_LANES-1;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
@@ -96,7 +96,13 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     int action=XDP_ABORTED;
     bpf_spin_lock(&anchor->lock);
     struct buffer_far *far=&anchor->far[lane];
-    if (cookie && far->cookie==cookie) {
+    if (operation==5 && cookie && !far->cookie && mode==BUFFER_HOLD) {
+        far->cookie=cookie;
+        far->mode=mode;
+        far->ready=0;
+        far->produced=far->completed=0;
+        action=XDP_DROP;
+    } else if (cookie && far->cookie==cookie) {
         if (!operation) {
             if (sequence<=far->completed) action=XDP_DROP;
             else if (sequence==far->completed+1 && sequence<=far->produced && anchor->outstanding) {
@@ -105,6 +111,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
                 action=XDP_DROP;
             }
         } else if (operation==1 && (mode==BUFFER_DISCARD ||
+            (mode==BUFFER_HOLD && far->mode>=BUFFER_HOLD && far->mode<=BUFFER_FORWARD) ||
             (mode==BUFFER_DRAIN && (far->mode==BUFFER_HOLD || far->mode==BUFFER_DRAIN ||
                 (far->mode==BUFFER_FORWARD && ready && far->produced==far->completed))))) {
             far->mode=mode;
@@ -114,11 +121,23 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
             anchor->limit=limit;
             action=XDP_DROP;
         } else if (operation==3) action=XDP_DROP;
+        // Journal rollback restores controls, never producer/consumer counters.
+        else if (operation==4 && mode>=BUFFER_HOLD) {
+            far->mode=mode;
+            far->ready=ready;
+            action=XDP_DROP;
+        } else if (operation==6 && far->produced==far->completed &&
+            (far->mode==BUFFER_DISCARD || far->mode==BUFFER_FORWARD)) {
+            far->cookie=far->produced=far->completed=0;
+            far->mode=far->ready=0;
+            action=XDP_DROP;
+        }
         if (far->mode==BUFFER_DRAIN && far->ready && far->produced==far->completed)
             far->mode=BUFFER_FORWARD;
         command->mode=far->mode;
         command->ready=far->ready;
         command->outstanding=anchor->outstanding;
+        command->limit=anchor->limit;
         command->produced=far->produced;
         command->completed=far->completed;
     }

@@ -97,10 +97,64 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	}
 	command.Mode = binary.LittleEndian.Uint32(output[32:])
 	command.Ready = binary.LittleEndian.Uint32(output[36:])
+	command.Limit = binary.LittleEndian.Uint32(output[40:])
 	command.Outstanding = binary.LittleEndian.Uint32(output[44:])
 	command.Produced = binary.LittleEndian.Uint64(output[48:])
 	command.Completed = binary.LittleEndian.Uint64(output[56:])
 	return command, nil
+}
+
+// JournalBufferControl stages admission mode or capacity with rule publication.
+// Rollback preserves counters changed by packet producers and the ring reader.
+func (tx *ruleTransaction) JournalBufferControl(command BufferCommand) error {
+	if tx.finished || command.SessionID != tx.sessionID || (command.Operation != 1 && command.Operation != 2) {
+		return errors.New("invalid journal buffering control")
+	}
+	query := command
+	query.Operation, query.Mode, query.Ready = 3, 0, 0
+	previous, err := tx.objects.BufferControl(query)
+	if err != nil {
+		return err
+	}
+	if tx.beforeWrite != nil {
+		if err := tx.beforeWrite(); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.objects.BufferControl(command); err != nil {
+		return err
+	}
+	tx.dirty = true
+	tx.undo = append(tx.undo, func() error {
+		previous.Operation = 4
+		if command.Operation == 2 {
+			previous.Operation = 2
+		}
+		_, err := tx.objects.BufferControl(previous)
+		return err
+	})
+	return nil
+}
+
+// BufferGrace closes after a terminal publication or rollback and the kernel
+// producer grace. Packet consumption and I/O completion remain separate signals.
+// Closing this signal never waits for ring records in the grace worker.
+func (tx *ruleTransaction) BufferGrace() <-chan struct{} {
+	if tx.bufferGrace == nil {
+		tx.bufferGrace = make(chan struct{})
+	}
+	return tx.bufferGrace
+}
+
+func (tx *ruleTransaction) finishBufferGrace() error {
+	if tx.bufferGrace != nil {
+		select {
+		case <-tx.bufferGrace:
+		default:
+			close(tx.bufferGrace)
+		}
+	}
+	return nil
 }
 
 // BufferRecord borrows its packet bytes from the reader until the next Read.

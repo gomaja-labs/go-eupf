@@ -37,6 +37,7 @@ type ruleTransaction struct {
 	completion             chan error
 	pdrs                   map[pdrMutationKey]*pdrMutation
 	pdrOrder               []*pdrMutation
+	bufferGrace            chan struct{}
 }
 
 // BeginRuleTransaction serializes control-plane journals without stopping packet
@@ -103,6 +104,9 @@ func (tx *ruleTransaction) Commit() error {
 			}
 			return nil
 		})
+	}
+	if tx.bufferGrace != nil {
+		work = append(work, tx.finishBufferGrace)
 	}
 	if len(work) > 0 || tx.retiredKey || tx.usagePending {
 		if tx.usagePending {
@@ -190,9 +194,9 @@ func (tx *ruleTransaction) Rollback() error {
 		for _, id := range tx.allocatedURR {
 			b.ReleaseURR(id)
 		}
-		return nil
+		return tx.finishBufferGrace()
 	}
-	if len(tx.undo) > 0 || len(tx.allocatedFAR)+len(tx.allocatedQER)+len(tx.allocatedURR) > 0 || result != nil {
+	if len(tx.undo) > 0 || len(tx.allocatedFAR)+len(tx.allocatedQER)+len(tx.allocatedURR) > 0 || result != nil || tx.bufferGrace != nil {
 		b.grace.enqueue(graceWork{sessionID: tx.sessionID, prepare: prepare, reclaim: release})
 	} else {
 		_ = release()

@@ -314,3 +314,59 @@ func TestBufferReaderClosesWithItsObjects(t *testing.T) {
 		t.Fatal("closing maps did not release their reader")
 	}
 }
+
+func TestBufferJournalRestoresModeWithoutRestoringLiveCounters(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.CreateBufferAnchor(42, 2, []BufferLane{{Index: 0, Cookie: 7, Mode: BufferHold}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.UpdateFar(3, FarInfo{Action: 4, BufferSessionID: 42, BufferCookie: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{SessionID: 42, PdrID: 9, FarId: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.UpfIpEntrypointFunc.Test(bufferedFrame(t, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := b.BeginRuleTransaction(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	journal, ok := tx.(interface {
+		JournalBufferControl(BufferCommand) error
+		BufferGrace() <-chan struct{}
+	})
+	if !ok {
+		t.Fatal("buffer admission state is outside the rule journal")
+	}
+	grace := journal.BufferGrace()
+	if err := journal.JournalBufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDiscard}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
+	if err != nil || state.Mode != BufferDiscard {
+		t.Fatalf("staged mode=%+v error=%v", state, err)
+	}
+	if _, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Sequence: 1}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-grace:
+		t.Fatal("uncommitted journal reported producer grace")
+	default:
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-grace:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rollback did not signal producer grace")
+	}
+	state, err = b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
+	if err != nil || state.Mode != BufferHold || state.Produced != 1 || state.Completed != 1 || state.Outstanding != 0 {
+		t.Fatalf("rollback overwrote live counters: %+v error=%v", state, err)
+	}
+}
