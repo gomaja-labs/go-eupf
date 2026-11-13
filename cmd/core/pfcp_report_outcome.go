@@ -59,6 +59,15 @@ func (conn *PfcpConnection) bindReportUsageLocked(msg message.Message, assoc *No
 }
 
 func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *Session, result requestResult) {
+	if result.outcome == requestAccepted && req.bufferUpdate != nil {
+		conn.bufferUpdates = append(conn.bufferUpdates, req.bufferUpdate)
+	}
+	if req.downlink != nil && !conn.downlinkNotificationCurrent(req, session) {
+		return
+	}
+	if conn.completeDownlinkNotificationLocked(req, session, result) {
+		return
+	}
 	if result.outcome == requestAccepted {
 		return
 	} // Clause 6.3.5.2: delivered.
@@ -149,6 +158,9 @@ func (conn *PfcpConnection) flushReportRetries() {
 			continue
 		}
 		session := assoc.Sessions[old.localSEID]
+		if old.downlink != nil && !conn.downlinkNotificationCurrent(old, session) {
+			continue
+		}
 		msg, err := message.Parse(old.wire)
 		if err != nil {
 			// old.wire was encoded by prepareRequestContext and is immutable.
@@ -168,6 +180,7 @@ func (conn *PfcpConnection) flushReportRetries() {
 		}
 		conn.transport.mu.Lock()
 		conn.transport.pending[report.Sequence()].usage = old.usage
+		conn.transport.pending[report.Sequence()].downlink = old.downlink
 		conn.transport.mu.Unlock()
 		outgoing = append(outgoing, admittedRequest{wire, report.MessageType(), &peer, socket, old.trace})
 	}

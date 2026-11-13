@@ -46,9 +46,11 @@ var pfcpHandlers = PfcpHandlerMap{
 }
 
 type PfcpConnection struct {
-	socketMu  sync.RWMutex
-	closeOnce sync.Once
-	done      chan struct{}
+	downlinkSessions map[uint64]*NodeAssociation
+	bufferUpdates    []*bufferReportUpdate
+	socketMu         sync.RWMutex
+	closeOnce        sync.Once
+	done             chan struct{}
 
 	stateMu               sync.RWMutex // Owns all associations, sessions and their indexes.
 	nextSessionID         uint64       // UPF-wide SEID allocator, also owned by stateMu.
@@ -495,6 +497,7 @@ func (connection *PfcpConnection) Run() {
 		default:
 		}
 		connection.serviceTransactions(time.Now())
+		connection.serviceDownlinkNotifications(time.Now())
 		connection.serviceHeartbeats(time.Now())
 		socket := connection.socket()
 		_ = socket.SetReadDeadline(time.Now().Add(50 * time.Millisecond))

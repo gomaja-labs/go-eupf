@@ -19,6 +19,7 @@ type bufferingActionRule struct {
 	notificationDelay    time.Duration
 	packetCount          uint16
 	packetCountPresent   bool
+	durationRevision     uint64
 	duration             time.Duration
 	durationPresent      bool
 	dlPacketCount        uint16
@@ -91,12 +92,15 @@ func rejectBufferingParameters(values ...*ie.IE) error {
 	return nil
 }
 
-func storeBAR(session *Session, bar *bufferingActionRule) error {
+func storeBAR(session *Session, bar *bufferingActionRule, durationUpdated bool) error {
 	if session.barRevision == math.MaxUint64 {
 		return &requestIEError{ie.CauseSystemFailure, ie.BARID, fmt.Errorf("BAR revision exhausted")}
 	}
 	session.barRevision++
 	bar.revision = session.barRevision
+	if durationUpdated {
+		bar.durationRevision = bar.revision
+	}
 	session.bar = bar
 	return nil
 }
@@ -184,7 +188,7 @@ func createBAR(session *Session, value *ie.IE) error {
 	if err := applyBARParameters(bar, fields.DownlinkDataNotificationDelay, fields.SuggestedBufferingPacketsCount, fields.DLBufferingDuration, fields.DLBufferingSuggestedPacketCount); err != nil {
 		return &ruleFailure{ie.RuleIDTypeBAR, uint32(id), err}
 	}
-	return storeBAR(session, bar)
+	return storeBAR(session, bar, fields.DLBufferingDuration != nil)
 }
 
 func updateBAR(session *Session, value *ie.IE) error {
@@ -226,7 +230,7 @@ func updateBAR(session *Session, value *ie.IE) error {
 	if err := applyBARParameters(&bar, delay, count, duration, dlCount); err != nil {
 		return &ruleFailure{ie.RuleIDTypeBAR, uint32(id), err}
 	}
-	return storeBAR(session, &bar)
+	return storeBAR(session, &bar, duration != nil)
 }
 
 func removeBAR(session *Session, value *ie.IE) error {

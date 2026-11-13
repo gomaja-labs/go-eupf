@@ -146,6 +146,9 @@ func (b *BpfObjects) DeleteDownlinkPdrIp6(ip net.IP, owner uint64, id, prefix ui
 }
 
 type FarInfo struct {
+	BufferSessionID uint64 `json:"-"`
+	BufferCookie    uint64 `json:"-"`
+	BufferLane      uint32 `json:"-"`
 	// EndMarkerSuppressed is derived from the N19/N19mb destination label.
 	EndMarkerSuppressed         bool
 	DestinationInterface        uint8
@@ -198,6 +201,7 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	}
 
 	farInfo := FarInfo{
+		BufferSessionID: farToStore.BufferSessionId, BufferCookie: farToStore.BufferCookie, BufferLane: farToStore.BufferLane,
 		EndMarkerSuppressed:         farToStore.EndMarkerSuppressed != 0,
 		Action:                      farToStore.Action,
 		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
@@ -761,5 +765,5 @@ func (tx *ruleTransaction) RetireQer(id uint32) error {
 }
 
 func farMapValue(info FarInfo) IpEntrypointFarInfo {
-	return IpEntrypointFarInfo{EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
+	return IpEntrypointFarInfo{BufferSessionId: info.BufferSessionID, BufferCookie: info.BufferCookie, BufferLane: info.BufferLane, EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
 }

@@ -9,6 +9,11 @@ import (
 )
 
 type IpEntrypointObjects struct {
+	BufferPendingPacket       *ebpf.Map
+	UpfBufferAdmissionFunc    *ebpf.Program
+	BufferAnchors             *ebpf.Map
+	BufferEvents              *ebpf.Map
+	UpfBufferControlFunc      *ebpf.Program
 	UpfIpEntrypointFunc       *ebpf.Program
 	UpfRouterSolicitationFunc *ebpf.Program
 	FarMap                    *ebpf.Map
@@ -144,6 +149,9 @@ type IpEntrypointQerInfo struct {
 }
 
 type IpEntrypointFarInfo struct {
+	BufferSessionId             uint64
+	BufferCookie                uint64
+	BufferLane                  uint32
 	Action                      uint8
 	OuterHeaderCreation         uint8
 	EndMarkerSuppressed         uint8

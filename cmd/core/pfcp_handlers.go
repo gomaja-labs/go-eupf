@@ -188,6 +188,12 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		if handlerErr == nil && incomingMsg.MessageType() == message.MsgTypeSessionReportResponse && completed.localSEID != 0 && incomingMsg.SEID() != completed.localSEID {
 			handlerErr = errors.New("PFCP Session Report Response has a different local SEID")
 		}
+		if handlerErr == nil {
+			if report, ok := incomingMsg.(*message.SessionReportResponse); ok {
+				handlerErr = conn.validateBufferReportResponseLocked(completed, report)
+			}
+		}
+
 	}
 
 	if incomingMsg.IsRequest() {
@@ -298,6 +304,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	}
 	conn.stateMu.Unlock()
 	if completed != nil || incomingMsg.MessageType() == message.MsgTypeAssociationSetupRequest {
+		conn.flushBufferReportUpdates()
 		conn.flushReportRetries()
 	}
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {

@@ -42,24 +42,29 @@ type requestKey struct {
 	digest   [32]byte
 }
 type pendingRequest struct {
-	wire          []byte
-	peer          *net.UDPAddr
-	typ           uint8
-	retryAt       time.Time
-	lastSent      time.Time
-	releasePeriod time.Duration
-	interval      time.Duration
-	remaining     uint32
-	trace         bool
-	entity        string
-	association   *NodeAssociation
-	socket        *net.UDPConn
-	upFeatures    []byte
-	remoteSEID    uint64
-	localSEID     uint64
-	usage         []reportedUsage
-	onComplete    func(requestResult)
-	completed     bool
+	wire                   []byte
+	peer                   *net.UDPAddr
+	typ                    uint8
+	retryAt                time.Time
+	lastSent               time.Time
+	releasePeriod          time.Duration
+	interval               time.Duration
+	remaining              uint32
+	trace                  bool
+	entity                 string
+	association            *NodeAssociation
+	socket                 *net.UDPConn
+	upFeatures             []byte
+	remoteSEID             uint64
+	localSEID              uint64
+	usage                  []reportedUsage
+	downlink               *reportedDownlink
+	reportBAR              *bufferingActionRule
+	reportBufferState      *downlinkNotifications
+	reportBufferGeneration uint64
+	bufferUpdate           *bufferReportUpdate
+	onComplete             func(requestResult)
+	completed              bool
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -130,6 +135,15 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	request := state.pending[state.next]
 	request.remoteSEID = msg.SEID()
 	request.localSEID = localSEID
+	if association != nil && msg.MessageType() == message.MsgTypeSessionReportRequest {
+		if session := association.Sessions[localSEID]; session != nil {
+			request.reportBAR = session.bar
+			request.reportBufferState = session.downlink
+			if session.downlink != nil {
+				request.reportBufferGeneration = session.downlink.generation
+			}
+		}
+	}
 	request.onComplete = conn.originatorCompletion(request)
 	state.pendingBytes += len(wire)
 	return wire, nil

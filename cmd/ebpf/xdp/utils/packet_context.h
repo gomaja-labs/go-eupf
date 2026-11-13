@@ -15,7 +15,8 @@ struct pdr;
 struct packet_context {
     const struct pdr *return_pdr;
     __u8 return_nr_flag;
-    __u8 pdr_matched_key; // fits the existing pointer-alignment padding
+    __u8 pdr_matched_key;
+    __u32 pdr_id; // uses the existing pointer-alignment padding
     char *data;
     const char *data_end;
     struct upf_counters *counters;

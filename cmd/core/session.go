@@ -18,6 +18,7 @@ var (
 )
 
 type Session struct {
+	downlink      *downlinkNotifications
 	bar           *bufferingActionRule
 	barRevision   uint64
 	urrGeneration uint64

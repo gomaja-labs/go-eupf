@@ -28,14 +28,18 @@ import (
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
-	bucketMutex sync.Mutex
-	bucketIDs   *IdTracker
-	ruleMutex   sync.Mutex
-	ruleKeys    ruleKeyIndex
-	ruleImages  map[pdrMutationKey]pdrImage
-	rulePoison  error
-	ruleClosed  bool
-	grace       *ruleGrace
+	bufferMutex       sync.Mutex
+	bufferReadClaimed bool
+	bufferReadClosed  bool
+	bufferReader      *BufferReader
+	bucketMutex       sync.Mutex
+	bucketIDs         *IdTracker
+	ruleMutex         sync.Mutex
+	ruleKeys          ruleKeyIndex
+	ruleImages        map[pdrMutationKey]pdrImage
+	rulePoison        error
+	ruleClosed        bool
+	grace             *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -118,6 +122,11 @@ func (bpfObjects *BpfObjects) Load() error {
 	}
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
+	bpfObjects.bufferMutex.Lock()
+	bpfObjects.bufferReadClaimed = false
+	bpfObjects.bufferReadClosed = false
+	bpfObjects.bufferReader = nil
+	bpfObjects.bufferMutex.Unlock()
 	bpfObjects.ruleKeys = ruleKeyIndex{}
 	bpfObjects.ruleImages = make(map[pdrMutationKey]pdrImage)
 	bpfObjects.bucketIDs = NewIdTracker(4*bpfObjects.pdrMapSize + 1)
@@ -164,9 +173,17 @@ func (bpfObjects *BpfObjects) Close() error {
 	bpfObjects.ruleClosed = true
 	grace := bpfObjects.grace
 	bpfObjects.ruleMutex.Unlock()
+	bpfObjects.bufferMutex.Lock()
+	reader := bpfObjects.bufferReader
+	bpfObjects.bufferReader = nil
+	bpfObjects.bufferReadClosed = true
+	bpfObjects.bufferMutex.Unlock()
 	var err error
+	if reader != nil {
+		err = reader.Close()
+	}
 	if grace != nil {
-		err = grace.close()
+		err = errors.Join(err, grace.close())
 	}
 	return errors.Join(err, CloseAllObjects(
 		&bpfObjects.IpEntrypointObjects,
