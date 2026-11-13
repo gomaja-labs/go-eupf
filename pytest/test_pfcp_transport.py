@@ -412,12 +412,16 @@ def test_release_cleanup_failure_exits_and_restart_has_empty_maps(server, eviden
         teid = response[pfcp.IE_FTEID].TEID
         traffic = TunnelTraffic(teid)
         traffic.send("before-cleanup-failure")
-        # Session deletion removes the uplink PDR synchronously; FAR slots are reclaimed later in the background.
-        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "pdr_buckets"],
+        # PDR indices detach synchronously. A frozen FAR map makes the
+        # later slot clear fail, exercising bounded asynchronous reclamation.
+        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "far_map"],
                                check=True, capture_output=True, text=True)
         (evidence / "release-map-fault.json").write_text(fault.stdout)
         remote.release()
-        assert len(get_json("/api/v1/pfcp_sessions")) == 1
+        deadline = time.monotonic() + 2
+        while get_json("/api/v1/pfcp_sessions") and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert not get_json("/api/v1/pfcp_sessions")
         assert process.wait(timeout=8) == 1
         remote.close()
         restarted = Peer(server())
