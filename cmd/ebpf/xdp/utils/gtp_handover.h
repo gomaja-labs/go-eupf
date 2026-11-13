@@ -42,7 +42,14 @@ int shift_gtp_bytes(struct xdp_md *xdp, __u64 prefix, __s64 change) {
         }
         if (bpf_xdp_adjust_head(xdp,remove)) return -1;
     } else {
-        if (bpf_xdp_adjust_head(xdp,-change)) return -1;
+        // Linux 5.15 does not recover change's positive range from
+        // clang's combined signed interval check above. Bound the offset
+        // explicitly before any packet-pointer arithmetic.
+        __u64 growth=change;
+        asm volatile("" : "+r"(growth));
+        growth &= 0xf;
+        if (!growth || growth>8) return -1;
+        if (bpf_xdp_adjust_head(xdp,-(__s32)growth)) return -1;
         base=(void *)(long)xdp->data;
         end=(void *)(long)xdp->data_end;
         // Insertions precede the first extension; the prefix is at most
@@ -50,8 +57,8 @@ int shift_gtp_bytes(struct xdp_md *xdp, __u64 prefix, __s64 change) {
         if (prefix>94) return -1;
         for (int i=0;i<94;i++) {
             if ((__u32)i>=prefix) break;
-            if (base+i+change+1>end || base+i+1>end) return -1;
-            base[i]=base[i+change];
+            if (base+i+growth+1>end || base+i+1>end) return -1;
+            base[i]=base[i+growth];
         }
     }
     return 0;
