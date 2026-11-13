@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
@@ -90,7 +91,10 @@ type SQerInfo struct {
 type SUrrInfo struct {
 	// generation identifies one Create URR lifetime, across counter-slot swaps.
 	// TS 29.244 V20.1.0 clause 5.2.2.3.1 retains dissociated URRs.
-	generation                           uint64
+	generation uint64
+	// TS 29.244 V20.1.0 tables 7.5.8.3-1, 7.5.5.2-1 and 7.5.7.2-1:
+	// retain the measurement window and any earlier undelivered window.
+	windowStart, unreportedStart         time.Time
 	UnreportedUplink, UnreportedDownlink uint64
 	UrrInfo                              ebpf.UrrInfo
 	GlobalId                             uint32
@@ -152,10 +156,18 @@ func (s *Session) RemoveQer(id uint32) (SQerInfo, error) {
 func (s *Session) NewUrr(id uint32, internalId uint32, urrInfo ebpf.UrrInfo) {
 	s.urrGeneration++
 	s.URRs[id] = SUrrInfo{
-		generation: s.urrGeneration,
-		UrrInfo:    urrInfo,
-		GlobalId:   internalId,
+		generation:  s.urrGeneration,
+		windowStart: time.Now(),
+		UrrInfo:     urrInfo,
+		GlobalId:    internalId,
 	}
+}
+
+func (urr SUrrInfo) measurementStart() time.Time {
+	if !urr.unreportedStart.IsZero() && urr.unreportedStart.Before(urr.windowStart) {
+		return urr.unreportedStart
+	}
+	return urr.windowStart
 }
 
 func (s *Session) UpdateUrr(id uint32, urrInfo ebpf.UrrInfo) {

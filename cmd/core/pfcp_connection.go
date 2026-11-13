@@ -785,7 +785,8 @@ func (connection *PfcpConnection) SendReports() {
 				// starts another window using the provisioned threshold. Failed
 				// delivery restores the admitted octets (clause 6.3.5.2).
 				if urr.UrrInfo.VolumeTrigger && urr.UrrInfo.VolumeThreshold > 0 && uplink+downlink >= urr.UrrInfo.VolumeThreshold {
-					report := message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, urr.ReportSeqNumber, uplink, downlink)...)
+					end := time.Now()
+					report := message.NewSessionReportRequest(session.RemoteSEID, 0, buildSessionReportUsageIEs(connection.profile, urrid, urr.ReportSeqNumber, uplink, downlink, urr.measurementStart(), end)...)
 					peer, err := net.ResolveUDPAddr("udp", net.JoinHostPort(session.controlIP(connection).String(), "8805"))
 					if err != nil {
 						continue
@@ -802,6 +803,7 @@ func (connection *PfcpConnection) SendReports() {
 					}
 					connection.bindReportUsageLocked(report, association, seid)
 					urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
+					urr.windowStart, urr.unreportedStart = end, time.Time{}
 					admitted = append(admitted, admittedReport{wire, peer, socket, session.IsSessionTraced()})
 					urr.ReportSeqNumber++
 					urr.UrrInfo.UplinkVolume = newReport.UplinkVolume
@@ -952,8 +954,9 @@ func SendSessionReportUsage(conn *PfcpConnection, seid uint64, sequenceID uint32
 	reportSeq uint32,
 	uplink uint64,
 	downlink uint64,
+	start time.Time,
 	traced bool) {
-	additionalIEs := buildSessionReportUsageIEs(conn.profile, urrid, reportSeq, uplink, downlink)
+	additionalIEs := buildSessionReportUsageIEs(conn.profile, urrid, reportSeq, uplink, downlink, start, time.Now())
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)

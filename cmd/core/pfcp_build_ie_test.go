@@ -19,7 +19,7 @@ func TestBuildSessionReportUsageIEs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ies := buildSessionReportUsageIEs(tt.profile, 1, 7, 100, 200)
+			ies := buildSessionReportUsageIEs(tt.profile, 1, 7, 100, 200, time.Unix(1700000000, 0), time.Unix(1700000060, 0))
 			if len(ies) != 2 {
 				t.Fatalf("expected 2 top-level IEs (ReportType + UsageReport), got %d", len(ies))
 			}

@@ -11,6 +11,7 @@ import (
 type reportedUsage struct {
 	id               uint32
 	generation       uint64
+	start            time.Time
 	uplink, downlink uint64
 }
 type reportCleanup struct {
@@ -44,7 +45,11 @@ func (conn *PfcpConnection) bindReportUsageLocked(msg message.Message, assoc *No
 		if !ok {
 			continue
 		}
-		usage = append(usage, reportedUsage{id, urr.generation, volume.UplinkVolume, volume.DownlinkVolume})
+		start, err := fields.StartTime.StartTime()
+		if err != nil {
+			continue
+		}
+		usage = append(usage, reportedUsage{id, urr.generation, start, volume.UplinkVolume, volume.DownlinkVolume})
 	}
 	conn.transport.mu.Lock()
 	if req := conn.transport.pending[msg.Sequence()]; req != nil {
@@ -82,6 +87,9 @@ func (conn *PfcpConnection) completeReportLocked(req *pendingRequest, session *S
 		}
 		urr.UnreportedUplink += usage.uplink
 		urr.UnreportedDownlink += usage.downlink
+		if urr.unreportedStart.IsZero() || usage.start.Before(urr.unreportedStart) {
+			urr.unreportedStart = usage.start
+		}
 		session.URRs[usage.id] = urr
 	}
 }

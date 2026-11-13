@@ -37,7 +37,8 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 			up := counters.UplinkVolume - old.UrrInfo.UplinkVolume + old.UnreportedUplink
 			down := counters.DownlinkVolume - old.UrrInfo.DownlinkVolume + old.UnreportedDownlink
 			if up != 0 || down != 0 || replacement != 0 {
-				*reports = append(*reports, ie.NewUsageReportWithinSessionModificationResponse(ie.NewURRID(id), conn.profile.URSEQN(old.ReportSeqNumber), ie.NewUsageReportTrigger(0, 1<<3, 0), ie.NewEndTime(time.Now()), ie.NewVolumeMeasurement(7, up+down, up, down, 0, 0, 0)))
+				// TS 29.244 V20.1.0 table 7.5.5.2-1.
+				*reports = append(*reports, ie.NewUsageReportWithinSessionModificationResponse(ie.NewURRID(id), conn.profile.URSEQN(old.ReportSeqNumber), ie.NewUsageReportTrigger(0, 1<<3, 0), ie.NewStartTime(old.measurementStart()), ie.NewEndTime(time.Now()), ie.NewVolumeMeasurement(7, up+down, up, down, 0, 0, 0)))
 			}
 		}
 		pool.AddRule(ie.RuleIDTypeURR, id, Operation{
@@ -56,6 +57,7 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 				urr.ReportSeqNumber++
 				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
 				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
+				urr.windowStart, urr.unreportedStart = time.Now(), time.Time{}
 				session.URRs[id] = urr
 				return nil
 			},
@@ -83,6 +85,7 @@ func (conn *PfcpConnection) planStoppedUsage(pool *OperationPool, session *Sessi
 				}
 				urr.UrrInfo.UplinkVolume, urr.UrrInfo.DownlinkVolume = 0, 0
 				urr.UnreportedUplink, urr.UnreportedDownlink = 0, 0
+				urr.windowStart, urr.unreportedStart = time.Now(), time.Time{}
 				session.URRs[id] = urr
 				return nil
 			},

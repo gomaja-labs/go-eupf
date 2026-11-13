@@ -10,12 +10,14 @@ import (
 
 // buildSessionReportUsageIEs builds the IEs for SendSessionReportUsage
 // (volume threshold report) without sending. Exposed for testability.
-func buildSessionReportUsageIEs(profile PfcpProfile, urrid, reportSeq uint32, uplink, downlink uint64) []*ie.IE {
+func buildSessionReportUsageIEs(profile PfcpProfile, urrid, reportSeq uint32, uplink, downlink uint64, start, end time.Time) []*ie.IE {
 	usageReportIEs := append([]*ie.IE{
 		ie.NewURRID(urrid),
 		profile.URSEQN(reportSeq),
 		ie.NewUsageReportTrigger(1<<1, 0, 0), //Volume Threshold
-		ie.NewEndTime(time.Now()),
+		// TS 29.244 V20.1.0 table 7.5.8.3-1: VOLTH includes both times.
+		ie.NewStartTime(start),
+		ie.NewEndTime(end),
 		ie.NewVolumeMeasurement(0x7, uplink+downlink, uplink, downlink, 0, 0, 0),
 	}, profile.UsageReportSessionReportVendorIEs()...)
 	return []*ie.IE{

@@ -43,7 +43,7 @@ func TestFailedReportFollowsCurrentCPFSEID(t *testing.T) {
 						case "release":
 							SendSessionReportSessionRelease(conn, 11, 0, assoc.ID, false, []uint16{1})
 						case "usage":
-							SendSessionReportUsage(conn, 11, 0, assoc.ID, 9, 0, 20, 0, false)
+							SendSessionReportUsage(conn, 11, 0, assoc.ID, 9, 0, 20, 0, time.Now(), false)
 						case "adc":
 							SendSessionReportADC(conn, 11, 0, assoc.ID, 9, 0, "permit out ip from any to any", false)
 						case "dldr":
@@ -165,18 +165,32 @@ func TestFailedUsageReportSurvivesLastPDRDissociation(t *testing.T) {
 	s := NewSession(11, 77, "", "", false)
 	s.CPFSEIDIPv4 = net.ParseIP("127.0.0.25")
 	s.NewUrr(9, 1, ebpf.UrrInfo{VolumeTrigger: true, VolumeThreshold: 10})
+	oldStart := time.Now().Add(-time.Hour).Truncate(time.Second)
+	urr := s.URRs[9]
+	urr.windowStart = oldStart
+	s.URRs[9] = urr
 	s.PDRs[1] = SPDRInfo{PdrID: 1, URRIDs: []uint32{9}, PdrInfo: ebpf.PdrInfo{UrrIDs: []uint32{1}}}
 	assoc.Sessions[11] = s
 	conn.SendReports()
 	report := identityRead(t, cp)
+	urr = s.URRs[9]
+	urr.windowStart = oldStart.Add(30 * time.Minute)
+	s.URRs[9] = urr
+	beforeReplacement := time.Now()
 	conn.Handle(protocolWire(t, message.NewSessionModificationRequest(11, 900, ie.NewRemovePDR(ie.NewPDRID(1)))), cp.LocalAddr().(*net.UDPAddr))
 	current := assoc.Sessions[11]
+	if current.URRs[9].windowStart.Before(beforeReplacement) {
+		t.Fatal("counter replacement retained its old measurement window")
+	}
 	if len(current.PDRs) != 0 || current.URRs[9].GlobalId == 1 || current.URRs[9].generation != s.URRs[9].generation {
 		t.Fatal("dissociation did not preserve URR identity across its counter swap")
 	}
 	conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseSystemFailure))), cp.LocalAddr().(*net.UDPAddr))
 	if current.URRs[9].UnreportedUplink != 20 {
 		t.Fatal("failed report debt disappeared during last-PDR dissociation")
+	}
+	if !current.URRs[9].measurementStart().Equal(oldStart) {
+		t.Fatal("counter replacement lost the failed report's start")
 	}
 	plane.transaction.finish(t)
 	if cause := pipelineCause(t, identityRead(t, cp)); cause != ie.CauseRequestAccepted {
@@ -188,6 +202,10 @@ func TestFailedUsageReportSurvivesLastPDRDissociation(t *testing.T) {
 	fields, err := next.UsageReport[0].UsageReportWithinSessionReportRequest()
 	if err != nil {
 		t.Fatal(err)
+	}
+	start, err := fields.StartTime.StartTime()
+	if err != nil || !start.Equal(oldStart) {
+		t.Fatalf("restored start=%v err=%v, want %v", start, err, oldStart)
 	}
 	volume, err := fields.VolumeMeasurement.VolumeMeasurement()
 	if err != nil || volume.UplinkVolume != 20 {

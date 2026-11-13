@@ -267,7 +267,7 @@ func TestEverySessionOriginatorUsesLocalIdentity(t *testing.T) {
 			case "release":
 				SendSessionReportSessionRelease(conn, seid, 0, assoc.ID, false, []uint16{1})
 			case "usage":
-				SendSessionReportUsage(conn, seid, 0, assoc.ID, 9, 0, 40, 20, false)
+				SendSessionReportUsage(conn, seid, 0, assoc.ID, 9, 0, 40, 20, time.Now(), false)
 			case "adc":
 				SendSessionReportADC(conn, seid, 0, assoc.ID, 9, 0, "permit out ip from any to any", false)
 			case "dldr":

@@ -847,6 +847,8 @@ func processDeletionRequestRules(
 							ie.NewURRID(urrID),
 							conn.profile.URSEQN(urr.ReportSeqNumber),
 							ie.NewUsageReportTrigger(0, 1<<3, 0),
+							// TS 29.244 V20.1.0 table 7.5.7.2-1.
+							ie.NewStartTime(urr.measurementStart()),
 							ie.NewEndTime(time.Now()),
 							ie.NewVolumeMeasurement(0x7, uplink+downlink, uplink, downlink, 0, 0, 0),
 						}, conn.profile.UsageReportDeletionVendorIEs()...)
@@ -1449,6 +1451,8 @@ func removeURRs(
 						ie.NewURRID(urrID),
 						profile.URSEQN(oldUrr.ReportSeqNumber),
 						ie.NewUsageReportTrigger([]uint8{0, 1 << 3, 0}...),
+						// TS 29.244 V20.1.0 table 7.5.5.2-1.
+						ie.NewStartTime(oldUrr.measurementStart()),
 						ie.NewEndTime(time.Now()),
 						ie.NewVolumeMeasurement(0x7,
 							uplink+downlink,
