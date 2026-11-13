@@ -2,12 +2,13 @@ package core
 
 import (
 	"fmt"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"testing"
+
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // This opt-in probe measures retained state, independently of Go's GC goal or

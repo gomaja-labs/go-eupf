@@ -1,8 +1,9 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"testing"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 
 func TestURRIdentityEndsOnlyOnRemoveCreate(t *testing.T) {

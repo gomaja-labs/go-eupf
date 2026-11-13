@@ -6,11 +6,12 @@ package core
 import (
 	"errors"
 	"fmt"
-	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"net"
 	"net/netip"
 	"sync"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"

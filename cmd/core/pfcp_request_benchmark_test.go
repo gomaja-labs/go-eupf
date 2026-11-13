@@ -59,7 +59,11 @@ func BenchmarkPFCPRequests(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			defer cp.Close()
+			defer func() {
+				if err := cp.Close(); err != nil {
+					b.Error(err)
+				}
+			}()
 			buffer := make([]byte, 65535)
 			sequence := uint32(0)
 			encode := func(request message.Message) []byte {
