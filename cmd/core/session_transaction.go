@@ -33,6 +33,11 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 		if err != nil {
 			return &requestIEError{ie.CauseSystemFailure, 0, err}
 		}
+		if session.bufferPlan != nil {
+			if err := session.bufferPlan.begin(conn, tx); err != nil {
+				return err
+			}
+		}
 		keys := make([]ebpf.PDRKey, 0, len(session.PDRs))
 		for id, pdr := range session.PDRs {
 			keys = append(keys, ebpf.PDRKey{ID: id, TEID: pdr.Teid, IPv4: pdr.Ipv4, IPv6: pdr.Ipv6, IPv6Mask: pdr.PdrInfo.UEIPv6Mask})
@@ -52,6 +57,7 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 			return nil
 		}
 		finished = true
+		defer func() { session.bufferPlan = nil }()
 		defer unlockReservations()
 		defer func() { conn.mapOperations, conn.ResourceManager = maps, resources }()
 		retirement := func(reclaim func() error, committing bool) (func() error, func()) {
@@ -60,9 +66,14 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 				return reclaim, func() {}
 			}
 			completion := &sessionRetirement{release: func() { resources.ReleaseSession(owner) }}
+			var packetOwner *bufferOwner
+			if session.buffers != nil && session.bufferPlan != nil && session.bufferPlan.owner != nil {
+				packetOwner = session.buffers.owner
+				packetOwner.retirement = completion
+			}
 			return func() error {
 				err := reclaimReservations(reclaim)
-				if err == nil {
+				if err == nil && packetOwner == nil {
 					completion.retired()
 				}
 				return err
@@ -92,6 +103,9 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 			if err == nil {
 				allow()
 			}
+			if session.bufferPlan != nil {
+				session.bufferPlan.finish(conn, false, err == nil)
+			}
 			return err
 		}
 		if !commit {
@@ -102,12 +116,20 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 				return errors.Join(err, rollback())
 			}
 		}
+		if session.bufferPlan != nil {
+			if err := session.bufferPlan.publish(conn, tx); err != nil {
+				return errors.Join(err, rollback())
+			}
+		}
 		reclaim, allow := retirement(journal.Commit(), true)
 		if deferred {
 			async.RetireResources(reclaim)
 		}
 		if err := tx.Commit(); err != nil {
 			return errors.Join(err, rollback())
+		}
+		if session.bufferPlan != nil {
+			session.bufferPlan.finish(conn, true, true)
 		}
 		if deferred {
 			allow()

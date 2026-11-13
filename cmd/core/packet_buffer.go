@@ -40,10 +40,13 @@ type bufferCycle struct {
 	received, completed uint64
 	notified            uint64
 	canceled            bool
+	draining, terminal  bool
+	grace               <-chan struct{}
 }
 type packetBufferSession struct {
-	owner  *bufferOwner
-	cycles map[uint32]*bufferCycle
+	owner    *bufferOwner
+	cycles   map[uint32]*bufferCycle
+	revision uint64
 }
 type bufferOwner struct {
 	conn                               *PfcpConnection
@@ -52,6 +55,9 @@ type bufferOwner struct {
 	cycles                             [ebpf.BufferFarLanes]*bufferCycle
 	nextCookie                         uint64
 	active, canceled, graced, released bool
+	terminal                           bool
+	grace                              <-chan struct{}
+	retirement                         *sessionRetirement
 }
 
 // PacketBuffering owns one application ring reader and one bounded payload pool
@@ -152,7 +158,7 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 		return nil, errors.New("buffering session identity already reserved")
 	}
 	owner := &bufferOwner{conn: conn, association: association, session: session}
-	state := &packetBufferSession{owner: owner, cycles: make(map[uint32]*bufferCycle)}
+	state := &packetBufferSession{owner: owner, cycles: make(map[uint32]*bufferCycle), revision: 1}
 	var lanes []ebpf.BufferLane
 	for farID, far := range session.FARs {
 		if far.FarInfo.Action&4 == 0 {
@@ -351,6 +357,10 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 	if owner.released || !owner.active && !owner.canceled {
 		return
 	}
+	buffering.noteQueued(owner)
+	if owner.terminal && bufferGraceDone(owner.grace) {
+		owner.graced = true
+	}
 	for _, cycle := range owner.cycles {
 		if cycle == nil {
 			continue
@@ -361,7 +371,8 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				break
 			}
 			if owner.canceled || cycle.canceled {
-				if !owner.graced {
+				canDiscard := owner.graced && owner.terminal || cycle.terminal && bufferGraceDone(cycle.grace)
+				if !canDiscard {
 					break
 				}
 			} else if now.Before(packet.arrived.Add(buffering.options.Retention)) {
@@ -377,6 +388,20 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			cycle.completed = packet.record.Sequence
 			buffering.releasePacket(index)
 			buffering.signal()
+		}
+		if cycle.canceled && cycle.terminal && bufferGraceDone(cycle.grace) && cycle.head == noBufferedPacket {
+			state, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 3})
+			if err != nil {
+				buffering.fail(err)
+				continue
+			}
+			if cycle.received == state.Produced && cycle.completed == state.Produced {
+				if _, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 6}); err != nil {
+					buffering.fail(err)
+					continue
+				}
+				owner.cycles[cycle.lane] = nil
+			}
 		}
 	}
 	if owner.canceled && owner.graced {
@@ -404,6 +429,9 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			buffering.reserved -= buffering.options.PerSession
 		}
 		buffering.mu.Unlock()
+		if owner.retirement != nil {
+			owner.retirement.retired()
+		}
 		buffering.signal()
 	}
 }
@@ -419,6 +447,7 @@ func (buffering *PacketBuffering) Close() error {
 		for _, owner := range owners {
 			owner.conn.stateMu.Lock()
 			owner.canceled = true
+			owner.terminal = true
 			delete(owner.conn.downlinkSessions, owner.session.LocalSEID)
 			if state := owner.session.downlink; state != nil {
 				state.stopped = true
@@ -431,6 +460,9 @@ func (buffering *PacketBuffering) Close() error {
 				}
 				_, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 1, Mode: ebpf.BufferDiscard})
 				buffering.closeError = errors.Join(buffering.closeError, err)
+				if err != nil {
+					owner.terminal = false
+				}
 			}
 			owner.conn.stateMu.Unlock()
 		}
@@ -440,7 +472,7 @@ func (buffering *PacketBuffering) Close() error {
 			if err == nil {
 				for _, owner := range owners {
 					owner.conn.stateMu.Lock()
-					owner.graced = true
+					owner.graced = owner.terminal
 					buffering.serviceOwner(owner, time.Now())
 					owner.conn.stateMu.Unlock()
 				}

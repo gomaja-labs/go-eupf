@@ -60,6 +60,9 @@ func (conn *PfcpConnection) reportBufferContextCurrent(request *pendingRequest, 
 	if request.reportBAR != session.bar || request.reportBufferState != session.downlink || !conn.reportAddressCurrent(request, session) {
 		return false
 	}
+	if session.buffers != nil && request.reportBufferRevision != session.buffers.revision {
+		return false
+	}
 	return session.downlink == nil || request.reportBufferGeneration == session.downlink.generation
 }
 
@@ -81,6 +84,15 @@ func (conn *PfcpConnection) flushBufferReportUpdates() {
 		if session == nil || !conn.reportBufferContextCurrent(request, session) {
 			continue
 		}
+		if session.buffers != nil {
+			candidate, err := conn.applyPacketBufferReportUpdate(assoc, session, work)
+			if err != nil {
+				conn.terminalError = err
+				conn.packetBuffers.fail(err)
+				continue
+			}
+			session = candidate
+		}
 		if session.bar != work.after {
 			session.bar = work.after
 			if work.after != nil {
@@ -96,4 +108,23 @@ func (conn *PfcpConnection) flushBufferReportUpdates() {
 		}
 		conn.applyDownlinkDurationLocked(session, time.Now())
 	}
+}
+
+func (conn *PfcpConnection) applyPacketBufferReportUpdate(assoc *NodeAssociation, before *Session, work *bufferReportUpdate) (_ *Session, result error) {
+	candidate := cloneSession(before)
+	candidate.bar = work.after
+	if work.after != nil {
+		candidate.barRevision = work.after.revision
+	}
+	start, finish := conn.prepareSessionMutation(candidate, updateSessionMutation)
+	defer func() { result = errors.Join(result, finish(false)) }()
+	conn.stagePacketBuffering(assoc, before, candidate, updateSessionMutation, work.drop)
+	if err := start(); err != nil {
+		return nil, err
+	}
+	if err := finish(true); err != nil {
+		return nil, err
+	}
+	assoc.Sessions[candidate.LocalSEID] = candidate
+	return candidate, nil
 }

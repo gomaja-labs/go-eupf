@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -169,4 +170,158 @@ func TestPacketBufferReservationIsGlobalAndPrecedesPublication(t *testing.T) {
 	if raw, err := buffering.plane.BufferAnchors.LookupBytes(uint64(13)); err != nil || raw != nil {
 		t.Fatalf("unreserved anchor lookup length=%d error=%v", len(raw), err)
 	}
+}
+
+func TestSessionJournalReservesAndRollsBackPacketBuffers(t *testing.T) {
+	_, buffering, conn, assoc, session, _ := packetBufferFixture(t)
+	conn.stateMu.Lock()
+	if err := conn.ResourceManager.AdmitSession(session.LocalSEID); err != nil {
+		conn.stateMu.Unlock()
+		t.Fatal(err)
+	}
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
+	defer func() {
+		conn.stateMu.Lock()
+		err := finish(false)
+		conn.stateMu.Unlock()
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+	conn.stagePacketBuffering(assoc, nil, session, createSessionMutation, false)
+	if err := start(); err != nil {
+		conn.stateMu.Unlock()
+		t.Fatal(err)
+	}
+	if session.buffers == nil {
+		conn.stateMu.Unlock()
+		t.Fatal("session journal published without reserving packet buffers")
+	}
+	owner := session.buffers.owner
+	if err := finish(false); err != nil {
+		conn.stateMu.Unlock()
+		t.Fatal(err)
+	}
+	conn.stateMu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn.stateMu.RLock()
+		released := owner.released
+		conn.stateMu.RUnlock()
+		if released {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rollback did not return its packet reservation")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	buffering.mu.Lock()
+	reserved := buffering.reserved
+	buffering.mu.Unlock()
+	if reserved != 0 {
+		t.Fatalf("rollback retained %d packet credits", reserved)
+	}
+}
+
+func publishPacketBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
+	t.Helper()
+	plane, buffering, conn, assoc, session, peer := packetBufferFixture(t)
+	conn.stateMu.Lock()
+	defer conn.stateMu.Unlock()
+	if err := conn.ResourceManager.AdmitSession(session.LocalSEID); err != nil {
+		t.Fatal(err)
+	}
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
+	defer func() {
+		if err := finish(false); err != nil {
+			t.Error(err)
+		}
+	}()
+	conn.stagePacketBuffering(assoc, nil, session, createSessionMutation, false)
+	if err := start(); err != nil {
+		t.Fatal(err)
+	}
+	slot, err := conn.mapOperations.GetNextFAR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	far := session.FARs[1]
+	far.GlobalId = slot
+	session.FARs[1] = far
+	if err := conn.mapOperations.UpdateFar(slot, far.FarInfo); err != nil {
+		t.Fatal(err)
+	}
+	farID := uint32(1)
+	session.PDRs[9] = SPDRInfo{FARID: &farID, PdrID: 9, Ipv4: net.IP{198, 51, 100, 2}, SourceInterface: 1, PdrInfo: ebpf.PdrInfo{SessionID: 11, PdrID: 9, NRFlag: true}}
+	if err := conn.rebindSessionRules(session); err != nil {
+		t.Fatal(err)
+	}
+	if err := finish(true); err != nil {
+		t.Fatal(err)
+	}
+	return plane, buffering, conn, assoc, session, peer
+}
+
+func TestDownlinkDropResponseCancelsActualAdmittedPackets(t *testing.T) {
+	plane, buffering, conn, assoc, session, peer := publishPacketBufferFixture(t)
+	if _, _, err := plane.UpfIpEntrypointFunc.Test(bufferKernelPacket(t, 100)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		conn.stateMu.RLock()
+		notices := len(session.downlink.pending)
+		conn.stateMu.RUnlock()
+		if notices != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actual admitted packet did not queue DLDR")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	conn.serviceDownlinkNotifications(time.Now())
+	first := identityRead(t, peer).(*message.SessionReportRequest)
+	oldFar := session.FARs[1]
+	response := message.NewSessionReportResponse(11, first.Sequence(), ie.NewCause(ie.CauseRequestAccepted), ie.NewPFCPSRRspFlags(1))
+	conn.Handle(protocolWire(t, response), peer.LocalAddr().(*net.UDPAddr))
+	conn.stateMu.RLock()
+	replacement := assoc.Sessions[11]
+	newFar := replacement.FARs[1]
+	conn.stateMu.RUnlock()
+	if oldFar.GlobalId == newFar.GlobalId || oldFar.FarInfo.BufferCookie == newFar.FarInfo.BufferCookie {
+		t.Fatal("DROBU did not publish a new buffering lifetime through a fresh FAR")
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		buffering.mu.Lock()
+		held := len(buffering.entries) - len(buffering.free)
+		buffering.mu.Unlock()
+		if held == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("DROBU retained its canceled payload")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, _, err := plane.UpfIpEntrypointFunc.Test(bufferKernelPacket(t, 101)); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		conn.serviceDownlinkNotifications(time.Now())
+		conn.transport.mu.Lock()
+		pending := len(conn.transport.pending)
+		conn.transport.mu.Unlock()
+		if pending != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("DROBU did not rearm actual packet admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = identityRead(t, peer)
 }

@@ -716,6 +716,9 @@ func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
 	if err = processDeletionRequestRules(connection, log.Logger, pool, context, draft, &reports); err != nil {
 		return err
 	}
+	if draft.buffers != nil {
+		connection.stagePacketBuffering(draft.buffers.owner.association, session, draft, deleteSessionMutation, false)
+	}
 	if err = pool.Commit(); err != nil {
 		return err
 	}

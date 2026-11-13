@@ -133,6 +133,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 
 	logger.Debug().Msgf("session rules before commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
 
+	conn.stagePacketBuffering(association, nil, session, createSessionMutation, false)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Establishment Request from %s failed, rolling back", addr)
 		logger.Debug().Msgf("session rules after failed commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
@@ -251,6 +252,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 		return message.NewSessionDeletionResponse(session.RemoteSEID, req.Sequence(), ruleFailureIEs(err)...), traced, nil
 	}
 
+	conn.stagePacketBuffering(association, session, session, deleteSessionMutation, false)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Deletion Request from %s failed, rolling back", addr)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
@@ -363,6 +365,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		}
 	}()
 
+	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, false)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
@@ -997,7 +1000,6 @@ func createFARs(
 				return err
 			}
 			session.FARs[farID] = saved
-			farInfo = saved.FarInfo
 		}
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
 			Reserve: func() error {
@@ -1010,7 +1012,7 @@ func createFARs(
 				session.FARs[farID] = next
 				return nil
 			},
-			Apply: func() error { return mapOperations.UpdateFar(session.GetFar(farID).GlobalId, farInfo) },
+			Apply: func() error { next := session.FARs[farID]; return mapOperations.UpdateFar(next.GlobalId, next.FarInfo) },
 		})
 	}
 

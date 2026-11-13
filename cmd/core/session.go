@@ -18,6 +18,7 @@ var (
 )
 
 type Session struct {
+	bufferPlan    *packetBufferPlan
 	buffers       *packetBufferSession
 	downlink      *downlinkNotifications
 	bar           *bufferingActionRule
