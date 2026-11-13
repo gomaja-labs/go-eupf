@@ -70,7 +70,12 @@ func TestSessionRestorationWireInputs(t *testing.T) {
 	if reply := exchangeProtocolDatagram(t, conn, protocolWire(t, request(30, 9, "", false))); reply != nil {
 		t.Fatal("stale timestamp was not discarded")
 	}
-	restored := exchangeProtocolDatagram(t, conn, protocolWire(t, request(40, 11, chosen.IPv4Address.String(), true))).(*message.SessionEstablishmentResponse)
+	pending := exchangeProtocolDatagram(t, conn, protocolWire(t, request(40, 11, chosen.IPv4Address.String(), true))).(*message.SessionEstablishmentResponse)
+	if cause, _ := pending.Cause.Cause(); cause != ie.CauseSessionRestorationResourceUnavailable {
+		t.Fatalf("resource still awaiting restart cleanup cause=%d", cause)
+	}
+	conn.serviceHeartbeats(time.Now())
+	restored := exchangeProtocolDatagram(t, conn, protocolWire(t, request(41, 11, chosen.IPv4Address.String(), true))).(*message.SessionEstablishmentResponse)
 	if cause, _ := restored.Cause.Cause(); cause != 1 {
 		t.Fatalf("available restoration cause=%d", cause)
 	}

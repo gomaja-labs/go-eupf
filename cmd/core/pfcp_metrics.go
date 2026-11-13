@@ -13,3 +13,6 @@ var PfcpReportFailures = promauto.NewCounterVec(prometheus.CounterOpts{Name: "up
 
 // PfcpUndeliveredUsage counts octets whose failed report outlived its URR.
 var PfcpUndeliveredUsage = promauto.NewCounter(prometheus.CounterOpts{Name: "upf_pfcp_undelivered_usage_octets_total", Help: "Undelivered usage octets belonging to removed or replaced URRs"})
+
+// PfcpCleanupPending counts invalidated session contexts awaiting deletion.
+var PfcpCleanupPending = promauto.NewGauge(prometheus.GaugeOpts{Name: "upf_pfcp_cleanup_sessions", Help: "Invalidated PFCP session contexts awaiting rule cleanup"})

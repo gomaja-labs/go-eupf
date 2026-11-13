@@ -71,6 +71,7 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 		if old.ID != id {
 			continue
 		}
+		conn.indexAssociation(old, -1)
 		for seid, session := range old.Sessions {
 			entity := old.sessionEntities[seid]
 			if entity == "" {
@@ -91,18 +92,15 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 					fresh.RecoveryTimestamp = old.RecoveryTimestamp
 				}
 				fresh.sessionEntities[seid] = entity
+				delete(old.Sessions, seid)
+				delete(old.sessionEntities, seid)
 				retained = true
-			} else {
-				if err := conn.DeleteSession(session); err != nil {
-					return false, fmt.Errorf("replace association session %d: %w", seid, err)
-				}
-				conn.forgetSession(old, seid)
 			}
 		}
+		conn.retireAssociationLocked(old)
 	}
 	for peer, old := range conn.NodeAssociations {
 		if old.ID == id {
-			conn.indexAssociation(old, -1)
 			delete(conn.NodeAssociations, peer)
 			conn.forgetPeerExceptSetup(old.ID)
 		}
@@ -145,6 +143,7 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 		return false
 	}
 	if !previous.IsZero() && stamp.After(previous) {
+		retired := NewNodeAssociation(assoc.ID, assoc.Addr)
 		for seid, session := range assoc.Sessions {
 			origin := assoc.sessionEntities[seid]
 			if origin == "" {
@@ -153,15 +152,11 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 			if origin != entity {
 				continue
 			}
-			if err := conn.DeleteSession(session); err != nil {
-				log.Error().Err(err).Uint64("session", seid).Msg("Retain restart context after failed cleanup")
-				if assoc.failedAt.IsZero() {
-					assoc.failedAt = time.Now()
-				}
-				return false
-			}
+			retired.Sessions[seid] = session
+			retired.sessionEntities[seid] = entity
 			conn.forgetSession(assoc, seid)
 		}
+		conn.retireAssociationLocked(retired)
 		conn.forgetEntityTransactions(addr, entity)
 	}
 	assoc.recoveries[entity] = stamp
@@ -459,6 +454,14 @@ func (conn *PfcpConnection) associationForMessage(msg message.Message, peer stri
 		if msg.SEID() != 0 {
 			if assoc := conn.sessionAssociation(msg.SEID()); assoc != nil {
 				return activeAssociation(assoc)
+			}
+			// An invalidated CP context remains attributable until reclamation.
+			// The active registry has no such session, so its handler answers
+			// Cause 65, including requests from a former CP entity address.
+			for _, retired := range conn.retiredAssociations {
+				if retired.Sessions[msg.SEID()] != nil {
+					return activeAssociation(conn.associationByID(retired.ID))
+				}
 			}
 		}
 		return activeAssociation(conn.GetAssociation(peer))

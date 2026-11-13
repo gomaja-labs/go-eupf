@@ -35,9 +35,13 @@ func (conn *PfcpConnection) indexAssociation(assoc *NodeAssociation, delta int) 
 	}
 }
 func (conn *PfcpConnection) forgetSession(assoc *NodeAssociation, seid uint64) {
-	if session := assoc.Sessions[seid]; session != nil {
+	if assoc.retired && assoc.Sessions[seid] != nil {
+		PfcpCleanupPending.Dec()
+	}
+	if session := assoc.Sessions[seid]; session != nil && !assoc.retired {
 		conn.indexSession(assoc, session, -1)
 	}
 	delete(assoc.Sessions, seid)
 	delete(assoc.sessionEntities, seid)
+	delete(assoc.cleanupFailures, seid)
 }

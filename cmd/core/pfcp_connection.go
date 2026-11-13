@@ -72,6 +72,7 @@ type PfcpConnection struct {
 	responseWait          <-chan error
 	reportCleanup         []reportCleanup
 	reportRetries         []*pendingRequest
+	retiredAssociations   []*NodeAssociation // Invalid CP contexts awaiting safe rule reclamation.
 
 	release       *AssociationRelease
 	releasing     bool

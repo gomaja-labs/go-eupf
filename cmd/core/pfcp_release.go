@@ -147,6 +147,18 @@ func (conn *PfcpConnection) prepareAssociationReleaseLocked(assoc *NodeAssociati
 
 func (conn *PfcpConnection) serviceReleasesLocked(now time.Time) []admittedRequest {
 	var outgoing []admittedRequest
+	// One detached batch per maintenance pass releases stateMu between batches.
+	// Rotate the queue so successive replacements cannot starve an older one.
+	if len(conn.retiredAssociations) > 0 {
+		assoc := conn.retiredAssociations[0]
+		if !now.Before(assoc.cleanupNext) {
+			conn.cleanupAssociationLocked(assoc, now)
+		}
+		if len(conn.retiredAssociations) > 1 && conn.retiredAssociations[0] == assoc {
+			copy(conn.retiredAssociations, conn.retiredAssociations[1:])
+			conn.retiredAssociations[len(conn.retiredAssociations)-1] = assoc
+		}
+	}
 	for _, assoc := range conn.NodeAssociations {
 		if assoc.cleaning {
 			if !now.Before(assoc.cleanupNext) {
@@ -187,6 +199,15 @@ func (conn *PfcpConnection) beginAssociationCleanupLocked(assoc *NodeAssociation
 	}
 }
 func (conn *PfcpConnection) finishAssociationCleanupLocked(assoc *NodeAssociation) {
+	if assoc.retired {
+		for i, current := range conn.retiredAssociations {
+			if current == assoc {
+				conn.retiredAssociations = append(conn.retiredAssociations[:i], conn.retiredAssociations[i+1:]...)
+				break
+			}
+		}
+		return
+	}
 	if !conn.ResourceManager.ShuttingDown() {
 		conn.indexAssociation(assoc, -1)
 	}
@@ -201,6 +222,18 @@ func (conn *PfcpConnection) finishAssociationCleanupLocked(assoc *NodeAssociatio
 		conn.releasing = false
 	}
 }
+
+// TS 29.244 V20.1.0 clause 6.2.6.2.2; TS 23.527 V20.0.0 clause
+// 4.4.2.1: contexts become invalid before their asynchronous rule reclamation.
+func (conn *PfcpConnection) retireAssociationLocked(assoc *NodeAssociation) {
+	if len(assoc.Sessions) == 0 {
+		return
+	}
+	assoc.retired, assoc.cleaning = true, true
+	assoc.cleanupNext = time.Time{}
+	conn.retiredAssociations = append(conn.retiredAssociations, assoc)
+	PfcpCleanupPending.Add(float64(len(assoc.Sessions)))
+}
 func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now time.Time) {
 	if conn.terminalError != nil {
 		return
@@ -212,7 +245,7 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 		if err := conn.DeleteSession(session); err != nil {
 			failure := assoc.cleanupFailures[id]
 			if failure.first.IsZero() {
-				failure.first = time.Now()
+				failure.first = maxTime(now, time.Now())
 			}
 			failure.attempts++
 			failure.err = err
@@ -320,12 +353,18 @@ func (conn *PfcpConnection) cleanupBeforeClose() {
 		return
 	}
 	conn.DeleteAllAssociations()
-	for conn.GetAssiciationCount() != 0 && conn.FatalError() == nil {
+	for conn.cleanupPending() && conn.FatalError() == nil {
 		time.Sleep(25 * time.Millisecond)
 		conn.stateMu.Lock()
 		conn.serviceReleasesLocked(time.Now())
 		conn.stateMu.Unlock()
 	}
+}
+
+func (conn *PfcpConnection) cleanupPending() bool {
+	conn.stateMu.RLock()
+	defer conn.stateMu.RUnlock()
+	return len(conn.NodeAssociations) > 0 || len(conn.retiredAssociations) > 0
 }
 
 // BeginShutdown latches Setup refusal across the shared process resource domain.

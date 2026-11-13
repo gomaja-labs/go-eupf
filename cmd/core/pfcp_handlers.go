@@ -243,7 +243,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 	}
 	if handlerErr == nil {
 		handlerIdentity := addr.IP.String()
-		if assoc != nil {
+		if assoc != nil && incomingMsg.MessageType() != message.MsgTypeHeartbeatRequest {
 			handlerIdentity = assoc.ID
 		}
 		if completed != nil && completed.typ == message.MsgTypeHeartbeatRequest && completed.association != nil {
