@@ -28,16 +28,24 @@ func (manager *ResourceManager) BeginReservation(owner uint64) *ReservationJourn
 	if pool := manager.FTEIDM; pool != nil {
 		pool.RLock()
 		journal.oldTEIDs = maps.Clone(pool.busyTEIDs[owner])
-		journal.view.FTEIDM = &FTEIDM{parent: pool, busyTEIDs: map[uint64]map[uint32]uint32{owner: maps.Clone(journal.oldTEIDs)}, reservedTEIDs: make(map[uint32]uint64)}
+		journal.view.FTEIDM = &FTEIDM{parent: pool}
+		if len(journal.oldTEIDs) > 0 {
+			journal.view.FTEIDM.busyTEIDs = map[uint64]map[uint32]uint32{owner: maps.Clone(journal.oldTEIDs)}
+		}
 		pool.RUnlock()
 	}
 	if pool := manager.IPAM; pool != nil {
 		pool.RLock()
 		journal.oldIPs = maps.Clone(pool.ownerIPs[owner])
 		journal.oldBusyIP = pool.busyIPs[owner]
-		journal.oldPrefixes = make(map[string]ipPrefixLease)
 		journal.oldPrefixes = maps.Clone(pool.activePrefixes[owner])
-		journal.view.IPAM = &IPAM{parent: pool, busyIPs: map[uint64]net.IP{owner: journal.oldBusyIP}, ownerIPs: map[uint64]map[string]net.IP{owner: maps.Clone(journal.oldIPs)}, reservedIPs: make(map[string]uint64), prefixLeases: maps.Clone(journal.oldPrefixes)}
+		journal.view.IPAM = &IPAM{parent: pool, prefixLeases: maps.Clone(journal.oldPrefixes)}
+		if len(journal.oldBusyIP) > 0 {
+			journal.view.IPAM.busyIPs = map[uint64]net.IP{owner: journal.oldBusyIP}
+		}
+		if len(journal.oldIPs) > 0 {
+			journal.view.IPAM.ownerIPs = map[uint64]map[string]net.IP{owner: maps.Clone(journal.oldIPs)}
+		}
 		pool.RUnlock()
 	}
 	return journal
@@ -72,7 +80,9 @@ func (journal *ReservationJournal) publish(rollback bool) func() error {
 			keep[id] = true
 		}
 		pool.Lock()
-		pool.busyTEIDs[owner] = maps.Clone(active)
+		if !maps.Equal(pool.busyTEIDs[owner], active) {
+			pool.busyTEIDs[owner] = maps.Clone(active)
+		}
 		if len(active) == 0 {
 			delete(pool.busyTEIDs, owner)
 		}
@@ -100,7 +110,9 @@ func (journal *ReservationJournal) publish(rollback bool) func() error {
 			active, busy, prefixes = journal.oldIPs, journal.oldBusyIP, journal.oldPrefixes
 		}
 		pool.Lock()
-		pool.ownerIPs[owner] = maps.Clone(active)
+		if !maps.EqualFunc(pool.ownerIPs[owner], active, net.IP.Equal) {
+			pool.ownerIPs[owner] = maps.Clone(active)
+		}
 		if len(active) == 0 {
 			delete(pool.ownerIPs, owner)
 		}

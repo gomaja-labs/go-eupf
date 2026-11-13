@@ -118,6 +118,9 @@ func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
 		ip, err := pool.parent.AllocateIP(owner)
 		if err == nil {
 			pool.record(owner, ip)
+			if pool.busyIPs == nil {
+				pool.busyIPs = make(map[uint64]net.IP)
+			}
 			pool.busyIPs[owner] = ip
 		}
 		return append(net.IP(nil), ip...), err
@@ -127,8 +130,11 @@ func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
 	if ip, ok := pool.busyIPs[owner]; ok {
 		return append(net.IP(nil), ip...), nil
 	}
-	if time.Now().Before(pool.allocateAfter) {
-		return nil, ErrResourceExhausted
+	if !pool.allocateAfter.IsZero() {
+		if time.Now().Before(pool.allocateAfter) {
+			return nil, ErrResourceExhausted
+		}
+		pool.allocateAfter = time.Time{}
 	}
 	if pool.freeIPs.len() == 0 {
 		return nil, ErrResourceExhausted
@@ -156,7 +162,13 @@ func (pool *IPAM) record(owner uint64, ip net.IP) {
 			pool.claims.set(ip, 128, "ip:"+key, owner, true)
 		}
 	}
+	if pool.reservedIPs == nil {
+		pool.reservedIPs = make(map[string]uint64)
+	}
 	pool.reservedIPs[key] = owner
+	if pool.ownerIPs == nil {
+		pool.ownerIPs = make(map[uint64]map[string]net.IP)
+	}
 	if pool.ownerIPs[owner] == nil {
 		pool.ownerIPs[owner] = make(map[string]net.IP)
 	}
@@ -262,8 +274,11 @@ func (pool *FTEIDM) AllocateTEID(owner uint64, pdr uint32) (uint32, error) {
 	if teid, ok := pool.busyTEIDs[owner][pdr]; ok {
 		return teid, nil
 	}
-	if time.Now().Before(pool.allocateAfter) {
-		return 0, ErrResourceExhausted
+	if !pool.allocateAfter.IsZero() {
+		if time.Now().Before(pool.allocateAfter) {
+			return 0, ErrResourceExhausted
+		}
+		pool.allocateAfter = time.Time{}
 	}
 	if pool.freeTEIDs.len() == 0 {
 		return 0, ErrResourceExhausted
@@ -274,6 +289,9 @@ func (pool *FTEIDM) AllocateTEID(owner uint64, pdr uint32) (uint32, error) {
 	return teid, nil
 }
 func (pool *FTEIDM) record(owner uint64, pdr, teid uint32) {
+	if pool.busyTEIDs == nil {
+		pool.busyTEIDs = make(map[uint64]map[uint32]uint32)
+	}
 	if pool.busyTEIDs[owner] == nil {
 		pool.busyTEIDs[owner] = make(map[uint32]uint32)
 	}
@@ -287,6 +305,9 @@ func (pool *FTEIDM) record(owner uint64, pdr, teid uint32) {
 			pool.ownerTEIDs[owner] = make(map[uint32]bool)
 		}
 		pool.ownerTEIDs[owner][teid] = true
+	}
+	if pool.reservedTEIDs == nil {
+		pool.reservedTEIDs = make(map[uint32]uint64)
 	}
 	pool.reservedTEIDs[teid] = owner
 }
