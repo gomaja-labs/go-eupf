@@ -23,6 +23,10 @@ type MapOperationsMock struct {
 	nextID      uint32
 }
 
+func (*MapOperationsMock) TunnelSourceAddresses() (net.IP, net.IP, error) {
+	return net.IPv4(127, 0, 0, 1), net.IPv4(127, 0, 0, 9), nil
+}
+
 func (mapOps *MapOperationsMock) PutPdrUplink(teid uint32, pdrInfo ebpf.PdrInfo) error {
 	mapOps.uplinkPDR = pdrInfo
 	return nil

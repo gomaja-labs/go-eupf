@@ -15,7 +15,10 @@ The maintained capability descriptions are:
 
 Ordinary N3/N9/EPC End Markers are generated on a per-FAR SNDEM request when
 the downstream F-TEID changes. Transmission follows rule publication and the
-data-plane grace period, using the old tunnel's address, port, and TEID.
+data-plane grace period, using the old tunnel's destination, port, and TEID.
+The source is the local N3/N9 address currently programmed for G-PDUs, including
+REST changes; advertised F-TEID, S1-U/S5S8 and PA addresses do not select it
+(TS 29.281 V19.2.0 clause 4.4.3.6).
 EMPU is advertised. Labeled N3/N9 data-forwarding tunnels requiring inter-system
 QFI/E-RAB mapping remain unsupported for SNDEM; N19 does not emit End Markers
 (TS 29.244 V20.1.0 clause 5.3.2; TS 29.281 V19.2.0 clause 7.3.2).

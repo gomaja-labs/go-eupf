@@ -303,7 +303,9 @@ control UP-constructed End Markers. SNDEM applies to its enclosing updated FAR.
 It is not supported as a top-level Session Modification flag. EMPU is set in
 UP Function Features (table 8.2.25-1, octet 6 bit 1).
 
-The source address follows the old PDR ingress paths: native N6 and CP-originated
+The source address is read from the local data-plane configuration, following
+REST N3/N9 edits. Advertised F-TEID addresses (including Sxa S1-U/S5S8 and Sxb PA)
+do not select it. It follows the old PDR ingress paths: native N6 and CP-originated
 re-encapsulation use N3; ordinary GTP relay uses N9, except forwarding towards
 the CP function uses N3. If a FAR served both local endpoints, a marker is sent
 from each distinct source. The marker uses

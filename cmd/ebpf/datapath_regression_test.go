@@ -62,6 +62,24 @@ func loadDatapath(t *testing.T) *BpfObjects {
 	return b
 }
 
+func TestTunnelSourcesReadCurrentDataplaneConfiguration(t *testing.T) {
+	b := loadDatapath(t)
+	for _, address := range []string{"192.0.2.1", "192.0.2.10"} {
+		var cfg IpEntrypointDataplaneConfig
+		if err := b.GlobalConfig.Get(&cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.N3Ipv4Address = binary.LittleEndian.Uint32(net.ParseIP(address).To4())
+		if err := b.GlobalConfig.Set(cfg); err != nil {
+			t.Fatal(err)
+		}
+		n3, n9, err := b.TunnelSourceAddresses()
+		if err != nil || !n3.Equal(net.ParseIP(address)) || !n9.Equal(net.ParseIP("192.0.2.2")) {
+			t.Fatalf("sources %s/%s err=%v", n3, n9, err)
+		}
+	}
+}
+
 func putDatapath[T any](t *testing.T, put func(interface{}, interface{}) error, key uint32, value *T) {
 	t.Helper()
 	if err := put(key, value); err != nil {

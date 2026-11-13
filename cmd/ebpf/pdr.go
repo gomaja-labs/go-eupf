@@ -383,6 +383,7 @@ func (bpfObjects *BpfObjects) DeleteUrr(internalId uint32) (UrrInfo, error) {
 }
 
 type ForwardingPlaneController interface {
+	TunnelSourceAddresses() (net.IP, net.IP, error)
 	BeginRuleTransaction(sessionID uint64) (RuleTransaction, error)
 	CheckPDRPlan(sessionID uint64, keys []PDRKey) error
 	GetNextFAR() (uint32, error)
@@ -412,6 +413,20 @@ type ForwardingPlaneController interface {
 	DetachRule(kind uint8, id uint32) error
 	SynchronizeRules() error
 	DeleteUrr(internalId uint32) (UrrInfo, error)
+}
+
+// TunnelSourceAddresses returns the local IPv4 sources currently programmed for
+// native encapsulation and relay. Advertised F-TEID addresses are independent.
+// TS 29.281 V19.2.0 clause 4.4.3.6 requires these same sources for End Markers.
+func (b *BpfObjects) TunnelSourceAddresses() (net.IP, net.IP, error) {
+	var cfg IpEntrypointDataplaneConfig
+	if err := b.GlobalConfig.Get(&cfg); err != nil {
+		return nil, nil, fmt.Errorf("read tunnel source addresses: %w", err)
+	}
+	n3, n9 := make(net.IP, 4), make(net.IP, 4)
+	binary.LittleEndian.PutUint32(n3, cfg.N3Ipv4Address)
+	binary.LittleEndian.PutUint32(n9, cfg.N9Ipv4Address)
+	return n3, n9, nil
 }
 
 func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {

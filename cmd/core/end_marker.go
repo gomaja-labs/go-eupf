@@ -192,7 +192,11 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 		}
 		destination := make(net.IP, 4)
 		binary.LittleEndian.PutUint32(destination, a.RemoteIP)
-		for _, source := range conn.oldTunnelSources(old, id, before) {
+		sources, err := conn.oldTunnelSources(old, id, before)
+		if err != nil {
+			return nil, err
+		}
+		for _, source := range sources {
 			key := fmt.Sprintf("%s/%s/%d", source, destination, a.Teid)
 			if seen[key] {
 				continue
@@ -261,7 +265,7 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 // uses N9 unless forwarding towards the CP function. A shared FAR can serve
 // both paths, requiring one marker for each distinct old local endpoint.
 // TS 29.281 V19.2.0 clause 4.4.3.6 requires the tunnel's same source address.
-func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SFarInfo) []net.IP {
+func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SFarInfo) ([]net.IP, error) {
 	native, relay := false, false
 	for _, pdr := range session.PDRs {
 		if pdr.FARID != nil {
@@ -284,13 +288,17 @@ func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SF
 		native = !relay
 	}
 	var sources []net.IP
+	n3, n9, err := conn.mapOperations.TunnelSourceAddresses()
+	if err != nil {
+		return nil, err
+	}
 	if native {
-		sources = append(sources, cloneIP(conn.n3Address))
+		sources = append(sources, n3)
 	}
 	if relay {
-		sources = append(sources, cloneIP(conn.n9Address))
+		sources = append(sources, n9)
 	}
-	return sources
+	return sources, nil
 }
 
 // TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6: the same

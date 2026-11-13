@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -304,5 +305,64 @@ func TestSpareTunnelInterfaceDoesNotReplaceKnownRole(t *testing.T) {
 		if !far.InterfaceTypePresent || far.InterfaceType != want {
 			t.Fatalf("interface %d replaced role with %d; want %d", value, far.InterfaceType, want)
 		}
+	}
+}
+
+type tunnelSourceMaps struct {
+	MapOperationsMock
+	n3, n9 net.IP
+	err    error
+}
+
+func (m *tunnelSourceMaps) TunnelSourceAddresses() (net.IP, net.IP, error) {
+	return m.n3, m.n9, m.err
+}
+
+// TS 29.281 V19.2.0 clause 4.4.3.6: advertised F-TEID addresses
+// need not be local and must never select an End Marker's source.
+func TestEndMarkerSourcesFollowProgrammedAddresses(t *testing.T) {
+	for _, endpoint := range []string{N4PFCPKeyName, SxaPFCPKeyName, SxbPFCPKeyName} {
+		t.Run(endpoint, func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			conn.n3Address, conn.n9Address = net.ParseIP("198.51.100.10"), net.ParseIP("198.51.100.11")
+			maps := &tunnelSourceMaps{n3: net.ParseIP("127.0.0.1"), n9: net.ParseIP("127.0.0.9")}
+			conn.mapOperations = maps
+			old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
+			old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
+			next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
+			id := uint32(1)
+			old.PutPDR(1, SPDRInfo{FARID: &id})
+			old.PutPDR(2, SPDRInfo{FARID: &id, Teid: 100})
+			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+			for _, address := range []string{"127.0.0.1", "127.0.0.2"} {
+				maps.n3 = net.ParseIP(address) // Same shared configuration changed by REST.
+				batch, err := conn.prepareEndMarkers(request, old, next)
+				if err != nil || batch == nil {
+					t.Fatalf("prepare: batch=%v err=%v", batch, err)
+				}
+				batch.release()
+				got := map[string]bool{}
+				for _, packet := range batch.packets {
+					got[packet.source.String()] = true
+				}
+				if len(batch.packets) != 2 || !got[address] || !got["127.0.0.9"] {
+					t.Fatalf("sources=%v; want local %s and 127.0.0.9", got, address)
+				}
+			}
+		})
+	}
+}
+
+func TestEndMarkerSourceReadFailureRejectsPathSwitch(t *testing.T) {
+	conn := newProtocolConnection(t)
+	sentinel := errors.New("dataplane read failed")
+	conn.mapOperations = &tunnelSourceMaps{err: sentinel}
+	old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
+	old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
+	next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
+	request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+	batch, err := conn.prepareEndMarkers(request, old, next)
+	if batch != nil || !errors.Is(err, sentinel) {
+		t.Fatalf("source failure admitted path switch: batch=%v err=%v", batch, err)
 	}
 }
