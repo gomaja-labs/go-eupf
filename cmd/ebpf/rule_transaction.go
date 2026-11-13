@@ -55,12 +55,8 @@ func (b *BpfObjects) BeginRuleTransaction(sessionID uint64) (RuleTransaction, er
 }
 
 func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, change func() error) error {
-	if m == tx.objects.PdrMapTeidIp4 || m == tx.objects.PdrMapDownlinkIp4 || m == tx.objects.PdrMapDownlinkIp6 {
-		tx.dirty = true
-		tx.graced = false
-	}
 	var previous T
-	err := lookupRuleValue(m, key, &previous)
+	err := m.Lookup(key, &previous)
 	present := err == nil
 	if err != nil && !isKeyAbsent(err) {
 		return err
@@ -73,7 +69,6 @@ func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, cha
 	if err := change(); err != nil {
 		return err
 	}
-	isPDR := m == tx.objects.PdrMapTeidIp4 || m == tx.objects.PdrMapDownlinkIp4 || m == tx.objects.PdrMapDownlinkIp6
 	tx.undo = append(tx.undo, func() error {
 		var err error
 		if present {
@@ -84,20 +79,8 @@ func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, cha
 				err = nil
 			}
 		}
-		if err == nil && isPDR {
-			old, _ := any(previous).(IpEntrypointPdrInfo)
-			tx.objects.recordPDRKey(m, key, old.SessionId, present && old.Count > 0)
-		}
 		return err
 	})
-	if isPDR {
-		var current IpEntrypointPdrInfo
-		err := lookupRuleValue(m, key, &current)
-		if err != nil && !isKeyAbsent(err) {
-			return err
-		}
-		tx.objects.recordPDRKey(m, key, current.SessionId, err == nil && current.Count > 0)
-	}
 	return nil
 }
 

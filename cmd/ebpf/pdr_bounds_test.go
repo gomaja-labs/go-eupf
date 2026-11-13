@@ -25,20 +25,23 @@ func TestPDRBoundsRejectWithoutTruncation(t *testing.T) {
 	}
 }
 func TestPDRBucketCapacityAndOwnership(t *testing.T) {
-	bucket := IpEntrypointPdrInfo{SessionId: 9, Count: 4}
-	for i := range bucket.Entries {
-		bucket.Entries[i].PdrId = uint32(i + 1)
-		bucket.Entries[i].Precedence = uint32(i + 1)
+	b := loadDatapath(t)
+	for id := uint32(1); id <= 4; id++ {
+		if err := b.PutPdrUplink(100, PdrInfo{SessionID: 9, PdrID: id, Precedence: id}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	lookup := func(_ interface{}, out interface{}) error { *out.(*IpEntrypointPdrInfo) = bucket; return nil }
-	if _, err := preparePDR(lookup, uint32(10), PdrInfo{SessionID: 9, PdrID: 5}); !errors.Is(err, ErrRuleCapacity) {
+	if err := b.PutPdrUplink(100, PdrInfo{SessionID: 9, PdrID: 5}); !errors.Is(err, ErrRuleCapacity) {
 		t.Fatal(err)
 	}
-	if _, err := preparePDR(lookup, uint32(10), PdrInfo{SessionID: 99, PdrID: 1}); !errors.Is(err, ErrKeyOwned) {
+	if err := b.PutPdrUplink(100, PdrInfo{SessionID: 99, PdrID: 1}); !errors.Is(err, ErrKeyOwned) {
 		t.Fatal(err)
 	}
-	got, err := preparePDR(lookup, uint32(10), PdrInfo{SessionID: 9, PdrID: 2, Precedence: 0, FarId: 7})
-	if err != nil {
+	if err := b.PutPdrUplink(100, PdrInfo{SessionID: 9, PdrID: 2, Precedence: 0, FarId: 7}); err != nil {
+		t.Fatal(err)
+	}
+	var got IpEntrypointPdrInfo
+	if err := b.LookupUplinkPDR(100, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Count != 4 || got.Entries[0].PdrId != 2 || got.Entries[0].Pdr.FarId != 7 {

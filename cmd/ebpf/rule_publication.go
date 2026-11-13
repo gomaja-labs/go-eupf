@@ -147,6 +147,9 @@ func (tx *ruleTransaction) publishPDRs() error {
 						key, kind := tx.objects.bucketKey(draft.m, draft.key)
 						bucket := IpEntrypointPdrBucket{Key: key, Kind: kind, Info: value}
 						err = tx.objects.PdrBuckets.Put(slot, &bucket)
+						if err == nil && tx.beforeWrite != nil {
+							err = tx.beforeWrite()
+						}
 						if err == nil {
 							err = draft.m.Update(draft.key, &IpEntrypointPdrIndex{Slot: slot}, cilium.UpdateLock)
 						}

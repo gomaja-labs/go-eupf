@@ -157,7 +157,7 @@ func TestPublishedQERGateAndRateRemainConsistent(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			value := uint64(updates & 1)
+			value := uint64((updates / 2) & 1)
 			next, err := tx.NewQer(QerInfo{PolicerID: anchor, GateStatusUL: uint8(value), MaxBitrateUL: value})
 			if errors.Is(err, ErrRuleCapacity) {
 				_ = tx.Rollback()

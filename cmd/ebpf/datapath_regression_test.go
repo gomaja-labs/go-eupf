@@ -416,10 +416,14 @@ func TestDatapathUrrCountsTPDU(t *testing.T) {
 	}
 }
 
-func TestDatapathPreprocessPreservesLookupError(t *testing.T) {
-	_, err := preparePDR(func(interface{}, interface{}) error { return syscall.EBADF }, uint32(10), PdrInfo{})
+func TestDatapathPublicationPreservesLookupError(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PdrBuckets.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := b.PutPdrUplink(10, PdrInfo{PdrID: 1})
 	if !errors.Is(err, syscall.EBADF) {
-		t.Errorf("lookup EBADF was discarded: %v", err)
+		t.Errorf("closed map lookup error was discarded: %v", err)
 	}
 }
 

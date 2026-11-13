@@ -3,8 +3,11 @@
 package ebpf
 
 import (
-	cilium "github.com/cilium/ebpf"
+	"sync"
 	"testing"
+	"time"
+
+	cilium "github.com/cilium/ebpf"
 )
 
 func pdrLookupTest(b *BpfObjects, m *cilium.Map) func(interface{}, interface{}) error {
@@ -18,13 +21,19 @@ func TestBucketSlotsRetireAfterReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
 	original := b.grace.synchronize
 	b.grace.synchronize = func() error { close(entered); <-release; return original() }
 	p := PdrInfo{PdrID: 1, FarId: 2}
 	if err := b.PutPdrUplink(10, p); err != nil {
 		t.Fatal(err)
 	}
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old bucket did not enter reclamation grace")
+	}
 	var next IpEntrypointPdrIndex
 	if err := b.PdrMapTeidIp4.Lookup(uint32(10), &next); err != nil {
 		t.Fatal(err)
@@ -42,9 +51,11 @@ func TestBucketSlotsRetireAfterReaders(t *testing.T) {
 	if free {
 		t.Error("old bucket already reusable")
 	}
-	close(release)
+	unblock()
 	// Restore only after that barrier completes, with no concurrent writes.
-	<-b.graceBarrierForTest()
+	if err := <-b.graceBarrierForTest(); err != nil {
+		t.Fatal(err)
+	}
 	b.grace.synchronize = original
 	b.bucketMutex.Lock()
 	free = b.bucketIDs.bitmap.Contains(first.Slot)

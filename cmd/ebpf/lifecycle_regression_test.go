@@ -4,7 +4,6 @@ package ebpf
 
 import (
 	"encoding/binary"
-	"errors"
 	"os"
 	"reflect"
 	"runtime/debug"
@@ -166,10 +165,14 @@ func TestQerMapRoundTripAndDelete(t *testing.T) {
 	}
 }
 
-func TestPreprocessAbsentKey(t *testing.T) {
-	_, err := preparePDR(func(interface{}, interface{}) error { return cilium.ErrKeyNotExist }, uint32(1), PdrInfo{})
-	if err != nil && !errors.Is(err, cilium.ErrKeyNotExist) {
+func TestPublicationCreatesAbsentKey(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.PutPdrUplink(100, PdrInfo{PdrID: 1, FarId: 1}); err != nil {
 		t.Fatal(err)
+	}
+	var got IpEntrypointPdrInfo
+	if err := b.LookupUplinkPDR(100, &got); err != nil || got.Count != 1 {
+		t.Fatalf("absent key not initialized: %+v %v", got, err)
 	}
 }
 

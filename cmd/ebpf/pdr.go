@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sort"
 	"syscall"
 
 	"github.com/cilium/ebpf"
@@ -89,46 +88,6 @@ type IpWMask struct {
 type PortRange struct {
 	LowerBound uint16
 	UpperBound uint16
-}
-
-func preparePDR(lookup func(interface{}, interface{}) error, key interface{}, info PdrInfo) (IpEntrypointPdrInfo, error) {
-	var bucket IpEntrypointPdrInfo
-	if err := lookup(key, &bucket); err != nil && !isKeyAbsent(err) {
-		return bucket, fmt.Errorf("lookup PDR: %w", err)
-	}
-	if bucket.Count > MaxPDRsPerKey {
-		return bucket, fmt.Errorf("invalid PDR count %d", bucket.Count)
-	}
-	if bucket.Count != 0 && bucket.SessionId != info.SessionID {
-		return bucket, ErrKeyOwned
-	}
-	entry, err := encodePDR(info)
-	if err != nil {
-		return bucket, err
-	}
-	bucket.SessionId = info.SessionID
-	index := int(bucket.Count)
-	for i := 0; i < int(bucket.Count); i++ {
-		if bucket.Entries[i].PdrId == info.PdrID {
-			index = i
-			break
-		}
-	}
-	if index == MaxPDRsPerKey {
-		return bucket, ErrRuleCapacity
-	}
-	bucket.Entries[index] = entry
-	if index == int(bucket.Count) {
-		bucket.Count++
-	}
-	sort.Slice(bucket.Entries[:bucket.Count], func(i, j int) bool {
-		a, b := bucket.Entries[i], bucket.Entries[j]
-		if a.Precedence != b.Precedence {
-			return a.Precedence < b.Precedence
-		}
-		return a.PdrId < b.PdrId
-	})
-	return bucket, nil
 }
 
 // mutatePDR also protects callers outside PFCP (fixtures and local diagnostics)

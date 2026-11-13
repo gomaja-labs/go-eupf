@@ -11,7 +11,7 @@ import (
 )
 
 func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
-	for failure := 0; failure <= 5; failure++ {
+	for failure := 0; failure <= 6; failure++ {
 		t.Run(string(rune('0'+failure)), func(t *testing.T) {
 			b := loadDatapath(t)
 			if _, err := b.GetNextFAR(); err != nil {
@@ -84,10 +84,10 @@ func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
 					break
 				}
 			}
-			if failure < len(operations) && !errors.Is(applyErr, injected) {
+			if failure < 6 && !errors.Is(applyErr, injected) {
 				t.Fatalf("failure %d: %v", failure, applyErr)
 			}
-			if failure == len(operations) && applyErr != nil {
+			if failure == 6 && applyErr != nil {
 				t.Fatal(applyErr)
 			}
 			if err := tx.Rollback(); err != nil {

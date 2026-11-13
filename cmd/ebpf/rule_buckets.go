@@ -3,6 +3,7 @@ package ebpf
 import (
 	"encoding/binary"
 	"fmt"
+
 	cilium "github.com/cilium/ebpf"
 )
 
