@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -151,21 +152,34 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("read loaded map memory charge: %w", err)
 	}
-	softLimit, err := config.Conf.PFCPMemoryPlan(memoryLimit, baseline)
+	var growingMaps []*kernel.MapInfo
+	for _, m := range []*kernel.Map{bpfObjects.PdrMapDownlinkIp4, bpfObjects.PdrMapDownlinkIp6, bpfObjects.PdrMapTeidIp4} {
+		info, err := m.Info()
+		if err != nil {
+			return fmt.Errorf("read PDR map capacity: %w", err)
+		}
+		growingMaps = append(growingMaps, info)
+	}
+	mapReserve, err := growingMapMemory(growingMaps...)
+	if err != nil {
+		return err
+	}
+	plannedBaseline := baseline + mapReserve
+	softLimit, err := config.Conf.PFCPMemoryPlan(memoryLimit, plannedBaseline)
 	if err != nil {
 		return err
 	}
 	if softLimit > 0 {
 		configured := debug.SetMemoryLimit(-1)
 		if configured < softLimit {
-			if _, err := config.Conf.PFCPMemoryPlan(configured+max(baseline, 64<<20)+(32<<20), baseline); err != nil {
+			if _, err := config.Conf.PFCPMemoryPlan(configured+max(plannedBaseline, 64<<20)+(32<<20), plannedBaseline); err != nil {
 				return fmt.Errorf("GOMEMLIMIT: %w", err)
 			}
 			softLimit = configured
 		}
 		debug.SetMemoryLimit(softLimit)
 	}
-	log.Info().Int64("container_limit_bytes", memoryLimit).Int64("cgroup_before_maps_bytes", beforeMaps).Int64("cgroup_loaded_baseline_bytes", baseline).Int64("go_memory_limit_bytes", softLimit).Msg("PFCP process memory budget")
+	log.Info().Int64("container_limit_bytes", memoryLimit).Int64("cgroup_before_maps_bytes", beforeMaps).Int64("cgroup_loaded_baseline_bytes", baseline).Int64("growing_map_reserve_bytes", mapReserve).Int64("go_memory_limit_bytes", softLimit).Msg("PFCP process memory budget")
 
 	dumper, err := newStartupDumper(
 		"dumps/",
@@ -508,4 +522,30 @@ func watchShutdown(ctx context.Context, done <-chan struct{}, conns ...*core.Pfc
 	for _, conn := range conns {
 		safeReleaseConn(conn)
 	}
+}
+
+// Growing PDR maps allocate entries after startup. Reserve a rounded allocation
+// per entry, doubled for trie nodes, plus a KiB for indexing/allocator overhead.
+// Default-capacity map measurements include full hash/trie maps; counting only
+// their empty startup charge would miss this kernel memory in the cgroup.
+func growingMapMemory(infos ...*kernel.MapInfo) (int64, error) {
+	var total int64
+	for _, info := range infos {
+		if info.MaxEntries == 0 || info.Type != kernel.Hash && info.Type != kernel.LPMTrie {
+			continue
+		}
+		block := int64(1)
+		for block < int64(info.KeySize)+int64(info.ValueSize)+128 {
+			block *= 2
+		}
+		if info.Type == kernel.LPMTrie {
+			block *= 2
+		}
+		perEntry := block + 1024
+		if perEntry > (math.MaxInt64-total)/int64(info.MaxEntries) {
+			return 0, fmt.Errorf("PDR map capacity overflows process memory budget")
+		}
+		total += int64(info.MaxEntries) * perEntry
+	}
+	return total, nil
 }
