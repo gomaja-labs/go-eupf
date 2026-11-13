@@ -18,6 +18,8 @@ var (
 )
 
 type Session struct {
+	bar           *bufferingActionRule
+	barRevision   uint64
 	urrGeneration uint64
 	LocalSEID     uint64
 	RemoteSEID    uint64
@@ -76,6 +78,7 @@ type PCCInfo struct {
 }
 
 type SFarInfo struct {
+	BARID *uint8 `json:"bar_id,omitempty"`
 	// TS 29.281 V19.2.0 clause 7.3.2.3 excludes N19 End Markers.
 	InterfaceType        uint8
 	InterfaceTypePresent bool

@@ -412,6 +412,9 @@ func validateOuterRemoval(field *ie.IE) error {
 // validates every unchanged PDR that still references it. These are supported
 // forwarding forms, not approximations of a more general PDI.
 func validateSessionRuleShapes(conn *PfcpConnection, session *Session) error {
+	if err := validateBARReferences(session); err != nil {
+		return err
+	}
 	for id, urr := range session.URRs {
 		if urr.UrrInfo.VolumeTrigger && urr.UrrInfo.VolumeThreshold == 0 {
 			return &ruleFailure{ie.RuleIDTypeURR, id, &requestIEError{ie.CauseConditionalIEMissing, ie.VolumeThreshold, ie.ErrIENotFound}}

@@ -122,6 +122,7 @@ type PCCInfo struct {
 }
 
 type SFarInfo struct {
+	BARID                *uint8 `json:"bar_id,omitempty"`
 	InterfaceType        uint8
 	InterfaceTypePresent bool
 	FarInfo              FarInfo

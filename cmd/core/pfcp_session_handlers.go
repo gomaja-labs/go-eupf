@@ -765,6 +765,9 @@ func processEstablishmentRequestRules(
 	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.CreateFAR); err != nil {
 		return err
 	}
+	if err := stageSessionBAR(session, req); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
@@ -888,6 +891,9 @@ func processModificationRequestRules(
 	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.UpdatePDR, req.CreateFAR, req.UpdateFAR); err != nil {
 		return err
 	}
+	if err := stageSessionBAR(session, req); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
@@ -976,6 +982,11 @@ func createFARs(
 		logger.Info().Msgf("Saving FAR info to session: %d, %+v", farID, farInfo)
 
 		session.NewFar(farID, 0, farInfo)
+		saved := session.FARs[farID]
+		if err := retainBARReference(fields.BARID, &saved); err != nil {
+			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
+		}
+		session.FARs[farID] = saved
 		if fields.ForwardingParameters != nil {
 			forwarding, err := fields.ForwardingParameters.ForwardingParameters()
 			if err != nil {
@@ -1178,6 +1189,9 @@ func updateFARs(
 
 		newFar := oldFar
 		newFar.FarInfo = newFarInfo
+		if err := retainBARReference(fields.BARID, &newFar); err != nil {
+			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
+		}
 		if fields.UpdateForwardingParameters != nil {
 			forwarding, err := fields.UpdateForwardingParameters.UpdateForwardingParameters()
 			if err != nil {
