@@ -88,3 +88,25 @@ func TestDefaultConnectionAdvertisesFTUP(t *testing.T) {
 		t.Fatal("default connection does not advertise mandatory FTUP")
 	}
 }
+
+func TestSharedEndpointsAdvertiseTheAllocatorRecoveryTimestamp(t *testing.T) {
+	conn := newProtocolConnection(t)
+	shared, err := NewPfcpConnection("127.0.0.1:0", "127.0.0.1", "127.0.0.1", "127.0.0.1", &MapOperationsMock{}, conn.ResourceManager, nil, nil, DefaultProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(shared.Close)
+	for _, endpoint := range []*PfcpConnection{conn, shared} {
+		if !endpoint.RecoveryTimestamp.Equal(conn.ResourceManager.RecoveryTimestamp) {
+			t.Fatal("endpoint and allocator have different recovery timestamps")
+		}
+		response, _, err := HandlePfcpHeartbeatRequest(endpoint, message.NewHeartbeatRequest(1, ie.NewRecoveryTimeStamp(conn.RecoveryTimestamp)), "127.0.0.2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stamp, err := response.(*message.HeartbeatResponse).RecoveryTimeStamp.RecoveryTimeStamp()
+		if err != nil || !stamp.Equal(conn.ResourceManager.RecoveryTimestamp) {
+			t.Fatal("advertised timestamp differs", stamp, err)
+		}
+	}
+}

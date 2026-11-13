@@ -41,7 +41,7 @@ func TestAutomaticTEIDsSeparateRestartGenerations(t *testing.T) {
 func TestTEIDGenerationPeriodAndClockSteps(t *testing.T) {
 	for _, size := range []uint32{1, 3, 65535, MaxResourcePoolSize} {
 		period := (uint64(1) << (32 - bits.Len32(size))) - 1
-		start := time.Unix(1800000000, 0)
+		start := time.Unix(int64(period), 0)
 		old, _ := newResourceManagerAt("", size, start)
 		first, _ := old.FTEIDM.AllocateTEID(1, 1)
 		for _, delta := range []int64{-int64(period), -1, 0, 1, int64(period)} {
@@ -102,5 +102,39 @@ func TestAutomaticTEIDAllocationIgnoresIPv4RestorationPeriod(t *testing.T) {
 	manager.HoldAutomaticIPv4Until(time.Now())
 	if _, err := manager.IPAM.AllocateIP(1); err != nil {
 		t.Fatal("expired or zero period still holds IPv4", err)
+	}
+}
+
+func TestAutomaticTEIDsExcludeLegacyRangeAtGenerationWrap(t *testing.T) {
+	for _, size := range []uint32{1, 3, 65535, MaxResourcePoolSize} {
+		period := (uint64(1) << (32 - bits.Len32(size))) - 1
+		for _, second := range []int64{0, int64(period) - 1, int64(period)} {
+			manager, _ := newResourceManagerAt("", size, time.Unix(second, 0))
+			id, err := manager.FTEIDM.AllocateTEID(1, 1)
+			if err != nil || id <= size {
+				t.Fatalf("size %d at %d allocated legacy TEID %d: %v", size, second, id, err)
+			}
+		}
+	}
+}
+
+func TestForeignTEIDReservationsLeaveAutomaticIndicesFree(t *testing.T) {
+	old, _ := newResourceManagerAt("", 3, time.Unix(1800000000, 0))
+	predecessor, _ := old.FTEIDM.AllocateTEID(1, 1)
+	for _, foreign := range []uint32{predecessor, 1, ^uint32(0)} {
+		manager, _ := newResourceManagerAt("", 3, time.Unix(1800000001, 0))
+		if err := manager.FTEIDM.ReserveTEID(1, 1, foreign); err != nil {
+			t.Fatal(err)
+		}
+		for i := uint32(1); i <= 3; i++ {
+			id, err := manager.FTEIDM.AllocateTEID(2, i)
+			if err != nil || id != manager.FTEIDM.generationBase+i {
+				t.Fatalf("foreign %d blocks index %d: %d %v", foreign, i, id, err)
+			}
+		}
+		manager.FTEIDM.ReleaseTEID(1)
+		if _, err := manager.FTEIDM.AllocateTEID(3, 1); !errors.Is(err, ErrResourceExhausted) {
+			t.Fatal("foreign release freed a current lease", foreign, err)
+		}
 	}
 }
