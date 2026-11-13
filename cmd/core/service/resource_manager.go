@@ -27,6 +27,9 @@ var ErrResourceExhausted = errors.New("resource pool exhausted")
 type ResourceManager struct {
 	// RecoveryTimestamp identifies this instance in both PFCP and automatic TEIDs.
 	RecoveryTimestamp time.Time
+	sessionsMu        sync.Mutex
+	sessionMaximum    uint32
+	sessions          map[uint64]struct{}
 	replay            ReplayBudget
 	nextSEID          atomic.Uint64
 	shuttingDown      atomic.Bool
