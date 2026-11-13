@@ -54,7 +54,7 @@ smoke)
 			sleep .1
 		done
 		grep -q 'listening on lo' "ci-results/capture-$ueip.log"
-		sudo env UPF_MAX_SESSIONS=1024 UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
+		sudo env UPF_MAX_SESSIONS=1024 UPF_RESOURCE_REUSE_DELAY=1 UPF_FEATURE_UEIP="$ueip" ./bin/eupf >"ci-results/eupf-$ueip.log" 2>&1 &
 		app_pid=$!
 		python3 - <<'PY'
 import socket, time
@@ -66,6 +66,7 @@ for _ in range(100):
         time.sleep(.1)
 else:
     raise SystemExit('eUPF did not become ready')
+time.sleep(1)  # Wait for the fixture's one-second restoration window.
 PY
 		if [[ "$ueip" == false ]]; then
 			timeout 90 sudo /opt/py/bin/pytest -v -k 'not test_create_session_ueip' ./pytest/test_session.py

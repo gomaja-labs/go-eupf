@@ -59,7 +59,7 @@ def server(request, evidence):
             binary, "--iface", "lo", "--attach", "generic", "--maxsessions", "16",
             "--paddr", "127.0.0.1:8805", "--nodeid", "127.0.0.1",
             "--n3addr", "127.0.0.1", "--aaddr", "127.0.0.1:18080",
-            "--maddr", "127.0.0.1:19090", "--teidpool", "32", "--hbtimeout", "5", "--hbinterval", "60", "--loglvl", "debug",
+            "--maddr", "127.0.0.1:19090", "--teidpool", "32", "--resource-reuse-delay", "1", "--hbtimeout", "5", "--hbinterval", "60", "--loglvl", "debug",
             *extra,
         ], stdout=output, stderr=output,
             env={**os.environ, "GORACE": "halt_on_error=1"})
@@ -72,6 +72,7 @@ def server(request, evidence):
             assert process.poll() is None, "server failed during startup; inspect process log"
             try:
                 get_json("/api/v1/health")
+                time.sleep(1)  # Let the explicit one-second restoration window expire.
                 return process
             except (OSError, ValueError):
                 time.sleep(0.05)
