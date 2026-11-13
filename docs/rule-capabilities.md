@@ -324,7 +324,10 @@ the reservations. Echo probes and End Marker senders use the same source-port re
 For inter-system handover, received End Markers select the PDR by ingress
 interface and its QFI list, without attempting to parse an inner IP packet.
 The PDR's Outer Header Removal deletion bit removes only the PDU Session
-Container; other extension headers and signalling IEs survive. In the reverse
+Container; forwardable extension headers and signalling IEs survive. Unknown
+extensions with comprehension bits `01` use the intact kernel slow path,
+as for G-PDUs, because their content must be removed before relay
+(TS 29.281 V19.2.0 figure 5.2.1-2). In the reverse
 direction, a QER with a QFI inserts the DL container. Markers do not apply QER
 gates or rates, charge URRs, or trigger a downlink-data notification.
 G-PDUs use the same container insertion/deletion instruction (TS 29.244

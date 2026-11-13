@@ -3,10 +3,29 @@
 package ebpf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
 	"testing"
 )
+
+// TS 29.281 V19.2.0 figure 5.2.1-2: an intermediate node must not
+// forward an unknown extension whose comprehension bits are 01. Keep the
+// intact packet on the same slow path used for G-PDUs until it can be removed.
+func TestHandoverMarkerDoesNotRelayDiscardRequiredExtension(t *testing.T) {
+	b := loadDatapath(t)
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1})
+	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0x41, 1, 0xab, 0xcd, 0}
+	packet := outerDatapath(t, g, false)
+	action, out := runDatapath(t, b, packet)
+	if action != 2 {
+		t.Fatalf("discard-required extension relayed: action=%d", action)
+	}
+	if !bytes.Equal(packet, out) {
+		t.Fatal("slow-path marker changed before extension handling")
+	}
+}
 
 // TS 29.244 V20.1.0 clause 5.17.3; TS 38.415 V19.1.0 clause 5.5.2.1.
 func TestHandoverMarkerInsertsMappedQFIWithoutChargingData(t *testing.T) {
