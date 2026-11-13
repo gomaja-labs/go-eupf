@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/rs/zerolog/log"
 )
 
 // ParseSdfFilter parses TS 29.212 V20.0.0 clause 5.4.2, referenced by
@@ -121,6 +122,9 @@ var protocolNames = sync.OnceValue(func() map[string]uint16 {
 		for _, alias := range fields[2:] {
 			names[strings.ToLower(alias)] = uint16(number)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Warn().Err(err).Msg("Read IP protocol name database")
 	}
 	return names
 })
