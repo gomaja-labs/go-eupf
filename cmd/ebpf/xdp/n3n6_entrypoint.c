@@ -410,9 +410,20 @@ static __noinline enum xdp_action forward_n6_packet_ipv6(struct packet_context *
     return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
 
+// Classification owns its tuple and prefix-key temporaries. They must not
+// remain in the forwarding call chain's stack budget on Linux 5.15.
+static __noinline const struct pdr *find_downlink_ipv6(struct packet_context *ctx) {
+    struct ipv6_pdr_key key={.prefix_length=128};
+    __builtin_memcpy(key.address,&ctx->ip6->daddr,16);
+    struct pdr_info *session=bpf_map_lookup_elem(&pdr_map_downlink_ip6,&key);
+    ctx->pdr_matched_key=session!=0;
+    if (!session) return 0;
+    ctx->source_interface=1;
+    return check_sdf_filters_ipv6(ctx,session,0);
+}
+
 static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *ctx) {
     if (!ctx->ip6 || (const char *)(ctx->ip6+1) > ctx->data_end) return XDP_ABORTED;
-    struct ipv6hdr *ip6 = ctx->ip6;
     const struct pdr *pdr=0;
     if (ctx->locally_generated) {
         // RFC 4861 sections 4.2 and 6.2.6 choose the IPv6 destination;
@@ -420,12 +431,12 @@ static __noinline enum xdp_action handle_n6_packet_ipv6(struct packet_context *c
         // the originating PFCP session, including link-local/multicast RAs.
         pdr=ctx->return_pdr;ctx->nr_flag=ctx->return_nr_flag;
     } else {
-        struct ipv6_pdr_key key={.prefix_length=128};
-        __builtin_memcpy(key.address,&ip6->daddr,16);
-        struct pdr_info *session=bpf_map_lookup_elem(&pdr_map_downlink_ip6,&key);
-        if (!session) return DEFAULT_XDP_ACTION;
-            ctx->source_interface=1;
-        pdr=check_sdf_filters_ipv6(ctx,session,0);
+        pdr=find_downlink_ipv6(ctx);
+        if (!pdr) {
+            // Unknown destinations retain the kernel path; known buckets with
+            // no matching PDR must drop. The classifier records that outcome.
+            return ctx->pdr_matched_key ? XDP_DROP : DEFAULT_XDP_ACTION;
+        }
     }
     return forward_n6_packet_ipv6(ctx,pdr);
 }
@@ -755,7 +766,16 @@ int upf_router_solicitation_func(struct xdp_md *ctx) {
     void *data=(void *)(long)ctx->data;
     if (data+sizeof(struct router_reply_context)>(void *)(long)ctx->data_end) return XDP_ABORTED;
     struct router_reply_context saved;
-    __builtin_memcpy(&saved,data,sizeof(saved));
+    // The prepended packet metadata can be unaligned. Copy one word at a
+    // time into its aligned stack image: a whole-struct memcpy makes clang
+    // keep many byte-assembly temporaries live and spill beyond the call-chain
+    // budget (Linux v5.15 kernel/bpf/verifier.c:3679 rounds each frame to 32).
+    #pragma unroll
+    for (int i=0;i<sizeof(saved)/sizeof(__u32);i++) {
+        __u32 word;
+        __builtin_memcpy(&word,data+i*sizeof(word),sizeof(word));
+        ((volatile __u32 *)&saved)[i]=word;
+    }
     if (saved.magic!=ROUTER_REPLY_MAGIC) return XDP_ABORTED;
     if (bpf_xdp_adjust_head(ctx,sizeof(saved))) return XDP_ABORTED;
     __u32 key=0;
