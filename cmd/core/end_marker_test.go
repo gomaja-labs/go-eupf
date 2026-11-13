@@ -193,3 +193,51 @@ func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
 		}
 	}
 }
+
+func TestEndMarkerRetainsTunnelInterfaceThroughRuleTransactions(t *testing.T) {
+	conn := newProtocolConnection(t)
+	associationSetup(t, conn, "127.0.0.1", 1)
+	request := message.NewSessionEstablishmentRequest(0, 2,
+		ie.NewNodeIDFQDN("synthetic.example"), ie.NewFSEID(77, net.IPv4(127, 0, 0, 1), nil),
+		ie.NewCreateFAR(ie.NewFARID(9), ie.NewApplyAction(2), ie.NewForwardingParameters(
+			ie.NewDestinationInterface(ie.DstInterfaceAccess), ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN3ForDataForwarding), ie.NewOuterHeaderCreation(0x100, 200, "127.0.0.30", "", 0, 0, 0))))
+	reply, _, err := HandlePfcpSessionEstablishmentRequest(conn, request, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	established := reply.(*message.SessionEstablishmentResponse)
+	if cause, _ := established.Cause.Cause(); cause != ie.CauseRequestAccepted {
+		t.Fatal(cause)
+	}
+	fseid, err := established.UPFSEID.FSEID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assoc := conn.GetAssociation("127.0.0.1")
+	original := assoc.Sessions[fseid.SEID].FARs[9]
+	if !original.InterfaceTypePresent || original.InterfaceType != ie.TGPPInterfaceTypeN3ForDataForwarding {
+		t.Fatal("creation discarded the tunnel interface")
+	}
+	result, _, err := HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(fseid.SEID, 3,
+		ie.NewUpdateFAR(ie.NewFARID(9), ie.NewUpdateForwardingParameters(ie.NewOuterHeaderCreation(0x100, 201, "127.0.0.30", "", 0, 0, 0), ie.NewPFCPSMReqFlags(2)))), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseServiceNotSupported {
+		t.Fatalf("unsupported data-forwarding switch cause=%d", cause)
+	}
+	if got := assoc.Sessions[fseid.SEID].FARs[9]; got != original {
+		t.Fatal("rejected marker switch changed the FAR")
+	}
+	result, _, err = HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(fseid.SEID, 4,
+		ie.NewUpdateFAR(ie.NewFARID(9), ie.NewUpdateForwardingParameters(ie.New(ie.TGPPInterfaceType, nil)))), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseRequestAccepted {
+		t.Fatal(cause)
+	}
+	if assoc.Sessions[fseid.SEID].FARs[9].InterfaceTypePresent {
+		t.Fatal("null interface label was not removed")
+	}
+}
