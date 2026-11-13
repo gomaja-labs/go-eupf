@@ -103,7 +103,7 @@ func TestRuleTransactionUsesFinalBucketCapacity(t *testing.T) {
 	}
 	for _, key := range []uint32{10, 11} {
 		var got IpEntrypointPdrInfo
-		if err := b.PdrMapTeidIp4.Lookup(key, &got); err != nil || got.Count != 4 {
+		if err := pdrLookupTest(b, b.PdrMapTeidIp4)(key, &got); err != nil || got.Count != 4 {
 			t.Fatalf("key=%d count=%d error=%v", key, got.Count, err)
 		}
 	}
@@ -127,7 +127,7 @@ func TestRuleTransactionPublishesIPv4DownlinkKey(t *testing.T) {
 		}()
 	}
 	var value IpEntrypointPdrInfo
-	if err := b.PdrMapDownlinkIp4.Lookup([4]byte{203, 0, 113, 17}, &value); err != nil || value.Count != 1 || value.SessionId != 77 {
+	if err := pdrLookupTest(b, b.PdrMapDownlinkIp4)([4]byte{203, 0, 113, 17}, &value); err != nil || value.Count != 1 || value.SessionId != 77 {
 		t.Fatalf("published IPv4 bucket: %+v error=%v", value, err)
 	}
 	tx, err := b.BeginRuleTransaction(77)
@@ -141,7 +141,7 @@ func TestRuleTransactionPublishesIPv4DownlinkKey(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PdrMapDownlinkIp4.Lookup([4]byte{203, 0, 113, 17}, &value); !isKeyAbsent(err) {
+	if err := pdrLookupTest(b, b.PdrMapDownlinkIp4)([4]byte{203, 0, 113, 17}, &value); !isKeyAbsent(err) {
 		t.Fatalf("IPv4 key was not removed: %v", err)
 	}
 }

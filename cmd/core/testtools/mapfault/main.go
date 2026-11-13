@@ -85,7 +85,7 @@ func run() error {
 }
 
 // faultMaps lists the rule maps a test may make read-only for user space.
-var faultMaps = map[string]bool{"far_map": true, "qer_map": true, "urr_map": true, "pdr_map_teid_ip4": true}
+var faultMaps = map[string]bool{"far_map": true, "qer_map": true, "urr_map": true, "pdr_buckets": true}
 
 // kernelMapName returns the name the kernel reports for a map: at most
 // BPF_OBJ_NAME_LEN-1 (15) bytes of the name in the object file.

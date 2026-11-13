@@ -20,6 +20,7 @@ type ruleTransaction struct {
 	ForwardingPlaneController
 	objects                                  *BpfObjects
 	sessionID                                uint64
+	allocatedBuckets                         []uint32
 	releases                                 []func()
 	retired                                  []func() error
 	dirty                                    bool
@@ -178,6 +179,9 @@ func (tx *ruleTransaction) Rollback() error {
 			if err := tx.resourceReclaim(); err != nil {
 				return err
 			}
+		}
+		for _, id := range tx.allocatedBuckets {
+			b.releaseBucket(id)
 		}
 		for _, id := range tx.allocatedFAR {
 			b.ReleaseFAR(id)

@@ -57,7 +57,18 @@ padding. Volume is counted after QER gate and bitrate enforcement (TS 29.244
 V20.1.0 clause 5.2.2.2.1). Kernel increments are atomic across CPUs. Updating a
 URR configuration preserves live counters. Session transactions serialize control-plane journals without touching a shared
 packet-admission counter. Dependencies are written before a PDR's complete
-replacement bucket is published; obsolete keys are removed afterwards. Old
+replacement bucket is published; obsolete keys are removed afterwards. TEID and
+IPv4 hash entries contain one aligned array-slot index, updated in place with
+BPF_F_LOCK. XDP loads it once and checks the array bucket's key and map kind.
+A recycled hash element triggers one retry; a remaining mismatch is unmatched
+and never generates an Error Indication (TS 29.281 V19.2.0 clause 7.3.1).
+Bucket slots stay reserved until the batched grace completes, including rollback.
+The shared array has four times the configured per-map PDR capacity plus reserved
+slot zero; exhaustion waits for queued retirement before reporting capacity.
+IPv6 remains an LPM trie with deferred frees: Linux v5.15
+`kernel/bpf/lpm_trie.c:381` uses `kfree_rcu`; v6.18 `:451` uses
+`bpf_mem_cache_free_rcu`. These lifetimes differ from hash element recycling
+since Linux 6.1. Old
 FAR/QER slots remain reserved until a batched kernel RCU grace period completes.
 URR detachment waits for old invocations before reading final usage and clearing
 its slot. A dummy map-in-map update invokes the kernel's BPF synchronization;

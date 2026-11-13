@@ -75,13 +75,32 @@ struct pdr_info {
     struct pdr_entry entries[PDR_LIST_SIZE];
 };
 
-/* ipv4 -> PDR */
+// One aligned scalar is published in place using BPF_F_LOCK. Packet readers
+// load slot once; they never retain a pointer into a recyclable hash element.
+// Linux v5.15/v6.18 kernel/bpf/hashtab.c:htab_map_update_elem.
+struct pdr_index {
+    struct bpf_spin_lock lock;
+    __u32 slot;
+};
+struct pdr_bucket {
+    __u32 key;
+    __u32 kind; // 0: TEID, 1: IPv4 destination (network byte order)
+    struct pdr_info info;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, struct pdr_bucket);
+    __uint(max_entries, PDR_MAP_SIZE * 4 + 1);
+} pdr_buckets SEC(".maps");
+
+/* ipv4 -> stable bucket slot */
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(map_flags, BPF_F_NO_PREALLOC);
     __type(key, __u32);
-    __type(value, struct pdr_info);
+    __type(value, struct pdr_index);
     __uint(max_entries, PDR_MAP_SIZE);
 } pdr_map_downlink_ip4 SEC(".maps");
 
@@ -107,9 +126,25 @@ struct
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(map_flags, BPF_F_NO_PREALLOC);
     __type(key, __u32);
-    __type(value, struct pdr_info);
+    __type(value, struct pdr_index);
     __uint(max_entries, PDR_MAP_SIZE);
 } pdr_map_teid_ip4 SEC(".maps");
+
+// Slot memory is never freed by the kernel. It is reused only after the
+// userspace publication journal's RCU grace. A deleted hash element can still
+// be recycled on Linux >=6.1: validate the bucket key and retry once.
+static __always_inline struct pdr_info *lookup_pdr4(void *map, __u32 key, __u32 kind, int *stale) {
+    for (int attempt=0; attempt<2; attempt++) {
+        struct pdr_index *index=bpf_map_lookup_elem(map,&key);
+        if (!index) continue;
+        __u32 slot=*(volatile __u32 *)&index->slot;
+        struct pdr_bucket *bucket=bpf_map_lookup_elem(&pdr_buckets,&slot);
+        if (slot && bucket && bucket->key==key && bucket->kind==kind)
+            return &bucket->info;
+        *stale=1;
+    }
+    return 0;
+}
 
 enum far_action_mask {
     FAR_DROP = 0x01,

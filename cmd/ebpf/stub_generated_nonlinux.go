@@ -17,6 +17,7 @@ type IpEntrypointObjects struct {
 	PdrMapDownlinkIp4         *ebpf.Map
 	PdrMapDownlinkIp6         *ebpf.Map
 	PdrMapTeidIp4             *ebpf.Map
+	PdrBuckets                *ebpf.Map
 	SdfNotifyMap              *ebpf.Map
 	TraceMap                  *ebpf.Map
 	UpfExtStat                *ebpf.Map
@@ -172,4 +173,14 @@ func LoadIpEntrypoint() (*ebpf.CollectionSpec, error) {
 type IpEntrypointIpv6PdrKey struct {
 	PrefixLength uint32
 	Address      [16]uint8
+}
+
+type IpEntrypointPdrBucket struct {
+	Key, Kind uint32
+	_         [8]byte
+	Info      IpEntrypointPdrInfo
+}
+type IpEntrypointPdrIndex struct {
+	Lock struct{ Val uint32 }
+	Slot uint32
 }

@@ -25,7 +25,8 @@ func TestMapLayouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, value := range map[string]any{
-		"pdr_map_teid_ip4": IpEntrypointPdrInfo{},
+		"pdr_map_teid_ip4": IpEntrypointPdrIndex{},
+		"pdr_buckets":      IpEntrypointPdrBucket{},
 		"far_map":          IpEntrypointFarInfo{},
 		"qer_map":          IpEntrypointQerInfo{},
 		"urr_map":          IpEntrypointUrrInfo{},

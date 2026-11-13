@@ -188,7 +188,7 @@ func testGtpWithPDRBenchmark(bpfObjects *BpfObjects, repeat int) (int64, error) 
 	if err := bpfObjects.QerMap.Put(uint32(1), &qer); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
-	if err := bpfObjects.PdrMapTeidIp4.Put(teid, &pdr); err != nil {
+	if err := bpfObjects.PutPdrUplink(teid, DecodePDRBucket(pdr)[0]); err != nil {
 		return 0, fmt.Errorf("benchmark run failed: %w", err)
 	}
 

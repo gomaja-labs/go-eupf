@@ -29,7 +29,7 @@ func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
 			var far IpEntrypointFarInfo
 			var qer IpEntrypointQerInfo
 			var urr IpEntrypointUrrInfo
-			if err := b.PdrMapTeidIp4.Lookup(uint32(10), &pdr); err != nil {
+			if err := pdrLookupTest(b, b.PdrMapTeidIp4)(uint32(10), &pdr); err != nil {
 				t.Fatal(err)
 			}
 			if err := b.FarMap.Lookup(uint32(1), &far); err != nil {
@@ -97,12 +97,12 @@ func TestRuleJournalRestoresEveryFailureStep(t *testing.T) {
 			if err := b.SynchronizeRules(); err != nil {
 				t.Fatal(err)
 			}
-			assertMapValue(t, b.PdrMapTeidIp4.Lookup, uint32(10), pdr)
+			assertMapValue(t, pdrLookupTest(b, b.PdrMapTeidIp4), uint32(10), pdr)
 			assertMapValue(t, b.FarMap.Lookup, uint32(1), far)
 			assertMapValue(t, b.QerMap.Lookup, uint32(1), qer)
 			assertMapValue(t, b.UrrMap.Lookup, uint32(1), urr)
 			var absent IpEntrypointPdrInfo
-			if err := b.PdrMapTeidIp4.Lookup(uint32(11), &absent); !isKeyAbsent(err) {
+			if err := pdrLookupTest(b, b.PdrMapTeidIp4)(uint32(11), &absent); !isKeyAbsent(err) {
 				t.Fatalf("rollback retained a new key: %v", err)
 			}
 			if next, err := b.GetNextFAR(); err != nil || next != 2 {
@@ -135,7 +135,7 @@ func TestFrozenPDRDeletionKeepsLiveSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PdrMapTeidIp4.Freeze(); err != nil {
+	if err := b.PdrBuckets.Freeze(); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := b.BeginRuleTransaction(0)
@@ -186,7 +186,7 @@ func TestRetainedURRResetIsJournalled(t *testing.T) {
 		t.Fatalf("rollback=%+v %v", restored, err)
 	}
 	var pdr IpEntrypointPdrInfo
-	if err := b.PdrMapTeidIp4.Lookup(uint32(10), &pdr); err != nil || pdr.Count != 1 {
+	if err := pdrLookupTest(b, b.PdrMapTeidIp4)(uint32(10), &pdr); err != nil || pdr.Count != 1 {
 		t.Fatal("reset rollback lost PDR")
 	}
 }

@@ -6,24 +6,19 @@ import (
 	"errors"
 	"net"
 	"testing"
-	"unsafe"
-
-	cilium "github.com/cilium/ebpf"
 )
 
 func TestKernelPDRPlanChecksOwnershipCapacityAndPrefixes(t *testing.T) {
 	b := NewBpfObjects()
-	makeMap := func(kind cilium.MapType, keySize uint32) *cilium.Map {
-		m, err := cilium.NewMap(&cilium.MapSpec{Type: kind, KeySize: keySize, ValueSize: uint32(unsafe.Sizeof(IpEntrypointPdrInfo{})), MaxEntries: 2, Flags: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = m.Close() })
-		return m
+	b.SetPdrMapSize(2)
+	if err := b.Load(); err != nil {
+		t.Fatal(err)
 	}
-	b.PdrMapTeidIp4 = makeMap(cilium.Hash, 4)
-	b.PdrMapDownlinkIp4 = makeMap(cilium.Hash, 4)
-	b.PdrMapDownlinkIp6 = makeMap(cilium.LPMTrie, 20)
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	for id := uint32(1); id <= 2; id++ {
 		if err := b.PutPdrUplink(id, PdrInfo{SessionID: 100 + uint64(id), PdrID: 1, FarId: 1}); err != nil {
 			t.Fatal(err)
@@ -54,7 +49,7 @@ func TestKernelPDRPlanChecksOwnershipCapacityAndPrefixes(t *testing.T) {
 	// Preflight must never have changed the kernel's original key ownership.
 	for key := uint32(1); key <= 2; key++ {
 		var value IpEntrypointPdrInfo
-		if err := b.PdrMapTeidIp4.Lookup(key, &value); err != nil || value.SessionId != 100+uint64(key) {
+		if err := pdrLookupTest(b, b.PdrMapTeidIp4)(key, &value); err != nil || value.SessionId != 100+uint64(key) {
 			t.Fatalf("preflight changed key %d: %+v %v", key, value, err)
 		}
 	}

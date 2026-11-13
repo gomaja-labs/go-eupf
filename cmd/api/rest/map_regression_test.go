@@ -30,14 +30,16 @@ func TestPDRMapRoundTrip(t *testing.T) {
 		return
 	}
 	gin.SetMode(gin.TestMode)
-	m, err := ebpf.NewMap(&ebpf.MapSpec{Type: ebpf.Hash, KeySize: 4,
-		ValueSize: uint32(unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{})), MaxEntries: 1})
-	if err != nil {
+	bpf := dataplane.NewBpfObjects()
+	bpf.SetPdrMapSize(4)
+	if err := bpf.Load(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = m.Close() }()
-	bpf := dataplane.NewBpfObjects()
-	bpf.PdrMapTeidIp4 = m
+	t.Cleanup(func() {
+		if err := bpf.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	h := &ApiHandler{BpfObjects: bpf}
 	r := gin.New()
 	if err := bpf.PutPdrUplink(7, dataplane.PdrInfo{FarId: 11, QerIDs: []uint32{13}, OuterHeaderRemoval: 2, TraceFlag: true}); err != nil {
@@ -58,24 +60,20 @@ func TestPDRMapRoundTrip(t *testing.T) {
 func TestDownlinkIPv4PDRUsesIPv4Map(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	bpf := dataplane.NewBpfObjects()
-	for _, size := range []uint32{4, 16} {
-		m, err := ebpf.NewMap(&ebpf.MapSpec{Type: ebpf.Hash, KeySize: size,
-			ValueSize: uint32(unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{})), MaxEntries: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = m.Close() }()
-		if size == 4 {
-			bpf.PdrMapDownlinkIp4 = m
-		} else {
-			bpf.PdrMapDownlinkIp6 = m
-		}
+	bpf.SetPdrMapSize(4)
+	if err := bpf.Load(); err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := bpf.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := bpf.PutPdrDownlink(net.ParseIP("192.0.2.1"), dataplane.PdrInfo{FarId: 11}); err != nil {
 		t.Fatal(err)
 	}
-	var got dataplane.IpEntrypointPdrInfo
-	if err := bpf.PdrMapDownlinkIp4.Lookup(net.ParseIP("192.0.2.1").To4(), &got); err != nil {
+	got, err := bpf.LookupDownlinkPDR(net.ParseIP("192.0.2.1"))
+	if err != nil {
 		t.Fatalf("IPv4 PDR missing from IPv4 map: %v", err)
 	}
 	if got.Entries[0].Pdr.FarId != 11 {
@@ -94,8 +92,8 @@ func TestMapWritesCannotBypassSessionTransactions(t *testing.T) {
 		t.Cleanup(func() { _ = m.Close() })
 		return m
 	}
-	b.PdrMapTeidIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{}))
-	b.PdrMapDownlinkIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrInfo{}))
+	b.PdrMapTeidIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrIndex{}))
+	b.PdrMapDownlinkIp4 = makeMap(ebpf.Hash, unsafe.Sizeof(dataplane.IpEntrypointPdrIndex{}))
 	b.FarMap = makeMap(ebpf.Array, unsafe.Sizeof(dataplane.IpEntrypointFarInfo{}))
 	b.QerMap = makeMap(ebpf.Array, unsafe.Sizeof(dataplane.IpEntrypointQerInfo{}))
 	h := &ApiHandler{BpfObjects: b}

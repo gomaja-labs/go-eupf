@@ -13,11 +13,12 @@ type pdrMutationKey struct {
 }
 type pdrMutation struct {
 	pdrMutationKey
-	owner    uint64
-	entries  []IpEntrypointPdrEntry
-	changed  bool
-	previous *IpEntrypointPdrInfo
-	present  bool
+	owner        uint64
+	entries      []IpEntrypointPdrEntry
+	changed      bool
+	previous     *IpEntrypointPdrInfo
+	present      bool
+	previousSlot uint32
 }
 
 func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutation, error) {
@@ -26,7 +27,15 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		return draft, nil
 	}
 	var bucket IpEntrypointPdrInfo
-	lookupErr := lookupRuleValue(m, key, &bucket)
+	lookupErr := tx.objects.lookupPDR(m, key, &bucket, true)
+	var previousSlot uint32
+	if lookupErr == nil && m != tx.objects.PdrMapDownlinkIp6 {
+		var index IpEntrypointPdrIndex
+		if err := m.Lookup(key, &index); err != nil {
+			return nil, err
+		}
+		previousSlot = index.Slot
+	}
 	if lookupErr != nil && !isKeyAbsent(lookupErr) {
 		return nil, lookupErr
 	}
@@ -36,7 +45,7 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 	if bucket.Count != 0 && bucket.SessionId != tx.sessionID {
 		return nil, ErrKeyOwned
 	}
-	draft := &pdrMutation{previous: &bucket, present: lookupErr == nil, pdrMutationKey: k, owner: tx.sessionID, entries: append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)}
+	draft := &pdrMutation{previousSlot: previousSlot, previous: &bucket, present: lookupErr == nil, pdrMutationKey: k, owner: tx.sessionID, entries: append([]IpEntrypointPdrEntry(nil), bucket.Entries[:bucket.Count]...)}
 	if tx.pdrs == nil {
 		tx.pdrs = make(map[pdrMutationKey]*pdrMutation)
 	}
@@ -90,8 +99,9 @@ func (tx *ruleTransaction) stagePDRDelete(m *cilium.Map, key interface{}, owner 
 
 // publishPDRs writes each complete final bucket once. Private slices may exceed
 // the fixed map bound while PDRs move between keys; only final capacity counts.
-// New keys precede removal of old keys. Hash values use NO_PREALLOC so that old
-// values remain intact until RCU reclamation (Linux v5.15 hashtab.c:free_htab_elem).
+// New keys precede removals. IPv4/TEID buckets live in stable array slots;
+// IPv6 trie nodes have RCU-delayed frees (Linux v5.15 lpm_trie.c:381,
+// v6.18 lpm_trie.c:451, kfree_rcu / bpf_mem_cache_free_rcu).
 func (tx *ruleTransaction) publishPDRs() error {
 	for _, draft := range tx.pdrOrder {
 		if len(draft.entries) > MaxPDRsPerKey {
@@ -128,7 +138,20 @@ func (tx *ruleTransaction) publishPDRs() error {
 					err = nil
 				}
 			} else {
-				err = draft.m.Put(draft.key, &value)
+				if draft.m == tx.objects.PdrMapDownlinkIp6 {
+					err = draft.m.Put(draft.key, &value)
+				} else {
+					var slot uint32
+					slot, err = tx.allocateBucket()
+					if err == nil {
+						key, kind := tx.objects.bucketKey(draft.m, draft.key)
+						bucket := IpEntrypointPdrBucket{Key: key, Kind: kind, Info: value}
+						err = tx.objects.PdrBuckets.Put(slot, &bucket)
+						if err == nil {
+							err = draft.m.Update(draft.key, &IpEntrypointPdrIndex{Slot: slot}, cilium.UpdateLock)
+						}
+					}
+				}
 			}
 			if err != nil {
 				return err
@@ -139,7 +162,11 @@ func (tx *ruleTransaction) publishPDRs() error {
 			tx.undo = append(tx.undo, func() error {
 				var err error
 				if original.present {
-					err = original.m.Put(original.key, original.previous)
+					if original.m == tx.objects.PdrMapDownlinkIp6 {
+						err = original.m.Put(original.key, original.previous)
+					} else {
+						err = original.m.Update(original.key, &IpEntrypointPdrIndex{Slot: original.previousSlot}, cilium.UpdateLock)
+					}
 				} else {
 					err = original.m.Delete(original.key)
 					if isKeyAbsent(err) {
@@ -154,6 +181,9 @@ func (tx *ruleTransaction) publishPDRs() error {
 			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {
 				tx.retiredKey = true
+			}
+			if old := draft.previousSlot; old != 0 {
+				tx.retired = append(tx.retired, func() error { tx.objects.releaseBucket(old); return nil })
 			}
 			draft.changed = false
 		}

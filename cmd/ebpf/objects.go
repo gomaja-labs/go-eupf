@@ -28,11 +28,13 @@ import (
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
-	ruleMutex  sync.Mutex
-	ruleKeys   ruleKeyIndex
-	rulePoison error
-	ruleClosed bool
-	grace      *ruleGrace
+	bucketMutex sync.Mutex
+	bucketIDs   *IdTracker
+	ruleMutex   sync.Mutex
+	ruleKeys    ruleKeyIndex
+	rulePoison  error
+	ruleClosed  bool
+	grace       *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -97,11 +99,12 @@ func (bpfObjects *BpfObjects) Load() error {
 		"pdr_map_downlink_ip4": bpfObjects.pdrMapSize,
 		"pdr_map_downlink_ip6": bpfObjects.pdrMapSize,
 		"pdr_map_teid_ip4":     bpfObjects.pdrMapSize,
+		"pdr_buckets":          4*bpfObjects.pdrMapSize + 1,
 		"urr_map":              bpfObjects.urrMapSize,
 	}
 
 	for name, size := range desiredMapSizes {
-		if size == 0 {
+		if size == 0 || bpfObjects.pdrMapSize > (^uint32(0)-1)/4 {
 			return errors.New("map capacity must be positive")
 		}
 		spec.Maps[name].MaxEntries = size
@@ -112,6 +115,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
 	bpfObjects.ruleKeys = ruleKeyIndex{}
+	bpfObjects.bucketIDs = NewIdTracker(4*bpfObjects.pdrMapSize + 1)
 	loaded := false
 	defer func() {
 		if !loaded {

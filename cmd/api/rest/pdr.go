@@ -32,7 +32,7 @@ func (h *ApiHandler) getUplinkPdrValue(c *gin.Context) {
 		return
 	}
 	var value ebpf.IpEntrypointPdrInfo
-	if err := h.BpfObjects.PdrMapTeidIp4.Lookup(uint32(key), &value); err != nil {
+	if err := h.BpfObjects.LookupUplinkPDR(uint32(key), &value); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no PDR list found"})
 		return
 	}

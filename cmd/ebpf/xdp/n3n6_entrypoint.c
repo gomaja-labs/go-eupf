@@ -298,7 +298,8 @@ int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
 static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *ctx) {
     if (!ctx->ip4 || (const char *)(ctx->ip4+1) > ctx->data_end) return XDP_ABORTED;
     struct iphdr *ip4 = ctx->ip4;
-    struct pdr_info *session = bpf_map_lookup_elem(&pdr_map_downlink_ip4, &ip4->daddr);
+    int stale=0;
+        struct pdr_info *session = lookup_pdr4(&pdr_map_downlink_ip4, ip4->daddr, 1, &stale);
     if (!session) {
         upf_printk("upf: [n6] no downlink session for ip:%pI4", &ip4->daddr);
         return DEFAULT_XDP_ACTION;
@@ -431,11 +432,12 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
      *   Step 1: search for PDR and apply PDR instructions
      */
     __u32 teid = bpf_htonl(ctx->gtp->teid);
-    struct pdr_info *session = bpf_map_lookup_elem(&pdr_map_teid_ip4, &teid);
+    int stale=0;
+    struct pdr_info *session = lookup_pdr4(&pdr_map_teid_ip4, teid, 0, &stale);
     if (!session) {
         // TS 29.281 V19.2.0 clause 7.3.1: discard unknown tunnels, with
         // Error Indication only for a nonzero TEID (subject to error policing).
-        if (!teid) return XDP_DROP;
+        if (!teid || stale) return XDP_DROP;
         return UPF_ERROR_INDICATION;
     }
 
@@ -594,7 +596,8 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
             // applying user-data QERs or charging URRs. A terminal UPF consumes it.
             increment_counter(ctx->counters, rx_gtp_other);
             __u32 teid=bpf_ntohl(ctx->gtp->teid);
-            struct pdr_info *pdr=bpf_map_lookup_elem(&pdr_map_teid_ip4,&teid);
+            int stale=0;
+        struct pdr_info *pdr=lookup_pdr4(&pdr_map_teid_ip4,teid,0,&stale);
             if (!pdr || !pdr->entries[0].pdr.far_id) return XDP_DROP;
             struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->entries[0].pdr.far_id);
             if (!far || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
