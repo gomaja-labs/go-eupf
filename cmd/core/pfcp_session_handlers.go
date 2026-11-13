@@ -102,6 +102,9 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	operationPool := NewOperationPool()
 	operationPool.Before = start
 	operationPool.Publish = func() error {
+		if err := conn.rebindSessionRules(session); err != nil {
+			return err
+		}
 		if err := conn.bindAssignedAddresses(session); err != nil {
 			return err
 		}
@@ -302,6 +305,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	operationPool := NewOperationPool()
 	operationPool.Before = start
 	operationPool.Publish = func() error {
+		if err := conn.rebindSessionRules(session); err != nil {
+			return err
+		}
 		if err := conn.bindAssignedAddresses(session); err != nil {
 			return err
 		}
@@ -961,6 +967,7 @@ func createQERs(
 				if err != nil {
 					return err
 				}
+				qerInfo.PolicerID = id
 				session.NewQer(qerID, id, qerInfo)
 				return nil
 			},
@@ -1104,12 +1111,18 @@ func updateFARs(
 
 		session.FARs[farID] = newFar
 		operationPool.AddRule(ie.RuleIDTypeFAR, farID, Operation{
-			Apply: func() func() error {
-				return func() error {
-					session.UpdateFar(farID, newFar.FarInfo)
-					return mapOperations.UpdateFar(newFar.GlobalId, newFar.FarInfo)
+			Reserve: func() error {
+				id, err := mapOperations.GetNextFAR()
+				if err != nil {
+					return err
 				}
-			}(),
+				next := session.FARs[farID]
+				next.GlobalId = id
+				session.FARs[farID] = next
+				return nil
+			},
+			Apply:  func() error { next := session.FARs[farID]; return mapOperations.UpdateFar(next.GlobalId, next.FarInfo) },
+			Retire: func() error { return mapOperations.DeleteFar(oldFar.GlobalId) },
 		})
 	}
 
@@ -1145,12 +1158,21 @@ func updateQERs(
 
 		session.QERs[qerID] = newQer
 		operationPool.AddRule(ie.RuleIDTypeQER, qerID, Operation{
-			Apply: func() func() error {
-				return func() error {
-					session.UpdateQer(qerID, newQer.QerInfo)
-					return mapOperations.UpdateQer(newQer.GlobalId, newQer.QerInfo)
+			Reserve: func() error {
+				id, err := mapOperations.GetNextQER()
+				if err != nil {
+					return err
 				}
-			}(),
+				next := session.QERs[qerID]
+				next.GlobalId = id
+				if next.QerInfo.PolicerID == 0 {
+					next.QerInfo.PolicerID = oldQer.GlobalId
+				}
+				session.QERs[qerID] = next
+				return nil
+			},
+			Apply:  func() error { next := session.QERs[qerID]; return mapOperations.UpdateQer(next.GlobalId, next.QerInfo) },
+			Retire: func() error { return mapOperations.RetireQer(oldQer.GlobalId) },
 		})
 	}
 

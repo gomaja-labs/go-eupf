@@ -299,6 +299,9 @@ func (tx *ruleTransaction) NewQer(info QerInfo) (uint32, error) {
 		return 0, err
 	}
 	value := qerMapValue(info)
+	if value.PolicerId == id {
+		value.PolicerId = 0
+	}
 	err = journalRule[IpEntrypointQerInfo](tx, b.QerMap, id, func() error { return b.QerMap.Put(id, &value) })
 	if err != nil {
 		return 0, err
@@ -325,6 +328,9 @@ func (tx *ruleTransaction) UpdateFar(id uint32, info FarInfo) error {
 func (tx *ruleTransaction) UpdateQer(id uint32, info QerInfo) error {
 	if tx.newQER[id] {
 		value := qerMapValue(info)
+		if value.PolicerId == id {
+			value.PolicerId = 0
+		}
 		return journalRule[IpEntrypointQerInfo](tx, tx.objects.QerMap, id, func() error { return tx.objects.QerMap.Put(id, &value) })
 	}
 	return journalRule[IpEntrypointQerInfo](tx, tx.objects.QerMap, id, func() error { return tx.objects.UpdateQer(id, info) })
@@ -361,13 +367,13 @@ func (tx *ruleTransaction) DeleteQer(id uint32) error {
 	if err := tx.detach(2, id); err != nil {
 		return err
 	}
-	tx.retired = append(tx.retired, func() error {
-		if err := tx.objects.QerMap.Put(id, &IpEntrypointQerInfo{}); err != nil {
-			return err
-		}
-		tx.objects.ReleaseQER(id)
-		return nil
-	})
+	var value IpEntrypointQerInfo
+	if err := tx.objects.QerMap.Lookup(id, &value); err != nil {
+		return err
+	}
+	// Capture the anchor before clearing: a failed second write is retried with
+	// this same identity, rather than rereading an already zeroed version.
+	tx.retired = append(tx.retired, func() error { return tx.objects.deleteQerSlots(id, value.PolicerId) })
 	return nil
 }
 

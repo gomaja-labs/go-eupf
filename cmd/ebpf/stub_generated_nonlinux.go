@@ -136,6 +136,8 @@ type IpEntrypointQerInfo struct {
 	DlMaximumBitrate uint64
 	UlStart          uint64
 	DlStart          uint64
+	PolicerId        uint32
+	_                [4]byte
 }
 
 type IpEntrypointFarInfo struct {

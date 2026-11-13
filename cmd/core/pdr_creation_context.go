@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
@@ -599,6 +600,26 @@ func (pdrContext *PDRCreationContext) deleteReplacedPDR(old, current SPDRInfo, m
 			prefix = 128
 		}
 		return maps.DeleteDownlinkPdrIp6(old.Ipv6, old.PdrInfo.SessionID, old.PdrID, uint32(prefix))
+	}
+	return nil
+}
+
+// rebindSessionRules includes unchanged PDRs when a FAR/QER gets a fresh slot.
+// Return bindings are refreshed by bindSessionReplies after this step.
+// TS 29.244 V20.1.0 clauses 5.2.3 and 6.3.3.3.
+func (conn *PfcpConnection) rebindSessionRules(session *Session) error {
+	for id, pdr := range session.PDRs {
+		oldFar, oldQers, oldUrrs := pdr.PdrInfo.FarId, pdr.PdrInfo.QerIDs, pdr.PdrInfo.UrrIDs
+		if err := resolvePDRSlots(&pdr, session); err != nil {
+			return &ruleFailure{ie.RuleIDTypePDR, id, err}
+		}
+		if oldFar == pdr.PdrInfo.FarId && slices.Equal(oldQers, pdr.PdrInfo.QerIDs) && slices.Equal(oldUrrs, pdr.PdrInfo.UrrIDs) {
+			continue
+		}
+		if err := applyPDR(pdr, conn.mapOperations); err != nil {
+			return &ruleFailure{ie.RuleIDTypePDR, id, err}
+		}
+		session.PDRs[id] = pdr
 	}
 	return nil
 }

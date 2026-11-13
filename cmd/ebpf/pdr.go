@@ -279,6 +279,8 @@ func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
 }
 
 type QerInfo struct {
+	// PolicerID is the stable initial QER slot shared by its configuration versions.
+	PolicerID    uint32 `json:"-"`
 	GateStatusUL uint8
 	GateStatusDL uint8
 	QFIPresent   bool
@@ -297,6 +299,9 @@ func (bpfObjects *BpfObjects) NewQer(qerInfo QerInfo) (uint32, error) {
 	log.Debug().Msgf("EBPF: Put QER: internalId=%d, qerInfo=%+v", internalId, qerInfo)
 
 	qerToStore := qerMapValue(qerInfo)
+	if qerToStore.PolicerId == internalId {
+		qerToStore.PolicerId = 0
+	}
 	if err := bpfObjects.QerMap.Put(internalId, &qerToStore); err != nil {
 		bpfObjects.ReleaseQER(internalId)
 		return 0, fmt.Errorf("create QER: %w", err)
@@ -315,19 +320,34 @@ func (bpfObjects *BpfObjects) UpdateQer(internalId uint32, qerInfo QerInfo) erro
 	log.Debug().Msgf("EBPF: Update QER: internalId=%d, qerInfo=%+v", internalId, qerInfo)
 
 	qerToStore := qerMapValue(qerInfo)
+	if qerToStore.PolicerId == internalId {
+		qerToStore.PolicerId = 0
+	}
 	qerToStore.UlStart, qerToStore.DlStart = previous.UlStart, previous.DlStart
 	return bpfObjects.QerMap.Update(internalId, &qerToStore, ebpf.UpdateExist)
 }
 
-func (bpfObjects *BpfObjects) DeleteQer(internalId uint32) error {
-	if internalId == 0 {
-		return fmt.Errorf("cannot delete reserved Qer 0")
+func (b *BpfObjects) DeleteQer(id uint32) error {
+	if id == 0 {
+		return fmt.Errorf("reserved QER slot")
 	}
-	log.Debug().Msgf("EBPF: Delete QER: internalId=%d", internalId)
-	if err := bpfObjects.QerMap.Update(internalId, &IpEntrypointQerInfo{}, ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
+	var value IpEntrypointQerInfo
+	if err := b.QerMap.Lookup(id, &value); err != nil {
 		return err
 	}
-	bpfObjects.ReleaseQER(internalId)
+	return b.deleteQerSlots(id, value.PolicerId)
+}
+func (b *BpfObjects) deleteQerSlots(id, anchor uint32) error {
+	if err := b.QerMap.Put(id, &IpEntrypointQerInfo{}); err != nil {
+		return err
+	}
+	if anchor != 0 && anchor != id {
+		if err := b.QerMap.Put(anchor, &IpEntrypointQerInfo{}); err != nil {
+			return err
+		}
+		b.ReleaseQER(anchor)
+	}
+	b.ReleaseQER(id)
 	return nil
 }
 
@@ -434,6 +454,7 @@ type ForwardingPlaneController interface {
 	NewQer(qerInfo QerInfo) (uint32, error)
 	UpdateQer(internalId uint32, qerInfo QerInfo) error
 	DeleteQer(internalId uint32) error
+	RetireQer(internalId uint32) error
 	NewUrr(urrInfo UrrInfo) (uint32, error)
 	UpdateUrr(internalId uint32, urrInfo UrrInfo) error
 	GetUrr(internalId uint32) (UrrInfo, error)
@@ -694,7 +715,7 @@ func boolByte(value bool) uint8 {
 }
 
 func qerMapValue(info QerInfo) IpEntrypointQerInfo {
-	return IpEntrypointQerInfo{UlGateStatus: info.GateStatusUL, DlGateStatus: info.GateStatusDL, Qfi: info.Qfi, QfiPresent: boolByte(info.QFIPresent), Rqi: info.RQI, Dscp: info.Dscp, UlMaximumBitrate: info.MaxBitrateUL, DlMaximumBitrate: info.MaxBitrateDL}
+	return IpEntrypointQerInfo{UlGateStatus: info.GateStatusUL, DlGateStatus: info.GateStatusDL, Qfi: info.Qfi, QfiPresent: boolByte(info.QFIPresent), Rqi: info.RQI, Dscp: info.Dscp, PolicerId: info.PolicerID, UlMaximumBitrate: info.MaxBitrateUL, DlMaximumBitrate: info.MaxBitrateDL}
 }
 
 // ResetUrr resets a retained counter only after its final PDR is detached.
@@ -725,5 +746,45 @@ func lookupRuleValue(m *ebpf.Map, key, value interface{}) error {
 		*bucket = IpEntrypointPdrInfo{}
 		return ebpf.ErrKeyNotExist
 	}
+	return nil
+}
+
+// RetireQer removes an obsolete configuration without releasing its shared
+// policer anchor. The final DeleteQer releases both after readers complete.
+func (b *BpfObjects) RetireQer(id uint32) error {
+	if id == 0 {
+		return fmt.Errorf("reserved QER slot")
+	}
+	var value IpEntrypointQerInfo
+	if err := b.QerMap.Lookup(id, &value); err != nil {
+		return err
+	}
+	if value.PolicerId == 0 || value.PolicerId == id {
+		return nil
+	}
+	if err := b.QerMap.Put(id, &IpEntrypointQerInfo{}); err != nil {
+		return err
+	}
+	b.ReleaseQER(id)
+	return nil
+}
+func (tx *ruleTransaction) RetireQer(id uint32) error {
+	if id == 0 {
+		return fmt.Errorf("reserved QER slot")
+	}
+	var value IpEntrypointQerInfo
+	if err := tx.objects.QerMap.Lookup(id, &value); err != nil {
+		return err
+	}
+	if value.PolicerId == 0 || value.PolicerId == id {
+		return nil
+	}
+	tx.retired = append(tx.retired, func() error {
+		if err := tx.objects.QerMap.Put(id, &IpEntrypointQerInfo{}); err != nil {
+			return err
+		}
+		tx.objects.ReleaseQER(id)
+		return nil
+	})
 	return nil
 }

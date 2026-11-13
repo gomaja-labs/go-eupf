@@ -69,7 +69,17 @@ IPv6 remains an LPM trie with deferred frees: Linux v5.15
 `kernel/bpf/lpm_trie.c:381` uses `kfree_rcu`; v6.18 `:451` uses
 `bpf_mem_cache_free_rcu`. These lifetimes differ from hash element recycling
 since Linux 6.1. Old
-FAR/QER slots remain reserved until a batched kernel RCU grace period completes.
+FAR/QER updates reserve and write fresh configuration slots, then rebind all
+referencing PDRs, including unchanged PDRs and generated-reply bindings. Old
+versions remain reserved until the batched kernel RCU grace period completes
+(TS 29.244 V20.1.0 clauses 5.2.3 and 6.3.3.3). A packet therefore reads one
+complete old or new configuration. QER versions share atomic policer timestamps
+in the initial QER slot: the anchor remains reserved across configuration
+updates and is released only after logical QER removal and its final grace.
+No userspace snapshot copies live metering state. The current rate applies to
+the continuing virtual-time credit (clause 5.4.4); an update does not reset credit.
+URR configuration is control-plane-only, so Update URR never overwrites live
+counter slots and cannot tear their configuration.
 URR detachment waits for old invocations before reading final usage and clearing
 its slot. A dummy map-in-map update invokes the kernel's BPF synchronization;
 there are no packet-path instructions for this synchronization. Native and

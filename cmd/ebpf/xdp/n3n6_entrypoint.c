@@ -269,7 +269,16 @@ static __always_inline const struct pdr* check_sdf_filters_gtp(struct packet_con
 int apply_qer(struct qer_info *qer, __u64 packet_size, __u32 uplink) {
     if (!qer) return -1;
     if (uplink ? qer->ul_gate_status != GATE_STATUS_OPEN : qer->dl_gate_status != GATE_STATUS_OPEN) return -1;
-    if (XDP_DROP == limit_rate_sliding_window(packet_size, uplink ? &qer->ul_start : &qer->dl_start, uplink ? qer->ul_maximum_bitrate : qer->dl_maximum_bitrate)) return -1;
+    // TS 29.244 V20.1.0 clause 5.4.4: old and replacement QERs meter
+    // the same flow. Keep their atomic policer state in the initial slot;
+    // that anchor is reserved until the logical QER is finally removed.
+    struct qer_info *state=qer;
+    __u32 policer_id=qer->policer_id;
+    if (policer_id) {
+        state=bpf_map_lookup_elem(&qer_map,&policer_id);
+        if (!state) return -1;
+    }
+    if (XDP_DROP == limit_rate_sliding_window(packet_size, uplink ? &state->ul_start : &state->dl_start, uplink ? qer->ul_maximum_bitrate : qer->dl_maximum_bitrate)) return -1;
     return ((__u32)qer->dscp << 8) | (qer->qfi_present ? 0x80 | (qer->qfi & 0x3f) | ((qer->rqi & 1) << 6) : 0);
 }
 int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {

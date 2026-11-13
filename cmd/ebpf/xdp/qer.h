@@ -26,6 +26,7 @@ struct qer_info {
     __u64 dl_maximum_bitrate;
     volatile __u64 ul_start;
     volatile __u64 dl_start;
+    __u32 policer_id; // stable initial slot, zero means this slot
 };
 
 /* QER ID -> QER */
