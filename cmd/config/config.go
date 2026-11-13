@@ -224,7 +224,7 @@ func defineFlags() {
 	pflag.Bool("ueip", false, "Enable or disable UEIP feature")
 	pflag.String("ueippool", "10.60.0.0/24", "IP pool for UEIP feature")
 	pflag.Uint32("teidpool", 65535, "TEID pool for FTUP feature")
-	pflag.Uint32("restoration-period", 60, "Seconds after startup reserved for session restoration before automatic UE IPv4 allocation")
+	pflag.Uint32("restoration-period", 60, "Seconds after startup reserved for session restoration; holds automatic UE IPv4 allocation and suppresses unknown-tunnel Error Indications")
 	pflag.StringArray("pfcprnode", []string{}, "Address of remote PFCP node")
 	pflag.StringArray("sxanode", []string{}, "Address of remote Sxa node")
 	pflag.StringArray("sxbnode", []string{}, "Address of remote Sxb node")

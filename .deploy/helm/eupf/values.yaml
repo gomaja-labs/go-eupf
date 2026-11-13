@@ -108,6 +108,7 @@ config:
     # config.yml: |
     #   interface_name: eth0
     #   max_sessions: 1024
+    #   # Holds automatic UE IPv4 allocation and suppresses unknown-tunnel Error Indications.
     #   restoration_period: 60
     #   api_address: :8080
     #   pfcp_address: :8805
