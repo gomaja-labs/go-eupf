@@ -194,12 +194,9 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 		if a.Teid == b.Teid && a.RemoteIP == b.RemoteIP {
 			continue
 		}
-		qfi, withQFI, active, err := handoverMarkerQFI(old, id, before)
+		qfi, withQFI, err := handoverMarkerQFI(old, id, before)
 		if err != nil {
 			return nil, err
-		}
-		if !active {
-			continue
 		}
 		destination := make(net.IP, 4)
 		binary.LittleEndian.PutUint32(destination, a.RemoteIP)
@@ -323,34 +320,29 @@ func gtpTunnelSourcePort(teid uint32) uint16 { return 49152 | uint16(teid&0x3fff
 // TS 29.244 V20.1.0 clause 5.17.3 and TS 29.281 V19.2.0 clause
 // 7.3.2.3: a 5GS data-forwarding tunnel carries one mapped flow. Ordinary
 // old tunnels (including Dual Connectivity transfers) have no container.
-func handoverMarkerQFI(session *Session, farID uint32, far SFarInfo) (uint8, bool, bool, error) {
+func handoverMarkerQFI(session *Session, farID uint32, far SFarInfo) (uint8, bool, error) {
 	if !far.InterfaceTypePresent || (far.InterfaceType != ie.TGPPInterfaceTypeN3ForDataForwarding && far.InterfaceType != ie.TGPPInterfaceTypeN9DataForwarding) {
-		return 0, false, true, nil
+		return 0, false, nil
 	}
 	ids := make([]uint32, 0, len(session.PDRs))
 	for id := range session.PDRs {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	active := false
 	for _, id := range ids {
 		pdr := session.PDRs[id]
 		if pdr.FARID == nil || *pdr.FARID != farID {
 			continue
 		}
-		active = true
 		if pdr.PdrInfo.GtpExtensionHeaderDeletion&1 != 0 {
-			return 0, false, true, nil
+			return 0, false, nil
 		}
 		for _, qid := range pdr.QERIDs {
 			qer, ok := session.QERs[qid]
 			if ok && qer.QerInfo.QFIPresent {
-				return qer.QerInfo.Qfi & 0x3f, true, true, nil
+				return qer.QerInfo.Qfi & 0x3f, true, nil
 			}
 		}
 	}
-	if !active {
-		return 0, false, false, nil
-	}
-	return 0, false, true, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
+	return 0, false, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
 }

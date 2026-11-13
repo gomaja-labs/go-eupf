@@ -189,8 +189,8 @@ func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-		} else if err != nil {
-			t.Fatal(err)
+		} else if err == nil {
+			t.Fatal("SNDEM accepted without a mapped QFI")
 		}
 	}
 }
@@ -224,11 +224,11 @@ func TestEndMarkerRetainsTunnelInterfaceThroughRuleTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseRequestAccepted {
-		t.Fatalf("data-forwarding switch cause=%d", cause)
+	if cause, _ := result.(*message.SessionModificationResponse).Cause.Cause(); cause != ie.CauseConditionalIEMissing {
+		t.Fatalf("data-forwarding switch without mapped QFI cause=%d", cause)
 	}
-	if got := assoc.Sessions[fseid.SEID].FARs[9]; got.InterfaceType != original.InterfaceType || !got.InterfaceTypePresent || got.FarInfo.Teid != 201 {
-		t.Fatal("accepted switch lost interface or new tunnel")
+	if got := assoc.Sessions[fseid.SEID].FARs[9]; got != original {
+		t.Fatal("rejected switch changed the old FAR")
 	}
 	result, _, err = HandlePfcpSessionModificationRequest(conn, message.NewSessionModificationRequest(fseid.SEID, 4,
 		ie.NewUpdateFAR(ie.NewFARID(9), ie.NewUpdateForwardingParameters(ie.New(ie.TGPPInterfaceType, nil)))), "127.0.0.1")

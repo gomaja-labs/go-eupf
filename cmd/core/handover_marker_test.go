@@ -120,7 +120,7 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 		{name: "absent QFI", label: ie.TGPPInterfaceTypeN9DataForwarding, wantError: true},
 		{name: "EPS output", label: ie.TGPPInterfaceTypeN3ForDataForwarding, deletion: true},
 		{name: "ordinary old tunnel", label: ie.TGPPInterfaceTypeN33GPPAccess, present: true},
-		{name: "inactive forwarding tunnel", label: ie.TGPPInterfaceTypeN9DataForwarding, inactive: true},
+		{name: "inactive forwarding tunnel", label: ie.TGPPInterfaceTypeN9DataForwarding, inactive: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewSession(1, 2, "", "", false)
@@ -134,9 +134,9 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 				s.PutPDR(1, p)
 			}
 			s.NewQer(1, 1, ebpf.QerInfo{QFIPresent: tc.present, Qfi: 0})
-			qfi, present, active, err := handoverMarkerQFI(s, fid, f)
-			if (err != nil) != tc.wantError || qfi != 0 || present != tc.wantQFI || active == tc.inactive {
-				t.Fatalf("qfi=%d present=%t active=%t err=%v", qfi, present, active, err)
+			qfi, present, err := handoverMarkerQFI(s, fid, f)
+			if (err != nil) != tc.wantError || qfi != 0 || present != tc.wantQFI {
+				t.Fatalf("qfi=%d present=%t err=%v", qfi, present, err)
 			}
 			if tc.wantError {
 				fields := ruleFailureIEs(err)
@@ -165,5 +165,29 @@ func TestUnknownOuterRemovalUsesMandatoryIEIncorrect(t *testing.T) {
 		if err != nil || cause != ie.CauseServiceNotSupported {
 			t.Fatalf("assigned unsupported description %d: cause=%d err=%v", description, cause, err)
 		}
+	}
+}
+
+func TestInactiveHandoverMarkerRequiresMappedQFI(t *testing.T) {
+	conn := newProtocolConnection(t)
+	old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
+	old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
+	f := old.FARs[1]
+	f.InterfaceType, f.InterfaceTypePresent = ie.TGPPInterfaceTypeN3ForDataForwarding, true
+	old.FARs[1] = f
+	next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
+	req := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+	batch, err := conn.prepareEndMarkers(req, old, next)
+	if batch != nil {
+		batch.release()
+		t.Fatal("marker created without a mapped QFI")
+	}
+	if err == nil {
+		t.Fatal("SNDEM accepted without a mapped QFI or a marker")
+	}
+	fields := ruleFailureIEs(err)
+	cause, _ := fields[0].Cause()
+	if cause != ie.CauseConditionalIEMissing {
+		t.Fatal(cause)
 	}
 }
