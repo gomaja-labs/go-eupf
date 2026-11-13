@@ -402,6 +402,20 @@ func validateSessionRuleShapes(conn *PfcpConnection, session *Session) error {
 		}
 	}
 
+	// TS 29.244 V20.1.0 clause 5.3.1: the uniquely allocated N4-u TEID
+	// identifies CP ingress. It cannot also identify a different source side.
+	sources := make(map[uint32]uint8)
+	for id, pdr := range session.PDRs {
+		if pdr.Teid == 0 || !pdr.PdrInfo.SourceInterfacePresent {
+			continue
+		}
+		previous, exists := sources[pdr.Teid]
+		if exists && previous != pdr.SourceInterface && (previous == ie.SrcInterfaceCPFunction || pdr.SourceInterface == ie.SrcInterfaceCPFunction) {
+			return &ruleFailure{ie.RuleIDTypePDR, id, unsupportedRuleIE(ie.SourceInterface)}
+		}
+		sources[pdr.Teid] = pdr.SourceInterface
+	}
+
 	for id, pdr := range session.PDRs {
 		var err error
 		if pdr.Teid != 0 && pdr.PdrInfo.SourceInterfacePresent && pdr.SourceInterface == ie.SrcInterfaceCore && conn.n3Address.Equal(conn.n9Address) {
@@ -421,6 +435,12 @@ func validateSessionRuleShapes(conn *PfcpConnection, session *Session) error {
 		if pdr.FARID != nil {
 			far := session.FARs[*pdr.FARID].FarInfo
 			if far.Action&2 != 0 {
+				if pdr.SourceInterface == ie.SrcInterfaceCPFunction && (!far.DestinationInterfacePresent || far.DestinationInterface == ie.DstInterfaceCPFunction) {
+					err = unsupportedRuleIE(ie.DestinationInterface)
+				}
+				if far.DestinationInterfacePresent && far.DestinationInterface == ie.DstInterfaceCPFunction && far.OuterHeaderCreation != 1 {
+					err = unsupportedRuleIE(ie.OuterHeaderCreation)
+				}
 				if pdr.Teid == 0 && far.OuterHeaderCreation != 1 {
 					err = fmt.Errorf("native N6 forwarding requires a GTP-U return tunnel: %w", ebpf.ErrUnsupportedRuleContent)
 				}

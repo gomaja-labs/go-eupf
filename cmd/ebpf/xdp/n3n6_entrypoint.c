@@ -497,11 +497,16 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
      */
     const __u64 packet_size=ctx->tpdu_length;
     int from_cp=ctx->source_interface==3;
-    int marking=enforce_qers(pdr,packet_size,!from_cp);if (marking<0) return XDP_DROP;
+    // TS 29.244 V20.1.0 clause 5.4.4: CP-to-Access is DL,
+    // CP-to-Core/SGi/N6 is UL. The TEID identifies CP ingress, not direction.
+    int uplink=ctx->source_interface==0 ||
+        (from_cp && far->destination_interface_present &&
+        (far->destination_interface==1 || far->destination_interface==2));
+    int marking=enforce_qers(pdr,packet_size,uplink);if (marking<0) return XDP_DROP;
 
     const int urr_size = sizeof(pdr->urr_id)/sizeof(pdr->urr_id[0]);
     for (int i = 0; i < urr_size; i++) {
-        update_urr(pdr->urr_id[i], from_cp ? 0 : packet_size, from_cp ? packet_size : 0);
+        update_urr(pdr->urr_id[i], uplink ? packet_size : 0, uplink ? 0 : packet_size);
     }
 
     upf_printk("upf: [n3] session for teid:%u far:%d outer_header_removal:%d", teid, pdr->far_id, pdr->outer_header_removal);
@@ -517,7 +522,12 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
             if (remove_gtp_header(ctx)) return XDP_ABORTED;
             return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
         }
-        update_gtp_tunnel(ctx, global_config.n9_ipv4_address, far->remoteip, 0, far->teid);
+        __u32 local=global_config.n9_ipv4_address;
+        if (far->destination_interface_present && far->destination_interface==3) {
+            local=global_config.n3_ipv4_address;
+            ctx->ip4->tos=tos;
+        }
+        update_gtp_tunnel(ctx, local, far->remoteip, 0, far->teid);
 
         if(is_local_ip(ctx->ip4->daddr)) {
             upf_printk("upf: [n3] process locally teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);

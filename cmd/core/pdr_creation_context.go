@@ -224,6 +224,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 	}
 
 	spdrInfo.PdrInfo.SdfFilter = nil
+	spdrInfo.SDFUplink = spdrInfo.PdrInfo.SourceInterfacePresent && spdrInfo.SourceInterface == ie.SrcInterfaceAccess
 	spdrInfo.PdrInfo.QFIs = nil
 	if len(pdi.QFI) > ebpf.MaxQFIsPerPDR {
 		return ebpf.ErrRuleCapacity
@@ -246,7 +247,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 					}
 					// TS 29.244 V20.1.0 clause 5.2.1A.2A: CP descriptions
 					// assume downlink; Access PDRs reverse addresses and ports.
-					if spdrInfo.PdrInfo.SourceInterfacePresent && (spdrInfo.SourceInterface == ie.SrcInterfaceAccess) != (sdfFilterParsed.Direction == "in") {
+					if spdrInfo.SDFUplink {
 						sdfFilterParsed.SrcAddress, sdfFilterParsed.DstAddress = sdfFilterParsed.DstAddress, sdfFilterParsed.SrcAddress
 						sdfFilterParsed.SrcPortRange, sdfFilterParsed.DstPortRange = sdfFilterParsed.DstPortRange, sdfFilterParsed.SrcPortRange
 					}
@@ -607,10 +608,11 @@ func (pdrContext *PDRCreationContext) deleteReplacedPDR(old, current SPDRInfo, m
 func (conn *PfcpConnection) rebindSessionRules(session *Session) error {
 	for id, pdr := range session.PDRs {
 		oldFar, oldQers, oldUrrs := pdr.PdrInfo.FarId, pdr.PdrInfo.QerIDs, pdr.PdrInfo.UrrIDs
+		directionChanged := orientPDRFilters(&pdr, session)
 		if err := resolvePDRSlots(&pdr, session); err != nil {
 			return &ruleFailure{ie.RuleIDTypePDR, id, err}
 		}
-		if oldFar == pdr.PdrInfo.FarId && slices.Equal(oldQers, pdr.PdrInfo.QerIDs) && slices.Equal(oldUrrs, pdr.PdrInfo.UrrIDs) {
+		if !directionChanged && oldFar == pdr.PdrInfo.FarId && slices.Equal(oldQers, pdr.PdrInfo.QerIDs) && slices.Equal(oldUrrs, pdr.PdrInfo.UrrIDs) {
 			continue
 		}
 		if err := applyPDR(pdr, conn.mapOperations); err != nil {
@@ -619,4 +621,24 @@ func (conn *PfcpConnection) rebindSessionRules(session *Session) error {
 		session.PDRs[id] = pdr
 	}
 	return nil
+}
+
+// orientPDRFilters applies the same UL/DL decision as packet QoS/accounting.
+// TS 29.244 V20.1.0 clauses 5.2.1A.2A and 5.4.4.
+func orientPDRFilters(pdr *SPDRInfo, session *Session) bool {
+	uplink := pdr.PdrInfo.SourceInterfacePresent && pdr.SourceInterface == ie.SrcInterfaceAccess
+	if pdr.SourceInterface == ie.SrcInterfaceCPFunction && pdr.FARID != nil {
+		far := session.FARs[*pdr.FARID].FarInfo
+		uplink = far.DestinationInterfacePresent && (far.DestinationInterface == ie.DstInterfaceCore || far.DestinationInterface == ie.DstInterfaceSGiLANN6LAN)
+	}
+	if uplink == pdr.SDFUplink {
+		return false
+	}
+	for i := range pdr.PdrInfo.SdfFilter {
+		f := &pdr.PdrInfo.SdfFilter[i]
+		f.SrcAddress, f.DstAddress = f.DstAddress, f.SrcAddress
+		f.SrcPortRange, f.DstPortRange = f.DstPortRange, f.SrcPortRange
+	}
+	pdr.SDFUplink = uplink
+	return true
 }

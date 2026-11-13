@@ -99,3 +99,52 @@ func TestUpdatedRulesReplaceSlotsAndRebindEveryPDR(t *testing.T) {
 	}
 
 }
+
+func TestComposeFARRetainsDestinationInterface(t *testing.T) {
+	far, err := composeFarInfo(ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceCPFunction))), ebpf.FarInfo{}, DefaultProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !far.DestinationInterfacePresent || far.DestinationInterface != ie.DstInterfaceCPFunction {
+		t.Fatalf("dropped Destination Interface: %+v", far)
+	}
+	kept, err := composeFarInfo(ie.NewUpdateFAR(ie.NewFARID(1), ie.NewApplyAction(1)), far, DefaultProfile{})
+	if err != nil || kept.DestinationInterface != far.DestinationInterface || !kept.DestinationInterfacePresent {
+		t.Fatalf("absent update erased direction: %+v %v", kept, err)
+	}
+	changed, err := composeFarInfo(ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewDestinationInterface(ie.DstInterfaceCore))), kept, DefaultProfile{})
+	if err != nil || changed.DestinationInterface != ie.DstInterfaceCore {
+		t.Fatalf("update lost direction: %+v %v", changed, err)
+	}
+}
+
+func TestCPFilterOrientationFollowsFARDestination(t *testing.T) {
+	session := NewSession(9, 42, "", "", false)
+	id := uint32(1)
+	session.NewFar(id, 10, ebpf.FarInfo{DestinationInterface: ie.DstInterfaceCore, DestinationInterfacePresent: true})
+	filter, err := ParseSdfFilter("permit out udp from 192.0.2.1 53 to assigned 80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdr := SPDRInfo{FARID: &id, SourceInterface: ie.SrcInterfaceCPFunction, PdrInfo: ebpf.PdrInfo{SourceInterfacePresent: true, SourceInterface: ie.SrcInterfaceCPFunction, SdfFilter: []ebpf.SdfFilter{filter}}}
+	if !orientPDRFilters(&pdr, session) || !pdr.SDFUplink || pdr.PdrInfo.SdfFilter[0].SrcAddress.Type != 3 || pdr.PdrInfo.SdfFilter[0].SrcPortRange.LowerBound != 80 {
+		t.Fatal("CP-to-DN did not reverse the downlink description")
+	}
+	if orientPDRFilters(&pdr, session) {
+		t.Fatal("unchanged direction reversed twice")
+	}
+	session.NewFar(id, 11, ebpf.FarInfo{DestinationInterface: ie.DstInterfaceAccess, DestinationInterfacePresent: true})
+	if !orientPDRFilters(&pdr, session) || pdr.SDFUplink || pdr.PdrInfo.SdfFilter[0].DstAddress.Type != 3 || pdr.PdrInfo.SdfFilter[0].DstPortRange.LowerBound != 80 {
+		t.Fatal("FAR direction update kept stale SDF orientation")
+	}
+}
+func TestCPIngressDoesNotShareTEIDWithAnotherSource(t *testing.T) {
+	conn, _ := PreparePfcpConnection(t)
+	session := NewSession(9, 42, "", "", false)
+	for id, source := range []uint8{ie.SrcInterfaceAccess, ie.SrcInterfaceCPFunction} {
+		session.PDRs[uint32(id+1)] = SPDRInfo{PdrID: uint32(id + 1), Teid: 100, SourceInterface: source, PdrInfo: ebpf.PdrInfo{SourceInterfacePresent: true, SourceInterface: source}}
+	}
+	if err := validateSessionRuleShapes(conn, session); err == nil {
+		t.Fatal("one TEID ambiguously identifies Access and CP ingress")
+	}
+}

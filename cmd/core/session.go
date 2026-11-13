@@ -59,6 +59,7 @@ type SPDRInfo struct {
 	Ipv6            net.IP
 	NetworkInstance string
 	SourceInterface uint8
+	SDFUplink       bool `json:"-"`
 	AllocatedTEID   bool
 	AllocatedUEIP   bool
 	PCCInfo         *PCCInfo

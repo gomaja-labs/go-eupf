@@ -141,12 +141,15 @@ type IpEntrypointQerInfo struct {
 }
 
 type IpEntrypointFarInfo struct {
-	Action                uint8
-	OuterHeaderCreation   uint8
-	Teid                  uint32
-	Remoteip              uint32
-	Trigger               uint8
-	TransportLevelMarking uint16
+	Action                      uint8
+	OuterHeaderCreation         uint8
+	Teid                        uint32
+	Remoteip                    uint32
+	Trigger                     uint8
+	TransportLevelMarking       uint16
+	DestinationInterface        uint8
+	DestinationInterfacePresent uint8
+	_                           [2]byte
 }
 
 type IpEntrypointUrrInfo struct {

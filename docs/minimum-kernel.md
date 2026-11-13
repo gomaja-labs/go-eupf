@@ -52,3 +52,11 @@ Solicitation processing has a separate verifier budget. Its tail-call
 continuation carries IDs/flags in the packet's private headroom and restores
 the original frame before parsing or forwarding; it carries no kernel pointer
 or CPU-shared state. Normal data forwarding does not take that continuation.
+
+
+The suite includes PDR array-slot lifetime and forced hash-element recycling,
+FAR/QER configuration coherence under concurrent publication, shared QER
+policer state, and the CP-function directional gate/usage matrix. Run the same
+static executable on the minimum and current kernels; a current-kernel result
+does not substitute for the 5.15 test. Kernel-only pointer probes exercise
+bounded 20,000-iteration readers while publication churn continues.

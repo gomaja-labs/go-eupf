@@ -172,6 +172,8 @@ struct far_info {
     __u8 trigger;  // only for DL
     /* first octet DSCP value in the Type-of-Service, second octet shall contain the ToS/Traffic Class mask field, which shall be set to "0xFC". */
     __u16 transport_level_marking;
+    __u8 destination_interface;
+    __u8 destination_interface_present;
 };
 
 /* FAR ID -> FAR */

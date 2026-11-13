@@ -186,23 +186,27 @@ func (b *BpfObjects) DeleteDownlinkPdrIp6(ip net.IP, owner uint64, id, prefix ui
 }
 
 type FarInfo struct {
-	Action                uint8
-	OuterHeaderCreation   uint8
-	Teid                  uint32
-	RemoteIP              uint32
-	Trigger               uint8 // trigger for applying the FAR // todo maxim: change to ringbuffer
-	TransportLevelMarking uint16
+	DestinationInterface        uint8
+	DestinationInterfacePresent bool
+	Action                      uint8
+	OuterHeaderCreation         uint8
+	Teid                        uint32
+	RemoteIP                    uint32
+	Trigger                     uint8 // trigger for applying the FAR // todo maxim: change to ringbuffer
+	TransportLevelMarking       uint16
 }
 
 func (f FarInfo) MarshalJSON() ([]byte, error) {
 	remoteIP := make(net.IP, 4)
 	binary.LittleEndian.PutUint32(remoteIP, f.RemoteIP)
 	data := map[string]interface{}{
-		"action":                  f.Action,
-		"outer_header_creation":   f.OuterHeaderCreation,
-		"teid":                    f.Teid,
-		"remote_ip":               remoteIP.String(),
-		"transport_level_marking": f.TransportLevelMarking,
+		"action":                        f.Action,
+		"outer_header_creation":         f.OuterHeaderCreation,
+		"teid":                          f.Teid,
+		"remote_ip":                     remoteIP.String(),
+		"transport_level_marking":       f.TransportLevelMarking,
+		"destination_interface":         f.DestinationInterface,
+		"destination_interface_present": f.DestinationInterfacePresent,
 	}
 	return json.Marshal(data)
 }
@@ -216,11 +220,13 @@ func (bpfObjects *BpfObjects) NewFar(farInfo FarInfo) (uint32, error) {
 	log.Debug().Msgf("EBPF: Put FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
 	farToStore := IpEntrypointFarInfo{
-		Action:                farInfo.Action,
-		OuterHeaderCreation:   farInfo.OuterHeaderCreation,
-		Teid:                  farInfo.Teid,
-		Remoteip:              farInfo.RemoteIP,
-		TransportLevelMarking: farInfo.TransportLevelMarking,
+		Action:                      farInfo.Action,
+		OuterHeaderCreation:         farInfo.OuterHeaderCreation,
+		Teid:                        farInfo.Teid,
+		Remoteip:                    farInfo.RemoteIP,
+		TransportLevelMarking:       farInfo.TransportLevelMarking,
+		DestinationInterface:        farInfo.DestinationInterface,
+		DestinationInterfacePresent: boolByte(farInfo.DestinationInterfacePresent),
 	}
 	if err := bpfObjects.FarMap.Put(internalId, &farToStore); err != nil {
 		bpfObjects.ReleaseFAR(internalId)
@@ -238,12 +244,14 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	}
 
 	farInfo := FarInfo{
-		Action:                farToStore.Action,
-		OuterHeaderCreation:   farToStore.OuterHeaderCreation,
-		Teid:                  farToStore.Teid,
-		RemoteIP:              farToStore.Remoteip,
-		Trigger:               farToStore.Trigger,
-		TransportLevelMarking: farToStore.TransportLevelMarking,
+		Action:                      farToStore.Action,
+		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
+		Teid:                        farToStore.Teid,
+		RemoteIP:                    farToStore.Remoteip,
+		Trigger:                     farToStore.Trigger,
+		TransportLevelMarking:       farToStore.TransportLevelMarking,
+		DestinationInterface:        farToStore.DestinationInterface,
+		DestinationInterfacePresent: farToStore.DestinationInterfacePresent != 0,
 	}
 
 	log.Debug().Msgf("EBPF: Get FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
@@ -257,11 +265,13 @@ func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) erro
 	log.Debug().Msgf("EBPF: Update FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
 	farToStore := IpEntrypointFarInfo{
-		Action:                farInfo.Action,
-		OuterHeaderCreation:   farInfo.OuterHeaderCreation,
-		Teid:                  farInfo.Teid,
-		Remoteip:              farInfo.RemoteIP,
-		TransportLevelMarking: farInfo.TransportLevelMarking,
+		Action:                      farInfo.Action,
+		OuterHeaderCreation:         farInfo.OuterHeaderCreation,
+		Teid:                        farInfo.Teid,
+		Remoteip:                    farInfo.RemoteIP,
+		TransportLevelMarking:       farInfo.TransportLevelMarking,
+		DestinationInterface:        farInfo.DestinationInterface,
+		DestinationInterfacePresent: boolByte(farInfo.DestinationInterfacePresent),
 	}
 	return bpfObjects.FarMap.Update(internalId, &farToStore, ebpf.UpdateExist)
 }

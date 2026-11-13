@@ -490,7 +490,7 @@ func cloneIP(ip net.IP) net.IP {
 }
 
 func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf.FarInfo, error) {
-	var action, outer, marking *ie.IE
+	var action, outer, marking, destination *ie.IE
 	switch far.Type {
 	case ie.CreateFAR:
 		f, err := far.CreateFAR()
@@ -503,7 +503,7 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 			if err != nil {
 				return farInfo, err
 			}
-			outer, marking = forward.OuterHeaderCreation, forward.TransportLevelMarking
+			outer, marking, destination = forward.OuterHeaderCreation, forward.TransportLevelMarking, forward.DestinationInterface
 		}
 	case ie.UpdateFAR:
 		f, err := far.UpdateFAR()
@@ -516,11 +516,21 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 			if err != nil {
 				return farInfo, err
 			}
-			outer, marking = forward.OuterHeaderCreation, forward.TransportLevelMarking
+			outer, marking, destination = forward.OuterHeaderCreation, forward.TransportLevelMarking, forward.DestinationInterface
 		}
 	default:
 		return farInfo, &ie.InvalidTypeError{Type: far.Type}
 	}
+	// TS 29.244 V20.1.0 clause 5.4.4: a CP-function source uses the
+	// FAR destination to identify UL versus DL. Absent update fields preserve it.
+	if destination != nil {
+		value, err := destination.DestinationInterface()
+		if err != nil {
+			return farInfo, err
+		}
+		farInfo.DestinationInterface, farInfo.DestinationInterfacePresent = value, true
+	}
+
 	if action != nil {
 		flags, err := action.ApplyAction()
 		if err != nil {

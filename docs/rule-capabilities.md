@@ -261,3 +261,37 @@ a V6-only choice returns Cause 76. Numeric SDF protocol values cover 0-255,
 with a separate `ip` wildcard. TCP, UDP and SCTP port ranges are supported;
 prohibited grammar is ignored under clause 7.6.8. Ignored optional filters are logged with SEID/PDR ID and
 counted by `upf_ignored_sdf_filters_total`.
+
+
+## CP-function traffic directions
+
+TS 29.244 V20.1.0 clauses 5.3.1 and 5.4.4 govern the following IPv4
+GTP-U forwarding forms. Destination Interface is retained by both Create FAR
+and Update FAR; an omitted update preserves it.
+
+| Scenario | PDR source | FAR destination | QoS and usage |
+|---|---|---|---|
+| UE to CP (1) | Access | CP-function, GTP-U encapsulation | UL |
+| CP to UE (1) | CP-function, GTP-U decapsulation | Access, GTP-U encapsulation | DL |
+| CP to DN (2) | CP-function, GTP-U decapsulation | Core or SGi/N6, native output | UL |
+| DN to CP (2) | Core, native input | CP-function, GTP-U encapsulation | DL |
+
+The CP-side TEID identifies ingress; the FAR destination determines whether a
+CP-originated packet is UL or DL. The same direction applies to gates, bitrate,
+usage and reversal of the downlink Flow Description. A FAR update changing
+that direction also reorients unchanged PDR filters. CP ingress cannot share a
+TEID with another Source Interface. Ambiguous CP-to-CP or missing CP-source
+forwarding destinations, and forwarding to CP without GTP-U creation, return
+Cause 76 with the offending field/Failed Rule ID.
+
+Scenarios 3 (CP buffering), 4 (CP-constructed End Markers) and 5 (Control Plane
+CIoT) are outside this supported subset. Their basic IP-payload forwarding can
+overlap the rows above, but full extension-header preservation, nested End
+Marker semantics and CIoT procedures are not claimed. BUFF/NOCP/BAR controls
+remain rejected with Cause 76; there is no separate scenario discriminator
+that makes every overlapping ordinary FORW rule reject. UP-constructed End
+Marker capability remains unadvertised.
+
+N3, N9 and N4-u outer tunnel endpoints remain IPv4. N4-u uses the configured N3
+IPv4 address. CHOOSE offering V4 and V6 receives V4 only; a V6-only offer returns
+Cause 76 (TS 29.244 V20.1.0 clause 8.2.3).

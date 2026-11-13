@@ -249,3 +249,10 @@ GTP-U forwarding. CP tunnels use the configured IPv4 N3 endpoint. CHOOSE offers
 of both V4 and V6 allocate IPv4 on the current IPv4-only tunnel interfaces;
 IPv6-only offers reject with Cause 76. User-plane IPv6 payloads are supported
 independently of the outer tunnel family.
+
+
+CP-function packets use the Source Interface and retained FAR Destination
+Interface to choose UL versus DL, consistently for QoS, usage and SDF endpoint
+orientation (TS 29.244 V20.1.0 clause 5.4.4). UE-to-CP and CP-to-DN are UL;
+CP-to-UE and DN-to-CP are DL. N4-u shares the configured N3 IPv4 endpoint.
+See `rule-capabilities.md` for the clause 5.3.1 scenario matrix and limits.
