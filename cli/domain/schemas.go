@@ -120,8 +120,10 @@ type PCCInfo struct {
 }
 
 type SFarInfo struct {
-	FarInfo  FarInfo
-	GlobalId uint32
+	InterfaceType        uint8
+	InterfaceTypePresent bool
+	FarInfo              FarInfo
+	GlobalId             uint32
 }
 
 type SQerInfo struct {
@@ -165,12 +167,13 @@ type PortRange struct {
 }
 
 type FarInfo struct {
-	Action                uint8  `json:"action"`
-	OuterHeaderCreation   uint8  `json:"outer_header_creation"`
-	Teid                  uint32 `json:"teid"`
-	RemoteIP              string `json:"remote_ip"`
-	Trigger               uint8  `json:"trigger"`
-	TransportLevelMarking uint16 `json:"transport_level_marking"`
+	Action                      uint8  `json:"action"`
+	OuterHeaderCreation         uint8  `json:"outer_header_creation"`
+	Teid                        uint32 `json:"teid"`
+	RemoteIP                    string `json:"remote_ip"`
+	DestinationInterface        uint8  `json:"destination_interface"`
+	DestinationInterfacePresent bool   `json:"destination_interface_present"`
+	TransportLevelMarking       uint16 `json:"transport_level_marking"`
 }
 
 type QerInfo struct {
