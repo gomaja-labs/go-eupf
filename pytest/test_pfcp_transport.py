@@ -6,6 +6,7 @@ and tshark analysis are performed separately from these tests.
 """
 
 import concurrent.futures
+import json
 import socket
 import os
 import signal
@@ -180,13 +181,14 @@ def test_failed_report_follows_changed_cp_fseid(server, failure):
         remote.close()
 
 
-def test_startup_hold_preserves_explicit_restoration(server):
+def test_startup_choose_and_explicit_restoration(server):
     # TS 23.527 V20.0.0 clause 4.3.2: reserve the startup window for RESTI.
-    remote = Peer(server(("--resource-reuse-delay", "60")))
+    remote = Peer(server(("--restoration-period", "60")))
     try:
         remote.associate()
         automatic = remote.establish([uplink_far(), uplink_pdr()])
-        assert automatic[pfcp.IE_Cause].cause == 75
+        assert automatic[pfcp.IE_Cause].cause == 1
+        assert automatic[pfcp.IE_FTEID].TEID > 32
         # TS 29.244 V20.1.0 clause 8.2.136: RESTI is IE 186, octet 5 bit 1.
         restoration = remote.establish([uplink_far(), uplink_pdr(teid=17),
             pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
@@ -194,6 +196,70 @@ def test_startup_hold_preserves_explicit_restoration(server):
         occupied = remote.establish([uplink_far(), uplink_pdr(teid=17),
             pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
         assert occupied[pfcp.IE_Cause].cause == 86
+    finally:
+        remote.close()
+
+
+
+
+@pytest.mark.parametrize("period,cause", [(0, 1), (60, 75)])
+def test_restoration_period_only_holds_automatic_ue_ipv4(server, period, cause):
+    remote = Peer(server(("--restoration-period", str(period), "--ueip", "--ueippool", "192.0.2.0/30")))
+    try:
+        remote.associate()
+        # CHV4 is held in Scapy's spare field; secdev/scapy#5282.
+        choose = pfcp.IE_CreatePDR(IE_list=[pfcp.IE_PDR_Id(id=1), pfcp.IE_Precedence(precedence=100),
+            pfcp.IE_PDI(IE_list=[pfcp.IE_SourceInterface(interface=1),
+                pfcp.IE_UE_IP_Address(spare=2, SD=1)]), pfcp.IE_FAR_Id(id=1)])
+        response = remote.establish([uplink_far(drop=True), choose])
+        assert response[pfcp.IE_Cause].cause == cause
+        if cause == 1:
+            assert response[pfcp.IE_UE_IP_Address].ipv4 == "192.0.2.1"
+        tunnel = remote.establish([uplink_far(), uplink_pdr()])
+        assert tunnel[pfcp.IE_Cause].cause == 1
+        assert tunnel[pfcp.IE_FTEID].TEID > 32
+    finally:
+        remote.close()
+
+def test_restart_allocates_new_teid_generation_and_restores_predecessor(server, evidence):
+    # TS 23.527 V20.0.0 clause 4.3.2: CHOOSE is available throughout restoration.
+    process = server(("--restoration-period", "60"))
+    remote = Peer(process)
+    try:
+        remote.associate()
+        setup_stamp = remote.request(heartbeat())[pfcp.IE_RecoveryTimeStamp].timestamp
+        first = remote.establish([uplink_far(), uplink_pdr()])
+        assert first[pfcp.IE_Cause].cause == 1
+        predecessor = first[pfcp.IE_FTEID].TEID
+        assert predecessor == ((1 + (((setup_stamp - 2208988800) & 0xffffffff) % ((1 << 26) - 1))) << 6) + 1
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=34) == 0
+        # The PFCP timestamp has second resolution. Wait for a different second.
+        while int(time.time()) == ((setup_stamp - 2208988800) & 0xffffffff):
+            time.sleep(.01)
+        restarted = Peer(server(("--restoration-period", "60")))
+        try:
+            restarted.associate()
+            next_stamp = restarted.request(heartbeat())[pfcp.IE_RecoveryTimeStamp].timestamp
+            chosen = restarted.establish([uplink_far(), uplink_pdr()])
+            assert chosen[pfcp.IE_Cause].cause == 1
+            current = chosen[pfcp.IE_FTEID].TEID
+            assert next_stamp != setup_stamp and current != predecessor
+            assert current == ((1 + (((next_stamp - 2208988800) & 0xffffffff) % ((1 << 26) - 1))) << 6) + 1
+            restored = restarted.establish([uplink_far(), uplink_pdr(teid=predecessor),
+                pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
+            assert restored[pfcp.IE_Cause].cause == 1
+            collision = restarted.establish([uplink_far(), uplink_pdr(teid=predecessor),
+                pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
+            assert collision[pfcp.IE_Cause].cause == 86
+            (evidence / "restart-generations.json").write_text(json.dumps({
+                "pool": 32, "before_timestamp": setup_stamp, "after_timestamp": next_stamp,
+                "before_teid": predecessor, "after_teid": current,
+                "restoration_cause": restored[pfcp.IE_Cause].cause,
+                "collision_cause": collision[pfcp.IE_Cause].cause,
+            }, indent=2) + "\n")
+        finally:
+            restarted.close()
     finally:
         remote.close()
 
@@ -431,7 +497,9 @@ def test_release_cleanup_failure_exits_and_restart_has_empty_maps(server, eviden
             restarted.associate()
             response = restarted.establish([uplink_far(), uplink_pdr()])
             assert response[pfcp.IE_Cause].cause == 1
-            assert response[pfcp.IE_FTEID].TEID == teid
+            assert response[pfcp.IE_FTEID].TEID != teid
+            traffic.send("previous-generation-stays-unmatched", delivered=False)
+            traffic.teid = response[pfcp.IE_FTEID].TEID
             traffic.send("fresh-rule-after-restart")
         finally:
             restarted.close()

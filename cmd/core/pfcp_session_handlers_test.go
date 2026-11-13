@@ -547,8 +547,8 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if teid.TEID != 1 && teid.TEID != 2 {
-			t.Errorf("Unexpected TEID for PDR ID 2: got %d, expected %d or %d", teid.TEID, 1, 2)
+		if teid.TEID <= 65536 || teid.TEID&131071 != 1 && teid.TEID&131071 != 2 {
+			t.Errorf("Unexpected TEID for PDR ID 2: got %d, expected generation indices %d or %d", teid.TEID, 1, 2)
 		}
 
 		if !teid.HasIPv4() {

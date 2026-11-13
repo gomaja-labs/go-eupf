@@ -35,19 +35,19 @@ func TestExplicitResourcesCannotBeReallocated(t *testing.T) {
 }
 func TestSharedTEIDReleasedOnlyAfterLastReference(t *testing.T) {
 	m, _ := NewResourceManager("", 1)
-	if err := m.FTEIDM.ReserveTEID(10, 1, 1); err != nil {
+	if err := m.FTEIDM.ReserveTEID(10, 1, m.FTEIDM.generationBase+1); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.FTEIDM.ReserveTEID(10, 2, 1); err != nil {
+	if err := m.FTEIDM.ReserveTEID(10, 2, m.FTEIDM.generationBase+1); err != nil {
 		t.Fatal(err)
 	}
-	m.FTEIDM.ReleaseUnused(10, map[uint32]uint32{2: 1})
+	m.FTEIDM.ReleaseUnused(10, map[uint32]uint32{2: m.FTEIDM.generationBase + 1})
 	if _, err := m.FTEIDM.AllocateTEID(20, 1); !errors.Is(err, ErrResourceExhausted) {
 		t.Fatalf("released shared TEID early: %v", err)
 	}
 	m.FTEIDM.ReleaseUnused(10, nil)
 	got, err := m.FTEIDM.AllocateTEID(20, 1)
-	if err != nil || got != 1 {
+	if err != nil || got != m.FTEIDM.generationBase+1 {
 		t.Fatalf("did not recycle final reference: %d %v", got, err)
 	}
 }
@@ -67,7 +67,7 @@ func TestReservationJournalReservesBeforePublicationAndUndoesFailure(t *testing.
 	if reclaim != nil {
 		_ = reclaim()
 	}
-	if id, err := m.FTEIDM.AllocateTEID(20, 1); err != nil || id != 1 {
+	if id, err := m.FTEIDM.AllocateTEID(20, 1); err != nil || id != m.FTEIDM.generationBase+1 {
 		t.Fatalf("rollback did not return reservation: %d %v", id, err)
 	}
 	if reclaim != nil {
@@ -80,22 +80,22 @@ func TestReservationJournalReservesBeforePublicationAndUndoesFailure(t *testing.
 
 func TestRetiredLeaseCannotBeReattachedOrFreedByAnOldCallback(t *testing.T) {
 	manager, _ := NewResourceManager("192.0.2.0/30", 1)
-	if err := manager.FTEIDM.ReserveTEID(10, 1, 1); err != nil {
+	if err := manager.FTEIDM.ReserveTEID(10, 1, manager.FTEIDM.generationBase+1); err != nil {
 		t.Fatal(err)
 	}
 	journal := manager.BeginReservation(10)
 	journal.View().FTEIDM.ReleaseTEID(10)
 	old := journal.Commit()
-	if err := manager.FTEIDM.ReserveTEID(10, 1, 1); !errors.Is(err, ErrResourceCollision) {
+	if err := manager.FTEIDM.ReserveTEID(10, 1, manager.FTEIDM.generationBase+1); !errors.Is(err, ErrResourceCollision) {
 		t.Fatal("reattached a retiring TEID")
 	}
-	if err := manager.FTEIDM.ReserveTEID(20, 1, 1); !errors.Is(err, ErrResourceCollision) {
+	if err := manager.FTEIDM.ReserveTEID(20, 1, manager.FTEIDM.generationBase+1); !errors.Is(err, ErrResourceCollision) {
 		t.Fatal("reused a retiring TEID")
 	}
 	if err := old(); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.FTEIDM.ReserveTEID(10, 1, 1); err != nil {
+	if err := manager.FTEIDM.ReserveTEID(10, 1, manager.FTEIDM.generationBase+1); err != nil {
 		t.Fatal(err)
 	}
 	newer := manager.BeginReservation(10)
@@ -110,7 +110,7 @@ func TestRetiredLeaseCannotBeReattachedOrFreedByAnOldCallback(t *testing.T) {
 	if err := current(); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := manager.FTEIDM.AllocateTEID(20, 1); err != nil || id != 1 {
+	if id, err := manager.FTEIDM.AllocateTEID(20, 1); err != nil || id != manager.FTEIDM.generationBase+1 {
 		t.Fatalf("final reclamation: %d %v", id, err)
 	}
 }

@@ -47,6 +47,9 @@ func TestPFCPOptionBounds(t *testing.T) {
 		{"memory-maximum", UpfConfig{PfcpReplayMemoryMiB: 1024}, true},
 		{"capacity-bound", UpfConfig{PfcpMaxReplayEntries: 1048577}, false},
 		{"association-bound", UpfConfig{PfcpMaxAssociations: 65537}, false},
+		{"restoration-zero", UpfConfig{RestorationPeriod: 0}, true},
+		{"restoration-max", UpfConfig{RestorationPeriod: 86400}, true},
+		{"restoration-bound", UpfConfig{RestorationPeriod: 86401}, false},
 		{"grace-bound", UpfConfig{HeartbeatFailureGrace: 86401}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

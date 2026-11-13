@@ -129,7 +129,7 @@ func TestConcurrentAllocationForOneOwner(t *testing.T) {
 				t.Errorf("IP = %v, %v", ip, err)
 			}
 			teid, err := manager.FTEIDM.AllocateTEID(10, 1)
-			if err != nil || teid != 1 {
+			if err != nil || teid != manager.FTEIDM.generationBase+1 {
 				t.Errorf("TEID = %d, %v", teid, err)
 			}
 		})

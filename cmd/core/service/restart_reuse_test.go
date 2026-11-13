@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-func TestRestartReservesAutomaticIDsForRestorationWindow(t *testing.T) {
-	old, err := NewResourceManager("192.0.2.0/30", 3)
+func TestRestartReservesAutomaticIPv4ForRestorationWindow(t *testing.T) {
+	old, err := newResourceManagerAt("192.0.2.0/30", 3, time.Unix(1800000000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,17 +20,15 @@ func TestRestartReservesAutomaticIDsForRestorationWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := NewResourceManager("192.0.2.0/30", 3)
+	restarted, err := newResourceManagerAt("192.0.2.0/30", 3, time.Unix(1800000001, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted.HoldAutomaticAllocationsUntil(time.Now().Add(time.Minute))
+	restarted.HoldAutomaticIPv4Until(time.Now().Add(time.Minute))
 	if _, err := restarted.IPAM.AllocateIP(2); !errors.Is(err, ErrResourceExhausted) {
 		t.Fatal("previous UE IP immediately reused after restart")
 	}
-	if _, err := restarted.FTEIDM.AllocateTEID(2, 1); !errors.Is(err, ErrResourceExhausted) {
-		t.Fatal("previous TEID immediately reused after restart")
-	}
+
 	// RESTI can reserve the original identifiers throughout the automatic hold.
 	if err := restarted.IPAM.ReserveIP(1, ip); err != nil {
 		t.Fatal(err)
@@ -44,7 +42,7 @@ func TestRestartReservesAutomaticIDsForRestorationWindow(t *testing.T) {
 	if err := restarted.FTEIDM.ReserveTEID(3, 1, teid); !errors.Is(err, ErrResourceCollision) {
 		t.Fatal("restoration stole a reserved TEID")
 	}
-	restarted.HoldAutomaticAllocationsUntil(time.Now().Add(-time.Second))
+	restarted.HoldAutomaticIPv4Until(time.Now().Add(-time.Second))
 	nextIP, err := restarted.IPAM.AllocateIP(2)
 	if err != nil || nextIP.Equal(ip) {
 		t.Fatalf("post-window UE IP %s: %v", nextIP, err)
@@ -62,7 +60,7 @@ func TestFreeChainPoolBoundaries(t *testing.T) {
 	}
 	for id := uint64(1); id <= 65535; id++ {
 		teid, err := manager.FTEIDM.AllocateTEID(id, 1)
-		if err != nil || teid != uint32(id) {
+		if err != nil || teid != manager.FTEIDM.generationBase+uint32(id) {
 			t.Fatalf("TEID %d: %d %v", id, teid, err)
 		}
 		ip, err := manager.IPAM.AllocateIP(id)
@@ -81,7 +79,7 @@ func TestFreeChainPoolBoundaries(t *testing.T) {
 	}
 	manager.FTEIDM.ReleaseTEID(65535)
 	manager.IPAM.ReleaseIP(65535)
-	if id, err := manager.FTEIDM.AllocateTEID(65536, 1); err != nil || id != 65535 {
+	if id, err := manager.FTEIDM.AllocateTEID(65536, 1); err != nil || id != manager.FTEIDM.generationBase+65535 {
 		t.Fatalf("last TEID reuse: %d %v", id, err)
 	}
 	if ip, err := manager.IPAM.AllocateIP(65536); err != nil || !ip.Equal(net.ParseIP("10.60.255.255")) {

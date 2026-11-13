@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -24,19 +25,21 @@ var ErrResourceCollision = errors.New("resource belongs to another session")
 var ErrResourceExhausted = errors.New("resource pool exhausted")
 
 type ResourceManager struct {
-	replay        ReplayBudget
-	nextSEID      atomic.Uint64
-	shuttingDown  atomic.Bool
-	transactionMu sync.Mutex
-	IPAM          *IPAM
-	FTEIDM        *FTEIDM
+	// RecoveryTimestamp identifies this instance in both PFCP and automatic TEIDs.
+	RecoveryTimestamp time.Time
+	replay            ReplayBudget
+	nextSEID          atomic.Uint64
+	shuttingDown      atomic.Bool
+	transactionMu     sync.Mutex
+	IPAM              *IPAM
+	FTEIDM            *FTEIDM
 }
 type FTEIDM struct {
-	allocateAfter time.Time
-	parent        *FTEIDM
-	ownerTEIDs    map[uint64]map[uint32]bool
-	leaseEpoch    map[uint32]uint64
-	nextEpoch     uint64
+	generationBase uint32
+	parent         *FTEIDM
+	ownerTEIDs     map[uint64]map[uint32]bool
+	leaseEpoch     map[uint32]uint64
+	nextEpoch      uint64
 	sync.RWMutex
 	freeTEIDs     freeChain
 	busyTEIDs     map[uint64]map[uint32]uint32
@@ -69,6 +72,10 @@ type IPAM struct {
 }
 
 func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, error) {
+	return newResourceManagerAt(ipRange, teidRange, time.Now())
+}
+
+func newResourceManagerAt(ipRange string, teidRange uint32, started time.Time) (*ResourceManager, error) {
 	if teidRange > MaxResourcePoolSize {
 		return nil, fmt.Errorf("fteid_pool %d exceeds limit %d", teidRange, MaxResourcePoolSize)
 	}
@@ -88,8 +95,9 @@ func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, err
 		}
 	}
 	manager := &ResourceManager{
-		IPAM:   &IPAM{claims: &reservationTrie{}, activePrefixes: make(map[uint64]map[string]ipPrefixLease), heldIPs: make(map[uint64]map[string]net.IP), ownerPrefixes: make(map[uint64]map[string]bool), leaseEpoch: make(map[string]uint64), prefixEpoch: make(map[string]uint64), busyIPs: make(map[uint64]net.IP), reservedIPs: make(map[string]uint64), ownerIPs: make(map[uint64]map[string]net.IP), prefixLeases: make(map[string]ipPrefixLease), pool: prefix},
-		FTEIDM: &FTEIDM{ownerTEIDs: make(map[uint64]map[uint32]bool), leaseEpoch: make(map[uint32]uint64), busyTEIDs: make(map[uint64]map[uint32]uint32), reservedTEIDs: make(map[uint32]uint64), maximum: teidRange},
+		RecoveryTimestamp: started.Truncate(time.Second),
+		IPAM:              &IPAM{claims: &reservationTrie{}, activePrefixes: make(map[uint64]map[string]ipPrefixLease), heldIPs: make(map[uint64]map[string]net.IP), ownerPrefixes: make(map[uint64]map[string]bool), leaseEpoch: make(map[string]uint64), prefixEpoch: make(map[string]uint64), busyIPs: make(map[uint64]net.IP), reservedIPs: make(map[string]uint64), ownerIPs: make(map[uint64]map[string]net.IP), prefixLeases: make(map[string]ipPrefixLease), pool: prefix},
+		FTEIDM:            &FTEIDM{ownerTEIDs: make(map[uint64]map[uint32]bool), leaseEpoch: make(map[uint32]uint64), busyTEIDs: make(map[uint64]map[uint32]uint32), reservedTEIDs: make(map[uint32]uint64), maximum: teidRange},
 	}
 	if ipRange != "" {
 		generator, err := ipnetgen.New(ipRange)
@@ -108,6 +116,18 @@ func NewResourceManager(ipRange string, teidRange uint32) (*ResourceManager, err
 		manager.IPAM.freeIPs = newFreeChain(0)
 	}
 	manager.FTEIDM.freeTEIDs = newFreeChain(int(teidRange))
+	// TS 23.527 V20.0.0 clause 4.3.2; TS 23.007 V19.2.0 clauses
+	// 16.1b.1/17.1b.1: exclude generation zero (pre-upgrade TEIDs 1..pool).
+	// For fixed pool size n, b=bits.Len32(n), period=2^(32-b)-1 seconds.
+	// Equal timestamp residues, including a repeated second after a clock step,
+	// can reuse a generation. Allocation and reservation never scan the pool.
+	indexBits := bits.Len32(teidRange)
+	period := (uint64(1) << (32 - indexBits)) - 1
+	residue := manager.RecoveryTimestamp.Unix() % int64(period)
+	if residue < 0 {
+		residue += int64(period)
+	}
+	manager.FTEIDM.generationBase = uint32(1+residue) << indexBits
 	return manager, nil
 }
 func (pool *IPAM) AllocateIP(owner uint64) (net.IP, error) {
@@ -274,16 +294,10 @@ func (pool *FTEIDM) AllocateTEID(owner uint64, pdr uint32) (uint32, error) {
 	if teid, ok := pool.busyTEIDs[owner][pdr]; ok {
 		return teid, nil
 	}
-	if !pool.allocateAfter.IsZero() {
-		if time.Now().Before(pool.allocateAfter) {
-			return 0, ErrResourceExhausted
-		}
-		pool.allocateAfter = time.Time{}
-	}
 	if pool.freeTEIDs.len() == 0 {
 		return 0, ErrResourceExhausted
 	}
-	teid := uint32(pool.freeTEIDs.first()) + 1
+	teid := pool.generationBase + uint32(pool.freeTEIDs.first()) + 1
 	pool.takeFreeLocked(teid)
 	pool.record(owner, pdr, teid)
 	return teid, nil
@@ -544,15 +558,19 @@ func (pool *IPAM) releaseLocked(owner uint64, key string, ip net.IP) {
 	}
 	delete(pool.leaseEpoch, key)
 }
-func (pool *FTEIDM) takeFreeLocked(id uint32) { pool.freeTEIDs.remove(int(id) - 1) }
+func (pool *FTEIDM) indexForTEID(id uint32) int {
+	if id <= pool.generationBase || uint64(id) > uint64(pool.generationBase)+uint64(pool.maximum) {
+		return -1
+	}
+	return int(id-pool.generationBase) - 1
+}
+func (pool *FTEIDM) takeFreeLocked(id uint32) { pool.freeTEIDs.remove(pool.indexForTEID(id)) }
 func (pool *FTEIDM) releaseLocked(id uint32) {
 	owner, ok := pool.reservedTEIDs[id]
 	if !ok {
 		return
 	}
-	if id <= pool.maximum {
-		pool.freeTEIDs.addBack(int(id) - 1)
-	}
+	pool.freeTEIDs.addBack(pool.indexForTEID(id))
 	delete(pool.reservedTEIDs, id)
 	delete(pool.ownerTEIDs[owner], id)
 	if len(pool.ownerTEIDs[owner]) == 0 {

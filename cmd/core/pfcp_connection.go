@@ -175,7 +175,7 @@ func NewPfcpConnection(
 		n3Address:             n3Addr,
 		n9Address:             n9Addr,
 		mapOperations:         mapOperations,
-		RecoveryTimestamp:     time.Now(),
+		RecoveryTimestamp:     resourceManager.RecoveryTimestamp,
 		featuresOctets:        featuresOctets,
 		ResourceManager:       resourceManager,
 		sdfNotifyC:            sdfNotifyC,

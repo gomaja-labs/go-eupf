@@ -97,7 +97,7 @@ func (journal *ReservationJournal) publish(rollback bool) func() error {
 				if pool.reservedTEIDs[id] == owner && pool.leaseEpoch[id] == epoch {
 					pool.releaseLocked(id)
 					if rollback {
-						pool.freeTEIDs.moveToFront(int(id) - 1)
+						pool.freeTEIDs.moveToFront(pool.indexForTEID(id))
 					}
 				}
 			})

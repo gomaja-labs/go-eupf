@@ -28,7 +28,7 @@ func TestChooseIDCannotProduceDifferentInterfaceAddresses(t *testing.T) {
 	}
 	for i := uint32(1); i <= 4; i++ {
 		id, err := conn.ResourceManager.FTEIDM.AllocateTEID(100, i)
-		if err != nil || id != i {
+		if err != nil || id&7 != i || id <= 4 {
 			t.Fatalf("rejected CHOOSE leaked TEID %d: %d %v", i, id, err)
 		}
 	}

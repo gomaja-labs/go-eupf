@@ -78,6 +78,9 @@ defaultEnv:
   # maps need more memory than the chart's default limit below; 1024 keeps the
   # maps at the size the limit was set for. Raise both together for production.
   UPF_MAX_SESSIONS: "1024"
+  # Session restoration period; only automatic UE IPv4 allocation waits.
+  # Zero permits immediate reuse of unrestored predecessor UE IPv4 addresses.
+  UPF_RESTORATION_PERIOD: "60"
   UPF_API_ADDRESS: ":8080"
   UPF_PFCP_ADDRESS: ":8805"
   UPF_METRICS_ADDRESS: ":9090"
@@ -104,6 +107,7 @@ config:
     # config.yml: |
     #   interface_name: eth0
     #   max_sessions: 1024
+    #   restoration_period: 60
     #   api_address: :8080
     #   pfcp_address: :8805
     #   metrics_address: :9090
