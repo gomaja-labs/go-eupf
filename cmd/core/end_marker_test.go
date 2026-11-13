@@ -241,3 +241,20 @@ func TestEndMarkerRetainsTunnelInterfaceThroughRuleTransactions(t *testing.T) {
 		t.Fatal("null interface label was not removed")
 	}
 }
+
+func TestSpareTunnelInterfaceDoesNotReplaceKnownRole(t *testing.T) {
+	// TS 29.244 V20.1.0 table 8.2.118-1 and clause 7.6.8.
+	for _, value := range []uint8{31, 32, 63} {
+		far := SFarInfo{InterfaceType: ie.TGPPInterfaceTypeN19, InterfaceTypePresent: true}
+		if err := retainFarInterfaceType(ie.NewTGPPInterfaceType(value), &far); err != nil {
+			t.Fatal(err)
+		}
+		want := value
+		if value >= 32 {
+			want = ie.TGPPInterfaceTypeN19
+		}
+		if !far.InterfaceTypePresent || far.InterfaceType != want {
+			t.Fatalf("interface %d replaced role with %d; want %d", value, far.InterfaceType, want)
+		}
+	}
+}

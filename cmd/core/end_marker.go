@@ -249,6 +249,11 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 	if err != nil {
 		return err
 	}
+	// TS 29.244 V20.1.0 table 8.2.118-1: 32..63 are spare.
+	// Clause 7.6.8 continues processing without applying spare values.
+	if typ >= 32 {
+		return nil
+	}
 	far.InterfaceType, far.InterfaceTypePresent = typ, true
 	return nil
 }
