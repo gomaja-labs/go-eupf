@@ -28,7 +28,7 @@ func TestEndMarkerOnChangedDownstreamFTEID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer peer.Close()
+			defer func() { _ = peer.Close() }()
 			conn := newProtocolConnection(t)
 			associationSetup(t, conn, "127.0.0.1", 1)
 			assocID := "127.0.0.1"
@@ -98,7 +98,7 @@ func TestEndMarkerSharesSourcePortWithEchoProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 	manager := NewGtpPathManager(net.JoinHostPort(local.String(), "2152"), time.Hour)
 	defer manager.Stop()
 	result := make(chan error, 1)
