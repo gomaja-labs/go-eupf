@@ -22,14 +22,14 @@ func TestAutomaticTEIDsSeparateRestartGenerations(t *testing.T) {
 			}
 			oldIDs := make(map[uint32]bool, size)
 			for i := uint32(1); i <= size; i++ {
-				id, err := old.FTEIDM.AllocateTEID(1, i)
+				id, err := old.FTEIDM.AllocateTEID(uint64((i-1)/65535+1), (i-1)%65535+1)
 				if err != nil || id <= size {
 					t.Fatalf("old allocation %d: %d %v (must exclude pre-upgrade range)", i, id, err)
 				}
 				oldIDs[id] = true
 			}
 			for i := uint32(1); i <= size; i++ {
-				id, err := next.FTEIDM.AllocateTEID(1, i)
+				id, err := next.FTEIDM.AllocateTEID(uint64((i-1)/65535+1), (i-1)%65535+1)
 				if err != nil || oldIDs[id] || id <= size {
 					t.Fatalf("restart allocation %d: %d %v", i, id, err)
 				}
@@ -135,6 +135,21 @@ func TestForeignTEIDReservationsLeaveAutomaticIndicesFree(t *testing.T) {
 		manager.FTEIDM.ReleaseTEID(1)
 		if _, err := manager.FTEIDM.AllocateTEID(3, 1); !errors.Is(err, ErrResourceExhausted) {
 			t.Fatal("foreign release freed a current lease", foreign, err)
+		}
+	}
+}
+
+func TestTEIDFreeChainKeepsUnusedIndicesAheadOfFreed(t *testing.T) {
+	manager, _ := NewResourceManager("", 3)
+	first, err := manager.FTEIDM.AllocateTEID(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.FTEIDM.ReleaseTEID(1)
+	for i, index := range []uint32{2, 3, 1} {
+		id, err := manager.FTEIDM.AllocateTEID(2, uint32(i+1))
+		if err != nil || id != first-1+index {
+			t.Fatalf("allocation %d got %d, want index %d: %v", i, id, index, err)
 		}
 	}
 }
