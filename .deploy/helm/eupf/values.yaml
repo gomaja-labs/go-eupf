@@ -322,17 +322,20 @@ ingress:
   #      - chart-example.local
 
 # Memory floor: 2 * 64 MiB replay + B + 32 KiB * max_sessions
-# + 48 MiB originated queues + 32 MiB transient + H + W.
+# + 48 MiB originated queues + 32 MiB transient + H + K + W.
 # B=max(64 MiB, observed loaded cgroup charge + growing-map reserve);
-# it includes the loaded 4 MiB packet ring and buffering anchor map.
-# H=buffer_packets * (2048 + 2*256) bytes + 2*64 KiB per buffering
-# reservation (at most min(max_sessions, 1024, buffer_packets/buffer_per_session)).
-# W=128 bytes per configured URR map slot for measurement-window headroom.
-# Defaults: H=138 MiB, W=0.25 MiB; minimum floor=442.25 MiB.
+# it includes empty buffering maps and the fixed 4 MiB packet ring.
+# P=buffer_packets, N=max_sessions, F=far_map_size (default 2*N),
+# U=urr_map_size (default 2*N), all H/K/W terms in bytes:
+# H=2*32768 + P*(2048+2*160) + 2*1024*N + 2*320*(2*F) + 2*4608*F.
+# K=320*N + 1152*(2*F); growing kernel metadata stays outside Go's limit.
+# W=768*U, from sparse URR-map measurement-window profiles plus GC headroom.
+# Defaults: H=31.8125 MiB, K=4.8125 MiB, W=1.5 MiB; floor=342.125 MiB.
+# Packet storage is taken on arrival; every admitted session can use BUFF/NOCP.
 # A larger measured B raises this floor. The chart's 64 MiB replay budget is
 # smaller than the standalone 128 MiB default; large replies fill it sooner.
-# These are startup accounting reserves. Forwarding/rule workloads, every
-# buffer full, cgroup charge and CPU consumption need workload-specific checks.
+# These are startup accounting reserves. Full buffers, forwarding/rule load,
+# cgroup charge and CPU consumption still require workload-specific checks.
 resources:
   limits:
     cpu: "1"

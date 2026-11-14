@@ -33,9 +33,10 @@ func (c *UpfConfig) PFCPMemoryPlan(limit, baseline int64) (softLimit int64, err 
 	// Round live state to 16 KiB and reserve it twice for GC and replacement.
 	sessionMemory := int64(sessions) * (32 << 10)
 	buffers, windows := c.BufferMemoryReserve(), c.UsageWindowMemoryReserve()
-	needed := baseline + 2*budget*mib + sessionMemory + originated + transient + buffers + windows
+	kernelBuffers := c.BufferKernelMemoryReserve()
+	needed := baseline + 2*budget*mib + sessionMemory + originated + transient + buffers + windows + kernelBuffers
 	if limit < needed {
-		return 0, fmt.Errorf("container memory limit %d bytes cannot fit replay, sessions, buffers and startup/map baseline: need at least %d bytes (baseline %d, sessions %d, buffers %d, usage windows %d)", limit, needed, baseline, sessionMemory, buffers, windows)
+		return 0, fmt.Errorf("container memory limit %d bytes cannot fit replay, sessions, buffers and startup/map baseline: need at least %d bytes (baseline %d, sessions %d, buffers %d, buffer kernel %d, usage windows %d)", limit, needed, baseline, sessionMemory, buffers, kernelBuffers, windows)
 	}
-	return limit - baseline - transient, nil
+	return limit - baseline - transient - kernelBuffers, nil
 }

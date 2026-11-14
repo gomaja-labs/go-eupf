@@ -176,7 +176,7 @@ func run(ctx context.Context) (runErr error) {
 	if softLimit > 0 {
 		configured := debug.SetMemoryLimit(-1)
 		if configured < softLimit {
-			if _, err := config.Conf.PFCPMemoryPlan(configured+max(plannedBaseline, 64<<20)+(32<<20), plannedBaseline); err != nil {
+			if _, err := config.Conf.PFCPMemoryPlan(configured+max(plannedBaseline, 64<<20)+(32<<20)+config.Conf.BufferKernelMemoryReserve(), plannedBaseline); err != nil {
 				return fmt.Errorf("GOMEMLIMIT: %w", err)
 			}
 			softLimit = configured

@@ -11,10 +11,10 @@ func TestMemoryBudgetIncludesSharedReplayAndKernelBaseline(t *testing.T) {
 	if _, err := c.PFCPMemoryPlan(128*mib, 25*mib); err == nil {
 		t.Fatal("accepted chart limit smaller than replay plus baseline")
 	}
-	if soft, err := c.PFCPMemoryPlan(512*mib, 25*mib); err != nil || soft != 416*mib {
+	if soft, err := c.PFCPMemoryPlan(512*mib, 25*mib); err != nil || soft != 431161344 {
 		t.Fatalf("soft limit %d: %v", soft, err)
 	}
-	if _, err := c.PFCPMemoryPlan(512*mib, 200*mib); err == nil {
+	if _, err := c.PFCPMemoryPlan(512*mib, 300*mib); err == nil {
 		t.Fatal("ignored larger measured kernel/map baseline")
 	}
 	if soft, err := c.PFCPMemoryPlan(0, 200*mib); err != nil || soft != 0 {
@@ -48,11 +48,11 @@ func TestCgroupMemoryLimits(t *testing.T) {
 func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
 	for _, sessions := range []uint32{1, 1024, 65535, 1 << 20} {
 		c := UpfConfig{MaxSessions: sessions}
-		needed := 400*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve()
+		needed := 400*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve() + c.BufferKernelMemoryReserve()
 		if _, err := c.PFCPMemoryPlan(needed-1, 0); err == nil {
 			t.Fatalf("sessions %d: omitted per-session memory", sessions)
 		}
-		if soft, err := c.PFCPMemoryPlan(needed, 0); err != nil || soft != needed-96*mib {
+		if soft, err := c.PFCPMemoryPlan(needed, 0); err != nil || soft != needed-96*mib-c.BufferKernelMemoryReserve() {
 			t.Fatalf("sessions %d soft %d: %v", sessions, soft, err)
 		}
 	}
