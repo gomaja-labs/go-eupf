@@ -26,6 +26,10 @@ jobs:
         run: |
           docker build -t eupf:scan .
           docker build --target cli -t eupf-cli:scan .
+      - name: Check non-root runtime readiness
+        env:
+          EUPF_RUNTIME_SMOKE_USER: '1000:1000'
+        run: scripts/ci/runtime-readiness.sh eupf:scan
       - name: Scan filesystem
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.76.2 fs --config trivy.yaml --ignorefile .trivyignore .

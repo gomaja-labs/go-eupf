@@ -263,7 +263,7 @@ podSecurityContext:
       value: "1"
 
 # eUPF loads eBPF programs (BPF, PERFMON), attaches XDP and sets routes
-# (NET_ADMIN), raises RLIMIT_MEMLOCK (SYS_RESOURCE) and mounts bpffs/debugfs
+# (NET_ADMIN), sends buffered frames (NET_RAW), raises RLIMIT_MEMLOCK (SYS_RESOURCE) and mounts bpffs/debugfs
 # from the image entrypoint (SYS_ADMIN). These capabilities are all it needs;
 # the container keeps the device cgroup, the masked /proc and /sys paths and
 # the runtime's seccomp and AppArmor profiles. Where the mounts are denied
@@ -282,13 +282,13 @@ podSecurityContext:
 #   runAsGroup: 1000
 #   runAsNonRoot: true
 #   capabilities:
-#     add: [NET_ADMIN, SYS_RESOURCE, BPF, PERFMON, DAC_OVERRIDE]
+#     add: [NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF, PERFMON, DAC_OVERRIDE]
 securityContext:
   runAsUser: 1000
   runAsGroup: 1000
   runAsNonRoot: true
   capabilities:
-    add: [NET_ADMIN, SYS_RESOURCE, BPF, PERFMON, DAC_OVERRIDE]
+    add: [NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF, PERFMON, DAC_OVERRIDE]
 
 extraContainerPorts:
   - name: metrics
