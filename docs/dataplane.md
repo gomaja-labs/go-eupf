@@ -277,3 +277,26 @@ End Markers use that same old-tunnel source port. This provides per-tunnel
 transport load distribution without retaining arbitrary ingress source ports
 (TS 29.281 V19.2.0 clauses 4.4.2.0 and 4.4.2.6). Echo and diagnostic reply
 port handling is unchanged.
+
+## Buffered packet hand-over
+
+A BUFF-to-FORW transition retains a BUFF-class release version while packets are
+pending. Every retained packet of a FAR is handed to its continuation in arrival
+order before a later packet of that FAR can enter any output. Hand-over completes
+when the carrying operation returns: an AF_PACKET send, a kernel-path send, local
+re-entry, or drop. One output worker is pinned to one CPU, keeping successive
+kernel-path sends on the same receive backlog. Once retained work completes,
+the rule journal publishes ordinary FORW and reclaims the release version after
+producer grace. Plain FORW uses the base 16-byte FAR and performs no buffering
+identity or guard lookup.
+
+Hand-over order does not imply wire order between different continuations. A
+packet passed to Linux can wait for neighbour resolution or an output qdisc;
+XDP_REDIRECT bypasses those queues, allowing a later redirected packet to appear
+first. This is also ordinary forwarding behavior. Packets taking one continuation
+retain FIFO hand-over; attached-XDP tests check wire FIFO within one continuation
+and exactly-once delivery across mixed continuations. DROP, DROBU, FAR or BAR
+removal and deletion cancel only packets not yet handed over. Once the kernel has
+accepted a packet, its later transmission or drop is outside the UPF's control.
+The resumed first leg retains its prior policing and accounting, as required by
+TS 29.244 V20.1.0 clause 5.2.4.2.

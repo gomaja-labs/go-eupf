@@ -15,7 +15,7 @@ Failed Rule ID. Invalid new CP F-TEID allocation uses Cause 71. Missing/invalid
 mandatory fields retain the procedural causes specified in clauses 7.5–7.6.
 The old FAR-trigger polling path is removed; usage polling never reads or mutates
 published FARs. BUFF/NOCP, BAR provisioning and buffering controls stay rejected
-while kernel-output ordering remains unresolved. These tables do not claim
+while the buffering release acceptance is pending. These tables do not claim
 compatibility with every SMF feature.
 
 ## PDR
@@ -79,7 +79,7 @@ compatibility with every SMF feature.
 | Apply Action | Implemented | FORW or DROP only. BUFF/NOCP and other actions are rejected. | 7.5.2.3-1, 7.5.4.3-1 |
 | Forwarding Parameters | Implemented | Supported routing/tunnel subset below. | 7.5.2.3-1 |
 | Duplicating Parameters | Rejected | Packet duplication is not implemented. | 7.5.2.3-1 |
-| BAR ID | Rejected | Kernel-output ordering remains unresolved; BUFF and NOCP remain rejected. | 7.5.2.3-1, 7.5.4.3-1 |
+| BAR ID | Rejected | Buffering release acceptance is pending; BUFF and NOCP remain rejected. | 7.5.2.3-1, 7.5.4.3-1 |
 | Redundant Transmission Forwarding Parameters | Rejected | Redundant tunnel transmission is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
 | MBS Multicast Parameters | Rejected | MBS multicast transmission is not implemented. | 7.5.2.3-1 |
 | Add MBS Unicast Parameters | Rejected | MBS unicast replication is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
@@ -342,3 +342,24 @@ and Offending IE QFI, including when the FAR has no PDR yet.
 Ordinary old tunnels, including Dual Connectivity path
 switches, use no container. N19 and N19mb suppress both received and generated
 End Markers. REEMR reporting remains rejected (TS 29.281 V19.2.0 clause 7.3.2.3).
+
+## Buffered packet hand-over
+
+For each FAR, retained packets enter their selected continuation in arrival order.
+A later packet cannot enter any output before every older retained packet has
+been handed over. Hand-over ends when the operation carrying the packet returns:
+AF_PACKET transmission, kernel-path transmission, local re-entry, or drop. The
+single output worker stays on one CPU so its kernel sends use one receive
+backlog. The existing rule journal publishes an internal BUFF-class release
+version until retained work completes, then publishes ordinary FORW. The kernel
+FAR remains 16 bytes; only BUFF processing looks up its separate slot binding.
+
+This is the fast path's output boundary. XDP_REDIRECT bypasses neighbour queues
+and kernel output qdiscs, so a later redirect can appear on the wire before an
+older packet passed to the kernel. Hand-over FIFO and wire FIFO are separate:
+wire FIFO applies to packets using the same continuation; mixed continuations
+can overtake after hand-over. DROP, DROBU, FAR/BAR removal and session deletion
+cancel packets not yet handed over. A packet already handed to the kernel is
+outside the UPF's control, just as on the ordinary fast path. Buffering does not
+charge the original QER/URR processing a second time (TS 29.244 V20.1.0 clause
+5.2.4.2).

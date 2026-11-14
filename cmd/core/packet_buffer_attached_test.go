@@ -5,6 +5,7 @@ package core
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -43,15 +44,20 @@ func bufferAttachedFrame(t *testing.T, v6 bool, sequence uint16) []byte {
 }
 func TestApplicationBufferAttachedXDPOrdersConcurrentTransition(t *testing.T) {
 	for _, v6 := range []bool{false, true} {
-		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, false) })
+		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, false, false) })
 	}
 }
 func TestApplicationBufferAttachedKernelXDPOrdersConcurrentTransition(t *testing.T) {
 	for _, v6 := range []bool{false, true} {
-		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, true) })
+		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, true, false) })
 	}
 }
-func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
+func TestApplicationBufferAttachedKernelOnlyXDPKeepsWireOrder(t *testing.T) {
+	for _, v6 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, true, true) })
+	}
+}
+func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel bool) {
 	plane, buffering, conn, assoc, session, _ := publishPacketBufferFixtureOptions(t, BufferingOptions{Packets: 4096, PerSession: 64, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 	command := func(args ...string) {
 		t.Helper()
@@ -126,6 +132,17 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 			t.Error(err)
 		}
 	})
+	if err := unix.SetsockoptInt(receiver, unix.SOL_SOCKET, unix.SO_TIMESTAMPNS, 1); err != nil {
+		t.Fatal(err)
+	}
+	type handover struct {
+		ID          uint16
+		Action      uint32
+		ReturnedNS  int64
+		Thread, CPU int
+	}
+	var handovers []handover
+	var handoverMu sync.Mutex
 	// Block the first old packet while newer traffic continues arriving through
 	// the attached program. All of it must remain behind that packet's guard.
 	original := buffering.sender
@@ -139,9 +156,49 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 	})
 	buffering.sender = bufferSenderFunc(func(packet ebpf.RenderedBuffer) error {
 		once.Do(func() { close(entered); <-release })
-		return original.Send(packet)
+		err := original.Send(packet)
+		if err == nil {
+			offset := 54
+			if v6 {
+				offset = 98
+			}
+			if len(packet.Frame) < offset+2 {
+				return errors.New("short hand-over frame")
+			}
+			var affinity unix.CPUSet
+			if err := unix.SchedGetaffinity(0, &affinity); err != nil {
+				return err
+			}
+			cpu := -1
+			for id := range 1024 {
+				if affinity.IsSet(id) {
+					cpu = id
+					break
+				}
+			}
+			if kernel && affinity.Count() != 1 {
+				t.Errorf("kernel hand-over can migrate between %d CPUs", affinity.Count())
+			}
+			entry := handover{ID: binary.BigEndian.Uint16(packet.Frame[offset:]), Action: packet.Action, ReturnedNS: time.Now().UnixNano(), Thread: unix.Gettid(), CPU: cpu}
+			handoverMu.Lock()
+			handovers = append(handovers, entry)
+			count := len(handovers)
+			handoverMu.Unlock()
+			if allKernel && count == 48 {
+				// All retained packets have entered the same kernel path before
+				// resolving the neighbour releases its queue.
+				out, err := exec.Command("ip", "neigh", "replace", "198.18.1.2", "lladdr", "02:00:00:00:00:02", "nud", "permanent", "dev", "buffer-output").CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("resolve kernel continuation: %w %s", err, out)
+				}
+			}
+		}
+		return err
 	})
-	const total = 96
+	total := 96
+	if allKernel {
+		total = 48
+	}
 	frames := make([][]byte, total)
 	for id := range total {
 		frames[id] = bufferAttachedFrame(t, v6, uint16(id+100))
@@ -156,7 +213,7 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 				producer <- err
 				return
 			}
-			if id == 15 {
+			if !allKernel && id == 15 || allKernel && id == total-1 {
 				close(reached)
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -169,7 +226,11 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 		buffering.mu.Lock()
 		held := len(buffering.entries) - len(buffering.free)
 		buffering.mu.Unlock()
-		if held >= 16 {
+		target := 16
+		if allKernel {
+			target = total
+		}
+		if held >= target {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -179,6 +240,9 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 	}
 	if kernel {
 		command("neigh", "del", "198.18.1.2", "dev", "buffer-output")
+		if allKernel {
+			command("netns", "exec", "buffer-attached-receiver", "sysctl", "-w", "net.ipv4.conf.buffer-input.arp_ignore=8")
+		}
 	}
 	_ = switchBufferedFARToForward(t, conn, assoc, session)
 	select {
@@ -199,16 +263,29 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 			if kernel {
 				prefix = "attached-kernel-ordered"
 			}
+			if allKernel {
+				prefix = "attached-kernel-only-ordered"
+			}
 			name := fmt.Sprintf("%s-inner-v%d.pcap", prefix, map[bool]int{false: 4, true: 6}[v6])
 			if err := os.WriteFile(filepath.Join(directory, name), capture.Bytes(), 0600); err != nil {
+				t.Error(err)
+			}
+			handoverMu.Lock()
+			raw, err := json.MarshalIndent(handovers, "", "  ")
+			handoverMu.Unlock()
+			if err != nil {
+				t.Error(err)
+			} else if err := os.WriteFile(filepath.Join(directory, name+".handovers.json"), append(raw, '\n'), 0600); err != nil {
 				t.Error(err)
 			}
 		}
 	}()
 	received := 0
+	wireTimes := make(map[uint16]int64, total)
 	for {
 		frame := make([]byte, 4096)
-		n, _, err := unix.Recvfrom(receiver, frame, 0)
+		ancillary := make([]byte, 128)
+		n, oobn, flags, _, err := unix.Recvmsg(receiver, frame, ancillary, 0)
 		if errors.Is(err, unix.EINTR) {
 			continue
 		}
@@ -233,8 +310,26 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 			t.Fatalf("short inner packet: %d", n)
 		}
 		got := binary.BigEndian.Uint16(frame[offset:])
-		if received >= total || got != uint16(received+100) {
+		if got < 100 || got >= uint16(100+total) || wireTimes[got] != 0 {
+			t.Fatalf("duplicate/invalid wire packet %d", got)
+		}
+		if (!kernel || allKernel) && got != uint16(received+100) {
 			t.Fatalf("wire order at %d: got %d", received, got)
+		}
+		if flags&unix.MSG_CTRUNC != 0 {
+			t.Fatal("truncated receive timestamp")
+		}
+		messages, err := unix.ParseSocketControlMessage(ancillary[:oobn])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range messages {
+			if message.Header.Level == unix.SOL_SOCKET && message.Header.Type == unix.SCM_TIMESTAMPNS && len(message.Data) >= 16 {
+				wireTimes[got] = int64(binary.NativeEndian.Uint64(message.Data))*int64(time.Second) + int64(binary.NativeEndian.Uint64(message.Data[8:]))
+			}
+		}
+		if wireTimes[got] == 0 {
+			t.Fatal("packet has no kernel receive timestamp")
 		}
 		received++
 		if received == total {
@@ -246,6 +341,33 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel bool) {
 	if err := <-producer; err != nil {
 		t.Fatal(err)
 	}
+	handoverMu.Lock()
+	log := append([]handover(nil), handovers...)
+	handoverMu.Unlock()
+	if len(log) < 16 || log[0].ID != 100 {
+		t.Fatalf("missing retained hand-over log: %v", log)
+	}
+	handed := make(map[uint16]handover, len(log))
+	for i, entry := range log {
+		if i > 0 && (entry.ID <= log[i-1].ID || entry.ReturnedNS < log[i-1].ReturnedNS) {
+			t.Fatalf("hand-over order: %v", log)
+		}
+		if kernel && (entry.Thread != log[0].Thread || entry.CPU != log[0].CPU) {
+			t.Fatal("kernel continuation changed its backlog CPU")
+		}
+		handed[entry.ID] = entry
+	}
+	for id := uint16(100); id < uint16(100+total); id++ {
+		if _, ok := handed[id]; ok {
+			continue
+		}
+		for _, older := range log {
+			if older.ID < id && wireTimes[id] < older.ReturnedNS {
+				t.Fatalf("native packet %d handed over before retained %d: native=%d older_return=%d", id, older.ID, wireTimes[id], older.ReturnedNS)
+			}
+		}
+	}
+	t.Logf("continuation hand-overs=%d native=%d FIFO=true", len(log), total-len(log))
 	stats, err := unix.GetsockoptTpacketStats(receiver, unix.SOL_PACKET, unix.PACKET_STATISTICS)
 	if err != nil || stats.Drops != 0 {
 		t.Fatalf("capture stats=%+v %v", stats, err)

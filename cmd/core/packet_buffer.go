@@ -352,6 +352,16 @@ func (buffering *PacketBuffering) consumePacket(record ebpf.BufferRecord) {
 
 func (buffering *PacketBuffering) servicePackets() {
 	defer buffering.wg.Done()
+	unpin, err := pinBufferOutputThread()
+	if err != nil {
+		buffering.fail(err)
+		return
+	}
+	defer func() {
+		if err := unpin(); err != nil {
+			buffering.fail(err)
+		}
+	}()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
