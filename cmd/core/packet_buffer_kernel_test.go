@@ -71,15 +71,19 @@ func bufferKernelPacket(t *testing.T, id uint16) []byte {
 	t.Helper()
 	return bufferKernelPacketFor(t, id, net.IP{198, 51, 100, 2})
 }
-func bufferKernelPacketFor(t *testing.T, id uint16, destination net.IP) []byte {
+func bufferKernelPacketFor(t *testing.T, id uint16, destination net.IP, content ...[]byte) []byte {
 	t.Helper()
 	ip := &layers.IPv4{Version: 4, TTL: 64, Id: id, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 51, 100, 1}, DstIP: destination}
 	udp := &layers.UDP{SrcPort: 1234, DstPort: 4321}
 	if err := udp.SetNetworkLayerForChecksum(ip); err != nil {
 		t.Fatal(err)
 	}
+	payload := []byte{1, 2, 3, 4}
+	if len(content) != 0 {
+		payload = content[0]
+	}
 	buffer := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(buffer, gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}, &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 2}, EthernetType: layers.EthernetTypeIPv4}, ip, udp, gopacket.Payload([]byte{1, 2, 3, 4})); err != nil {
+	if err := gopacket.SerializeLayers(buffer, gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}, &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 2}, EthernetType: layers.EthernetTypeIPv4}, ip, udp, gopacket.Payload(payload)); err != nil {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()

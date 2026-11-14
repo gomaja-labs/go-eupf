@@ -132,10 +132,15 @@ func newBufferKernelLink(programFD int) (_ *bufferKernelLink, err error) {
 	peer := resource.name + "p"
 	resource.address = net.HardwareAddr{2, random[4], random[5], random[6], random[7], random[8]}
 	peerData := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(peer), 0))...)
+	// Carry the complete retained frame class, rewrite headroom and cursor.
+	// Linux still applies the actual forwarding device's MTU after reinjection.
+	peerData = append(peerData, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
+
 	vethData := bufferAttribute(1|unix.NLA_F_NESTED, peerData) // VETH_INFO_PEER
 	info := append(bufferAttribute(unix.IFLA_INFO_KIND, []byte("veth\x00")), bufferAttribute(unix.IFLA_INFO_DATA|unix.NLA_F_NESTED, vethData)...)
 	data := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(resource.name), 0))...)
 	data = append(data, bufferAttribute(unix.IFLA_ADDRESS, resource.address)...)
+	data = append(data, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
 	data = append(data, bufferAttribute(unix.IFLA_LINKINFO|unix.NLA_F_NESTED, info)...)
 	if err = link.change(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
 		return nil, fmt.Errorf("create kernel continuation veth: %w", err)

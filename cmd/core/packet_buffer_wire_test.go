@@ -202,6 +202,8 @@ func testApplicationBufferContinuation(t *testing.T, outcome string) {
 	command("-n", "buffer-kernel-receiver", "addr", "add", "198.18.1.2/24", "dev", "buffer-input")
 	switch outcome {
 	case "kernel":
+		command("link", "set", "buffer-output", "mtu", "4096")
+		command("-n", "buffer-kernel-receiver", "link", "set", "buffer-input", "mtu", "4096")
 		command("neigh", "del", "198.18.1.2", "dev", "buffer-output")
 	case "drop":
 		command("route", "add", "blackhole", "198.18.1.2/32")
@@ -241,6 +243,9 @@ func testApplicationBufferContinuation(t *testing.T, outcome string) {
 			t.Fatal(err)
 		}
 		frame := bufferKernelPacket(t, id)
+		if outcome == "kernel" {
+			frame = bufferKernelPacketFor(t, id, net.IP{198, 51, 100, 2}, make([]byte, 1472))
+		}
 		copy(frame[:6], iface.HardwareAddr)
 		input := struct{ Data, DataEnd, DataMeta, IngressIfindex, RxQueueIndex, EgressIfindex uint32 }{DataEnd: uint32(len(frame)), IngressIfindex: uint32(iface.Index)}
 		action, err := plane.UpfIpEntrypointFunc.Run(&cilium.RunOptions{Data: frame, Context: &input})
