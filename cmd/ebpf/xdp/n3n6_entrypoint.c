@@ -23,6 +23,7 @@
 #include "xdp/utils/trace.h"
 #include "xdp/utils/packet_context.h"
 #include "xdp/buffering.h"
+#include "xdp/buffer_result.h"
 #include "xdp/utils/packet_trace.h"
 #include "xdp/utils/parsers.h"
 #include "xdp/utils/csum.h"
@@ -49,7 +50,11 @@ int upf_router_solicitation_func(struct xdp_md *ctx);
 
 struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-    __uint(max_entries, 3); // Local recursion, router control and buffering continuation
+#ifdef BUFFER_CONTINUATION
+    __uint(max_entries,4);
+#else
+    __uint(max_entries,3);
+#endif // Local recursion, router control and buffering continuation
     __type(key, __u32);
     __array(values, int (struct xdp_md *));
 } jmp_table SEC(".maps") = {
@@ -832,7 +837,7 @@ static __always_inline int continue_router_solicitation(struct xdp_md *ctx, stru
 SEC("xdp/upf_router_solicitation")
 int upf_router_solicitation_func(struct xdp_md *ctx) {
     void *data=(void *)(long)ctx->data;
-    if (data+sizeof(struct router_reply_context)>(void *)(long)ctx->data_end) return XDP_ABORTED;
+    if (data+sizeof(struct router_reply_context)>(void *)(long)ctx->data_end) BUFFER_RETURN(ctx,XDP_ABORTED);
     struct router_reply_context saved;
     // The prepended packet metadata can be unaligned. Copy one word at a
     // time into its aligned stack image: a whole-struct memcpy makes clang
@@ -844,17 +849,17 @@ int upf_router_solicitation_func(struct xdp_md *ctx) {
         __builtin_memcpy(&word,data+i*sizeof(word),sizeof(word));
         ((volatile __u32 *)&saved)[i]=word;
     }
-    if (saved.magic!=ROUTER_REPLY_MAGIC) return XDP_ABORTED;
-    if (bpf_xdp_adjust_head(ctx,sizeof(saved))) return XDP_ABORTED;
+    if (saved.magic!=ROUTER_REPLY_MAGIC) BUFFER_RETURN(ctx,XDP_ABORTED);
+    if (bpf_xdp_adjust_head(ctx,sizeof(saved))) BUFFER_RETURN(ctx,XDP_ABORTED);
     __u32 key=0;
     struct upf_statistic *statistic=bpf_map_lookup_elem(&upf_ext_stat,&key);
-    if (!statistic) return XDP_ABORTED;
+    if (!statistic) BUFFER_RETURN(ctx,XDP_ABORTED);
     struct packet_context packet={
         .data=(void *)(long)ctx->data,.data_end=(void *)(long)ctx->data_end,.xdp_ctx=ctx,
         .counters=&statistic->upf_counters,.n3_n6_counter=&statistic->upf_n3_n6_counter,
         .return_pdr=&saved.pdr,.return_nr_flag=saved.nr,.trace=saved.trace,.pdr_id=saved.pdr_id,
     };
-    if (parse_ethernet(&packet)!=ETH_P_IPV6 || parse_ip6(&packet)!=IPPROTO_ICMPV6) return XDP_DROP;
+    if (parse_ethernet(&packet)!=ETH_P_IPV6 || parse_ip6(&packet)!=IPPROTO_ICMPV6) BUFFER_RETURN(ctx,XDP_DROP);
     int action=handle_router_solicitation(&packet);
     if (action==UPF_DOWNLINK_IP6) {
         packet.locally_generated=1;
@@ -863,18 +868,21 @@ int upf_router_solicitation_func(struct xdp_md *ctx) {
     }
     if (action==UPF_LOCAL_TUNNEL) {
         bpf_tail_call(ctx,&jmp_table,0);
-        return XDP_ABORTED;
+        BUFFER_RETURN(ctx,XDP_ABORTED);
     }
     if (action==UPF_BUFFER_PACKET) {
+#ifdef BUFFER_CONTINUATION
+        buffer_result_admitted();
+#endif
         bpf_tail_call(ctx,&jmp_table,2);
-        return XDP_DROP;
+        BUFFER_RETURN(ctx,XDP_DROP);
     }
     statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK]++;
     if (global_config.trace_out && packet.trace && (action==XDP_TX || action==XDP_REDIRECT))
         trace_packet(&packet,PACKET_DIRECTION_OUT);
     else if (global_config.trace_blocked && action!=XDP_TX && action!=XDP_REDIRECT)
         trace_packet(&packet,PACKET_DIRECTION_BLOCKED);
-    return action;
+    BUFFER_RETURN(ctx,action);
 }
 
 // Combined N3 & N6 entrypoint. Use for "on-a-stick" interfaces
@@ -883,7 +891,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     // upf_printk("upf n3 & n6 combined entrypoint start");
     const __u32 key = 0;
     struct upf_statistic *statistic = bpf_map_lookup_elem(&upf_ext_stat, &key);
-    if (!statistic) return XDP_ABORTED;
+    if (!statistic) BUFFER_RETURN(ctx,XDP_ABORTED);
     // Calculate how short the packet is compared to a physical 64-byte frame
     __u32 current_len = (void *)(long)ctx->data_end - (void *)(long)ctx->data;
     if (current_len < 60) {
@@ -911,7 +919,7 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     else if (action == UPF_END_MARKER)
         action = handle_end_marker(&context);
     if (action == UPF_ROUTER_SOLICITATION)
-        return continue_router_solicitation(ctx,&context);
+        { int continued=continue_router_solicitation(ctx,&context);BUFFER_RETURN(ctx,continued); }
     if (action == UPF_DOWNLINK_IP4)
         action = handle_n6_packet_ipv4(&context);
     else if (action == UPF_DOWNLINK_IP6)
@@ -920,11 +928,14 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     // bounded kernel tail calls independent of ordinary BPF subprogram stacks.
     if (action == UPF_LOCAL_TUNNEL) {
         bpf_tail_call(ctx, &jmp_table, 0);
-        return XDP_ABORTED;
+        BUFFER_RETURN(ctx,XDP_ABORTED);
     }
     if (action==UPF_BUFFER_PACKET) {
+#ifdef BUFFER_CONTINUATION
+        buffer_result_admitted();
+#endif
         bpf_tail_call(ctx,&jmp_table,2);
-        return XDP_DROP;
+        BUFFER_RETURN(ctx,XDP_DROP);
     }
     statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK] += 1;
 
@@ -934,8 +945,27 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
         trace_packet(&context, PACKET_DIRECTION_BLOCKED);
     }
 
-    return action;
+    BUFFER_RETURN(ctx,action);
 }
+
+#ifdef BUFFER_CONTINUATION
+// A generated IPv4 echo reply uses normal downlink processing in a fresh
+// program frame, just as router replies have their own continuation budget.
+SEC("xdp/upf_buffer_downlink")
+int upf_buffer_downlink_func(struct xdp_md *ctx) {
+    __u32 zero=0;
+    struct upf_statistic *statistic=bpf_map_lookup_elem(&upf_ext_stat,&zero);
+    if (!statistic) return buffer_result_finish(ctx,XDP_ABORTED,0);
+    struct packet_context packet={.data=(void *)(long)ctx->data,.data_end=(void *)(long)ctx->data_end,.xdp_ctx=ctx,.locally_generated=1,
+        .counters=&statistic->upf_counters,.n3_n6_counter=&statistic->upf_n3_n6_counter};
+    int protocol=parse_ethernet(&packet),action=XDP_ABORTED;
+    if (protocol==ETH_P_IP && parse_ip4(&packet)>=0) action=handle_n6_packet_ipv4(&packet);
+    else if (protocol==ETH_P_IPV6 && parse_ip6(&packet)>=0) action=handle_n6_packet_ipv6(&packet);
+    if (action==UPF_LOCAL_TUNNEL) { bpf_tail_call(ctx,&jmp_table,0);return buffer_result_finish(ctx,XDP_ABORTED,0); }
+    if (action==UPF_BUFFER_PACKET) { buffer_result_admitted();bpf_tail_call(ctx,&jmp_table,2);return XDP_DROP; }
+    return buffer_result_finish(ctx,action,0);
+}
+#endif
 
 #include "xdp/buffer_render.h"
 

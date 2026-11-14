@@ -23,11 +23,15 @@ import (
 //
 
 //go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -type pdr_entry -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
+//go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf BufferEntrypoint xdp/n3n6_entrypoint.c -- -DBUFFER_CONTINUATION -I. -O2 -Wall -g
 //go:generate go tool bpf2go -tags linux -target bpf ZeroEntrypoint 	xdp/zero_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N3Entrypoint 	xdp/n3_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
+	renderMutex       sync.Mutex
+	renderCollection  *ebpf.Collection
+	renderClosed      bool
 	bufferMutex       sync.Mutex
 	bufferReadClaimed bool
 	bufferReadClosed  bool
@@ -181,6 +185,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err := bpfObjects.ConfigureBufferPool(bpfObjects.bufferPackets); err != nil {
 		return err
 	}
+	bpfObjects.renderClosed = false
 	loaded = true
 	return nil
 }
@@ -206,6 +211,13 @@ func (bpfObjects *BpfObjects) Close() error {
 	if grace != nil {
 		err = errors.Join(err, grace.close())
 	}
+	bpfObjects.renderMutex.Lock()
+	bpfObjects.renderClosed = true
+	if bpfObjects.renderCollection != nil {
+		bpfObjects.renderCollection.Close()
+		bpfObjects.renderCollection = nil
+	}
+	bpfObjects.renderMutex.Unlock()
 	return errors.Join(err, CloseAllObjects(
 		&bpfObjects.IpEntrypointObjects,
 	))

@@ -25,12 +25,15 @@ import (
 	"github.com/gopacket/gopacket/pcapgo"
 )
 
-func loadDatapath(t *testing.T) *BpfObjects {
+func loadDatapath(t *testing.T, configure ...func(*BpfObjects)) *BpfObjects {
 	t.Helper()
 	if err := IncreaseResourceLimits(); err != nil {
 		t.Fatal(err)
 	}
 	b := NewBpfObjects()
+	for _, apply := range configure {
+		apply(b)
+	}
 	if err := b.Load(); err != nil {
 		var ve *cilium.VerifierError
 		if errors.As(err, &ve) {

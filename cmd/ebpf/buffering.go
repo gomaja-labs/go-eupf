@@ -123,6 +123,10 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	if b.UpfBufferControlFunc == nil || b.UpfBufferControlFunc.FD() < 0 {
 		return BufferCommand{}, errors.New("buffer control is not loaded")
 	}
+	if command.Operation == 0 {
+		b.renderMutex.Lock()
+		defer b.renderMutex.Unlock()
+	}
 	key := bufferKey{SessionID: command.SessionID, Lane: command.Lane}
 	if command.Operation == 5 {
 		if err := b.BufferStates.Update(key, &bufferFar{}, cilium.UpdateNoExist); err != nil {
@@ -176,6 +180,11 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	command.UsesBAR = binary.LittleEndian.Uint32(output[80:]) != 0
 	command.DLPending = binary.LittleEndian.Uint32(output[84:])
 	command.BARUntilNS = binary.LittleEndian.Uint64(output[88:])
+	if command.Operation == 0 {
+		if err := b.discardBufferRender(command); err != nil {
+			return BufferCommand{}, err
+		}
+	}
 	return command, nil
 }
 
@@ -306,7 +315,16 @@ func (b *BpfObjects) ConfigureBufferPool(limit uint32) error {
 	if b.BufferPool == nil || b.BufferPool.FD() < 0 || limit == 0 {
 		return errors.New("invalid buffer pool")
 	}
-	return b.BufferPool.Put(uint32(0), bufferPool{Limit: limit})
+	b.renderMutex.Lock()
+	defer b.renderMutex.Unlock()
+	if b.renderCollection != nil && limit != b.bufferPackets {
+		return errors.New("cannot resize an active buffer renderer")
+	}
+	if err := b.BufferPool.Put(uint32(0), bufferPool{Limit: limit}); err != nil {
+		return err
+	}
+	b.bufferPackets = limit
+	return nil
 }
 
 // BufferPoolUsage includes queued ring records, retained payloads, and all drops

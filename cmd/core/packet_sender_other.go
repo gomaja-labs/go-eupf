@@ -2,8 +2,11 @@
 
 package core
 
-import "errors"
+import (
+	"errors"
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+)
 
-func newBufferPacketSender() (packetBufferSender, error) {
+func newBufferPacketSender(_ *ebpf.BpfObjects) (packetBufferSender, error) {
 	return nil, errors.New("buffered packet output requires Linux")
 }

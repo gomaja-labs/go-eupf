@@ -56,10 +56,12 @@ func (c *UpfConfig) BufferMemoryReserve() int64 {
 // storage. Measured cgroup deltas at 1024 and 65535 sessions are rounded up to
 // 320 bytes per session (anchor and wakeup) and 1152 per FAR lifetime; the
 // lifetime map accommodates current and retiring versions. Empty maps and the
-// fixed ring are part of the observed loaded baseline.
+// fixed ring and continuation programs are part of the observed loaded baseline.
+// A full N=4096 rendered-result map measured 4103 kernel bytes per packet;
+// round to 4608 independently of the Go payload allocation.
 func (c *UpfConfig) BufferKernelMemoryReserve() int64 {
 	sessions, fars := c.bufferMetadataCapacity()
-	return 320*sessions + 1152*(2*fars)
+	return 320*sessions + 1152*(2*fars) + 4608*int64(c.Buffering().Packets)
 }
 
 func (c *UpfConfig) bufferMetadataCapacity() (sessions, fars int64) {

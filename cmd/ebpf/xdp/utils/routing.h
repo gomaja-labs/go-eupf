@@ -75,11 +75,18 @@ static __always_inline enum xdp_action route_ipv4_output(struct xdp_md *ctx, str
             statistic->fib_lookup_ip4_ok += 1;
 
 
+#ifdef BUFFER_CONTINUATION
+            buffer_capture_route(fib_params.ifindex);
+#endif
             if (output) {
                 *output=fib_params.ifindex;
                 __builtin_memcpy(eth->h_source,fib_params.smac,ETH_ALEN);
                 __builtin_memcpy(eth->h_dest,fib_params.dmac,ETH_ALEN);
+#ifdef BUFFER_CONTINUATION
+                return fib_params.ifindex==ctx->ingress_ifindex ? XDP_TX : XDP_REDIRECT;
+#else
                 return XDP_REDIRECT;
+#endif
             }
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);
 
@@ -131,11 +138,18 @@ static __always_inline enum xdp_action route_ipv6_output(struct xdp_md *ctx, str
             ip6->hop_limit--;
             statistic->fib_lookup_ip6_ok += 1;
 
+#ifdef BUFFER_CONTINUATION
+            buffer_capture_route(fib_params.ifindex);
+#endif
             if (output) {
                 *output=fib_params.ifindex;
                 __builtin_memcpy(eth->h_source,fib_params.smac,ETH_ALEN);
                 __builtin_memcpy(eth->h_dest,fib_params.dmac,ETH_ALEN);
+#ifdef BUFFER_CONTINUATION
+                return fib_params.ifindex==ctx->ingress_ifindex ? XDP_TX : XDP_REDIRECT;
+#else
                 return XDP_REDIRECT;
+#endif
             }
             return do_route(ctx, eth, fib_params.ifindex, &fib_params.smac, &fib_params.dmac);
         case BPF_FIB_LKUP_RET_BLACKHOLE:

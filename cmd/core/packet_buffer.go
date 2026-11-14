@@ -113,12 +113,12 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 	if err != nil {
 		return nil, err
 	}
-	sender, err := newBufferPacketSender()
-	if err != nil {
+	if err := plane.ConfigureBufferPool(options.Packets); err != nil {
 		return nil, err
 	}
-	if err := plane.ConfigureBufferPool(options.Packets); err != nil {
-		return nil, errors.Join(err, sender.Close())
+	sender, err := newBufferPacketSender(plane)
+	if err != nil {
+		return nil, err
 	}
 	reader, err := plane.NewBufferReader()
 	if err != nil {
@@ -703,10 +703,10 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 		conn.stateMu.Unlock()
 		rendered, err := buffering.plane.RenderBufferedPacket(record, far.GlobalId)
 		sent := false
-		if err == nil && rendered.Action == 4 && rendered.Ifindex != 0 {
+		if err == nil && rendered.Action >= 2 && rendered.Action <= 4 {
 			err = buffering.sender.Send(rendered)
 			sent = err == nil
-		} else if err == nil && rendered.Action == 1 {
+		} else if err == nil && rendered.Action <= 1 {
 			sent = true
 		}
 		close(done)

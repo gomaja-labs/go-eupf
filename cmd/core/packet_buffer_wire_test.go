@@ -11,9 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+
+	cilium "github.com/cilium/ebpf"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/gopacket/gopacket/pcapgo"
@@ -131,6 +135,9 @@ func TestApplicationBufferFramesReachReceiver(t *testing.T) {
 	for {
 		frame := make([]byte, 65535)
 		n, _, err := unix.Recvfrom(fd, frame, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, unix.EAGAIN) && received == 2 {
 				break
@@ -149,6 +156,154 @@ func TestApplicationBufferFramesReachReceiver(t *testing.T) {
 		}
 		received++
 		if received == 2 {
+			if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Usec: 50000}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stats, err := unix.GetsockoptTpacketStats(fd, unix.SOL_PACKET, unix.PACKET_STATISTICS)
+	if err != nil || stats.Drops != 0 {
+		t.Fatalf("receiver stats=%+v error=%v", stats, err)
+	}
+	select {
+	case err := <-buffering.Failures():
+		t.Fatal(err)
+	default:
+	}
+	t.Logf("receiver matched=%d socket_packets=%d socket_drops=%d", received, stats.Packets, stats.Drops)
+}
+
+func TestApplicationBufferKernelContinuationReachesReceiver(t *testing.T) {
+	testApplicationBufferContinuation(t, "kernel")
+}
+func TestApplicationBufferOtherContinuationsReachReceiver(t *testing.T) {
+	for _, outcome := range []string{"TX", "local tunnel", "drop"} {
+		t.Run(outcome, func(t *testing.T) { testApplicationBufferContinuation(t, outcome) })
+	}
+}
+func testApplicationBufferContinuation(t *testing.T, outcome string) {
+	plane, buffering, conn, assoc, session, _ := publishPacketBufferFixture(t)
+	command := func(args ...string) {
+		t.Helper()
+		if output, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+			t.Fatalf("ip %v: %v %s", args, err, output)
+		}
+	}
+	command("netns", "add", "buffer-kernel-receiver")
+	t.Cleanup(func() {
+		if output, err := exec.Command("ip", "netns", "del", "buffer-kernel-receiver").CombinedOutput(); err != nil {
+			t.Errorf("remove receiver: %v %s", err, output)
+		}
+	})
+	packetBufferRoute(t, plane)
+	command("link", "set", "buffer-input", "netns", "buffer-kernel-receiver")
+	command("-n", "buffer-kernel-receiver", "link", "set", "buffer-input", "address", "02:00:00:00:00:02")
+	command("-n", "buffer-kernel-receiver", "link", "set", "buffer-input", "up")
+	command("-n", "buffer-kernel-receiver", "addr", "add", "198.18.1.2/24", "dev", "buffer-input")
+	switch outcome {
+	case "kernel":
+		command("neigh", "del", "198.18.1.2", "dev", "buffer-output")
+	case "drop":
+		command("route", "add", "blackhole", "198.18.1.2/32")
+		t.Cleanup(func() {
+			if out, err := exec.Command("ip", "route", "del", "blackhole", "198.18.1.2/32").CombinedOutput(); err != nil {
+				t.Errorf("remove blackhole: %v %s", err, out)
+			}
+		})
+
+	case "local tunnel":
+		command("addr", "add", "198.51.100.254/24", "dev", "buffer-output")
+		command("neigh", "add", "198.51.100.2", "lladdr", "02:00:00:00:00:02", "nud", "permanent", "dev", "buffer-output")
+		command("-n", "buffer-kernel-receiver", "addr", "add", "198.51.100.2/24", "dev", "buffer-input")
+		var config ebpf.IpEntrypointDataplaneConfig
+		if err := plane.GlobalConfig.Get(&config); err != nil {
+			t.Fatal(err)
+		}
+		config.N3Ipv4Address = binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2})
+		if err := plane.GlobalConfig.Set(config); err != nil {
+			t.Fatal(err)
+		}
+		slot, err := plane.NewFar(ebpf.FarInfo{Action: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := plane.PutPdrUplink(200, ebpf.PdrInfo{FarId: slot, OuterHeaderRemovalPresent: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fd := openBufferWireReceiver(t, "buffer-kernel-receiver")
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 2}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint16{100} {
+		iface, err := net.InterfaceByName("buffer-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame := bufferKernelPacket(t, id)
+		copy(frame[:6], iface.HardwareAddr)
+		input := struct{ Data, DataEnd, DataMeta, IngressIfindex, RxQueueIndex, EgressIfindex uint32 }{DataEnd: uint32(len(frame)), IngressIfindex: uint32(iface.Index)}
+		action, err := plane.UpfIpEntrypointFunc.Run(&cilium.RunOptions{Data: frame, Context: &input})
+		if err != nil || action != 1 {
+			t.Fatalf("admit %d: action=%d error=%v", id, action, err)
+		}
+	}
+	waitBufferStorage(t, buffering, 1)
+	_ = switchBufferedFARToForward(t, conn, assoc, session)
+	var capture bytes.Buffer
+	writer := pcapgo.NewWriter(&capture)
+	if err := writer.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if directory := os.Getenv("EUPF_BUFFER_CAPTURE_DIR"); directory != "" {
+			if err := os.MkdirAll(directory, 0755); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(directory, "buffered-continuation-"+strings.ReplaceAll(outcome, " ", "-")+".pcap"), capture.Bytes(), 0600); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	received := 0
+	expected := 1
+	if outcome == "drop" {
+		expected = 0
+	}
+	if outcome == "drop" {
+		waitBufferStorage(t, buffering, 0)
+	}
+	for {
+		frame := make([]byte, 65535)
+		n, _, err := unix.Recvfrom(fd, frame, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			if errors.Is(err, unix.EAGAIN) && received == expected {
+				break
+			}
+			t.Fatalf("receive buffered frame %d: %v", received, err)
+		}
+		frame = frame[:n]
+		port := uint16(2152)
+		offset := 54
+		if outcome == "local tunnel" {
+			port = 4321
+			offset = 18
+		}
+		if n < 58 || frame[12] != 8 || frame[13] != 0 || frame[23] != 17 || binary.BigEndian.Uint16(frame[36:38]) != port {
+			continue
+		}
+		if err := writer.WritePacket(gopacket.CaptureInfo{Timestamp: time.Now(), CaptureLength: n, Length: n}, frame); err != nil {
+			t.Fatal(err)
+		}
+		if received >= expected || binary.BigEndian.Uint16(frame[offset:offset+2]) != uint16(100+received) {
+			t.Fatal("receiver observed a duplicate or out-of-order buffered packet")
+		}
+		received++
+		if received == expected {
 			if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Usec: 50000}); err != nil {
 				t.Fatal(err)
 			}

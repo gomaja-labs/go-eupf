@@ -148,6 +148,13 @@ func run(ctx context.Context) (runErr error) {
 	}
 
 	defer func() { runErr = errors.Join(runErr, bpfObjects.Close()) }()
+	bufferSettings := config.Conf.Buffering()
+	packetBuffers, err := core.NewPacketBuffering(bpfObjects, core.BufferingOptions{Packets: bufferSettings.Packets, PerSession: bufferSettings.PerSession, FrameBytes: ebpf.BufferFrameSize, Retention: time.Duration(bufferSettings.RetentionSeconds) * time.Second})
+	if err != nil {
+		return fmt.Errorf("initialize packet buffering: %w", err)
+	}
+	defer func() { runErr = errors.Join(runErr, packetBuffers.Close()) }()
+
 	// SetMemoryLimit excludes kernel BPF memory. Keep the observed cgroup
 	// baseline outside Go's allowance, including the default startup peak.
 	debug.FreeOSMemory()
@@ -184,13 +191,6 @@ func run(ctx context.Context) (runErr error) {
 		debug.SetMemoryLimit(softLimit)
 	}
 	log.Info().Int64("container_limit_bytes", memoryLimit).Int64("cgroup_before_maps_bytes", beforeMaps).Int64("cgroup_loaded_baseline_bytes", baseline).Int64("growing_map_reserve_bytes", mapReserve).Int64("go_memory_limit_bytes", softLimit).Msg("PFCP process memory budget")
-
-	bufferSettings := config.Conf.Buffering()
-	packetBuffers, err := core.NewPacketBuffering(bpfObjects, core.BufferingOptions{Packets: bufferSettings.Packets, PerSession: bufferSettings.PerSession, FrameBytes: ebpf.BufferFrameSize, Retention: time.Duration(bufferSettings.RetentionSeconds) * time.Second})
-	if err != nil {
-		return fmt.Errorf("initialize packet buffering: %w", err)
-	}
-	defer func() { runErr = errors.Join(runErr, packetBuffers.Close()) }()
 
 	dumper, err := newStartupDumper(
 		"dumps/",
