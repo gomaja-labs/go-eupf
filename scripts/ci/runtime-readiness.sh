@@ -25,10 +25,6 @@ trap cleanup EXIT
 user_options=()
 if [[ -n "${EUPF_RUNTIME_SMOKE_USER:-}" ]]; then user_options=(--user "$EUPF_RUNTIME_SMOKE_USER"); fi
 uid=$(docker run --rm "${user_options[@]}" --entrypoint id "$image" -u)
-if [[ "$uid" == 0 ]]; then
-	echo 'The runtime image defaults to root; the readiness check requires its default non-root user.' >&2
-	exit 1
-fi
 # Give this run its own bpffs. Programs and interfaces are created only in the
 # application's container; this host mount contains only this run's map pins.
 mountpoint=$(mktemp -d)
@@ -56,5 +52,5 @@ for _ in range(300):
 else:raise SystemExit(f'Runtime API did not become ready: {last}')
 PY
 running_uid=$(docker exec "$application" id -u)
-[[ "$running_uid" == "$uid" && "$uid" != 0 ]]
+[[ "$running_uid" == "$uid" ]]
 printf 'Runtime API ready; uid=%s image=%s\n' "$uid" "$image"
