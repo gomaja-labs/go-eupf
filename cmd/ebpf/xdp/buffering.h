@@ -5,7 +5,6 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
-#define BUFFER_FAR_LANES 128
 #define BUFFER_FRAME_SIZE 2048
 #define BUFFER_DIRECT 8
 #define BUFFER_HOLD 1
@@ -23,6 +22,13 @@ struct buffer_far {
     __u32 reserved;
     __u32 uses_bar;
     __u32 downlink;
+    __u64 notices;
+    __u32 absent_notice;
+    __u32 absent_seen;
+    __u64 seen;
+    __u64 notice_time[65];
+    __u16 notice_pdr[65];
+    __u8 reserved_pdr[6];
 };
 
 static __always_inline void buffer_maybe_forward(struct buffer_far *far) {
@@ -42,11 +48,42 @@ struct buffer_anchor {
     __u32 bar_dl_limit;
     __u32 reserved;
     __u64 bar_until_ns;
-    struct buffer_far far[BUFFER_FAR_LANES];
 };
+struct buffer_key { __u64 session_id; __u32 lane; __u32 reserved; };
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(max_entries, 2048);
+    __type(key, struct buffer_key);
+    __type(value, struct buffer_far);
+} buffer_states SEC(".maps");
+// Durable wakeups are distinct from the lossy payload ring. Userspace deletes
+// a wakeup before consuming the session's pending notices, so a racing producer
+// either joins that consumption or leaves another wakeup behind.
+struct {
+    __uint(type,BPF_MAP_TYPE_HASH);
+    __uint(map_flags,BPF_F_NO_PREALLOC);
+    __uint(max_entries,65535);
+    __type(key,__u64);
+    __type(value,__u32);
+} buffer_notice_ready SEC(".maps");
+struct buffer_pool {
+    struct bpf_spin_lock lock;
+    __u32 outstanding;
+    __u32 limit;
+    __u32 reserved;
+    __u64 dropped;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct buffer_pool);
+} buffer_pool SEC(".maps");
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65535);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
     __type(key, __u64);
     __type(value, struct buffer_anchor);
 } buffer_anchors SEC(".maps");
@@ -104,15 +141,20 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     __u32 bar_limit=command->bar_limit,dl_limit=command->bar_dl_limit;
     __u32 uses_bar=command->uses_bar,downlink=command->downlink;
     __u64 until=command->bar_until_ns;
-    if (lane>=BUFFER_FAR_LANES || operation>7 || mode>BUFFER_DISCARD || ready>1 || uses_bar>1 || downlink>1) return XDP_ABORTED;
-    asm volatile("" : "+r"(lane)); lane &= BUFFER_FAR_LANES-1;
+    if (operation>10 || mode>BUFFER_DISCARD || ready>1 || uses_bar>1 || downlink>1) return XDP_ABORTED;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
-    if (!anchor) return XDP_ABORTED;
+    struct buffer_key state_key={.session_id=id,.lane=lane};
+    struct buffer_far *far=bpf_map_lookup_elem(&buffer_states,&state_key);
+    __u32 zero=0;
+    struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&zero);
+    if (!anchor || !far || !pool) return XDP_ABORTED;
+    int release=0;
+    __u64 notice_time=0;
+    __u32 notice_pdr=0,notice_index=65;
     __u64 now=bpf_ktime_get_ns();
     int action=XDP_ABORTED;
     bpf_spin_lock(&anchor->lock);
     buffer_expire_bar(anchor,now);
-    struct buffer_far *far=&anchor->far[lane];
     if (operation==5 && cookie && !far->cookie && mode==BUFFER_HOLD) {
         far->cookie=cookie;far->mode=mode;far->ready=0;
         far->produced=far->completed=0;far->preparing=0;
@@ -126,7 +168,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
                 far->completed=sequence;anchor->outstanding--;
                 if (downlink) far->downlink--;
                 if (far->uses_bar) { anchor->bar_outstanding--;if (downlink) anchor->bar_dl_outstanding--; }
-                action=XDP_DROP;
+                release=1;action=XDP_DROP;
             }
         } else if (operation==1 && (mode==BUFFER_DISCARD ||
             (mode==BUFFER_HOLD && far->mode>=BUFFER_HOLD && far->mode<=BUFFER_FORWARD) ||
@@ -153,6 +195,27 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
                 far->uses_bar=uses_bar;action=XDP_DROP;
             }
         }
+        else if (operation==8) {
+            if (far->notices) {
+#pragma clang loop unroll(disable)
+                for (__u32 i=0;i<64;i++) if (far->notices & (1ULL<<i)) { notice_index=i;break; }
+            } else if (far->absent_notice) notice_index=64;
+            if (notice_index<65) {
+                notice_time=far->notice_time[notice_index];
+                notice_pdr=far->notice_pdr[notice_index];
+                if (notice_index<64) far->notices &= ~(1ULL<<notice_index);
+                else far->absent_notice=0;
+            }
+            action=XDP_DROP;
+        } else if (operation==9 && sequence<=65) {
+            if (sequence<64) { far->notices &= ~(1ULL<<sequence);far->seen &= ~(1ULL<<sequence); }
+            else if (sequence==64) { far->absent_notice=far->absent_seen=0; }
+            else { far->notices=far->seen=0;far->absent_notice=far->absent_seen=0; }
+            action=XDP_DROP;
+        } else if (operation==10) {
+            far->notices=far->seen=0;far->absent_notice=far->absent_seen=0;
+            action=XDP_DROP;
+        }
         buffer_expire_bar(anchor,now);
         buffer_maybe_forward(far);
         command->sequence=far->preparing;command->mode=far->mode;command->ready=far->ready;
@@ -162,7 +225,17 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
         command->bar_outstanding=anchor->bar_outstanding;command->bar_dl_outstanding=anchor->bar_dl_outstanding;
         command->uses_bar=far->uses_bar;command->downlink=far->downlink;command->bar_until_ns=anchor->bar_until_ns;
     }
+    if (operation==8) {
+        command->sequence=notice_index<65 ? notice_index+1 : 0;
+        command->produced=notice_time;
+        command->limit=notice_pdr;
+    }
     bpf_spin_unlock(&anchor->lock);
+    if (release) {
+        bpf_spin_lock(&pool->lock);
+        if (pool->outstanding) pool->outstanding--;
+        bpf_spin_unlock(&pool->lock);
+    }
     return action;
 }
 
@@ -200,26 +273,42 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     __u64 id=far->buffer_session_id, cookie=far->buffer_cookie;
     __u64 lane=far->buffer_lane;
     __u32 key=0;
-    if (!id || !cookie || lane>=BUFFER_FAR_LANES) return XDP_DROP;
-    asm volatile("" : "+r"(lane));
-    lane &= BUFFER_FAR_LANES-1;
+    if (!id || !cookie) return XDP_DROP;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
-    if (!anchor) return XDP_DROP;
-    int direct=0, eligible=0;
+    struct buffer_key state_key={.session_id=id,.lane=lane};
+    struct buffer_far *state=bpf_map_lookup_elem(&buffer_states,&state_key);
+    if (!anchor || !state) return XDP_DROP;
+    struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&key);
+    if (!pool) return XDP_DROP;
+    int direct=0, eligible=0, notice_ready=0;
     __u64 now=bpf_ktime_get_ns();
     bpf_spin_lock(&anchor->lock);
-    struct buffer_far *state=&anchor->far[lane];
     if (state->cookie==cookie) {
         buffer_expire_bar(anchor,now);
         buffer_maybe_forward(state);
         direct=state->mode==BUFFER_FORWARD;
+        // NOCP observes arrival independently of every packet-storage bound.
+        // TS 29.244 V20.1.0 clause 5.2.3.1.
+        if ((far->action&FAR_NOCP) && !uplink && ctx->pdr_id<=0xffff && state->mode==BUFFER_HOLD) {
+            __u32 flow=64;
+            if (ctx->nr_flag && ((marking&0x80) || ctx->qfi_present)) flow=(marking&0x80) ? marking&0x3f : ctx->qfi&0x3f;
+            __u64 bit=1ULL<<(flow&63);
+            if ((flow==64 && !state->absent_seen) || (flow<64 && !(state->seen&bit))) {
+                state->notice_time[flow]=now;
+                state->notice_pdr[flow]=ctx->pdr_id;
+                if (flow==64) state->absent_notice=state->absent_seen=1;
+                else { state->notices|=bit;state->seen|=bit; }
+                notice_ready=1;
+            }
+        }
         eligible=(state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) && state->preparing!=~0U && anchor->outstanding<anchor->limit &&
             (!state->uses_bar || (anchor->bar_outstanding<anchor->bar_limit && (uplink || anchor->bar_dl_outstanding<anchor->bar_dl_limit)));
         if (eligible) state->preparing++;
     }
     bpf_spin_unlock(&anchor->lock);
+    if (notice_ready) { __u32 ready=1;bpf_map_update_elem(&buffer_notice_ready,&id,&ready,BPF_ANY); }
     if (direct) return BUFFER_DIRECT;
-    if (!eligible) return XDP_DROP;
+    if (!eligible) { __sync_fetch_and_add(&pool->dropped,1); return XDP_DROP; }
     struct buffer_pending *pending=bpf_map_lookup_elem(&buffer_pending_packet,&key);
     if (!pending) {
         bpf_spin_lock(&anchor->lock);
@@ -260,9 +349,8 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     return UPF_BUFFER_PACKET;
 }
 
-static __always_inline void buffer_prepare_failed(struct buffer_anchor *anchor, __u64 lane, __u64 cookie) {
+static __always_inline void buffer_prepare_failed(struct buffer_anchor *anchor, struct buffer_far *far, __u64 cookie) {
     bpf_spin_lock(&anchor->lock);
-    struct buffer_far *far=&anchor->far[lane];
     if (far->cookie==cookie && far->preparing) {
         far->preparing--;
         buffer_maybe_forward(far);
@@ -282,25 +370,36 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     if (!pending) return XDP_DROP;
     __u64 id=pending->session_id, cookie=pending->cookie;
     __u64 lane=pending->lane;
-    if (!id || !cookie || lane>=BUFFER_FAR_LANES) return XDP_DROP;
-    asm volatile("" : "+r"(lane));
-    lane &= BUFFER_FAR_LANES-1;
+    if (!id || !cookie) return XDP_DROP;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
-    if (!anchor) return XDP_DROP;
+    struct buffer_key state_key={.session_id=id,.lane=lane};
+    struct buffer_far *state=bpf_map_lookup_elem(&buffer_states,&state_key);
+    struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&key);
+    if (!anchor || !state || !pool) return XDP_DROP;
     __u64 raw_length=(__u64)ctx->data_end-ctx->data;
-    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
+    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) { __sync_fetch_and_add(&pool->dropped,1);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
     __u32 length=raw_length;
     asm volatile("" : "+r"(length));
     length &= 0xfff;
-    if (length<14 || length>BUFFER_FRAME_SIZE) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
+    if (length<14 || length>BUFFER_FRAME_SIZE) { __sync_fetch_and_add(&pool->dropped,1);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
+    int credit=0;
+    bpf_spin_lock(&pool->lock);
+    if (pool->outstanding<pool->limit) { pool->outstanding++;credit=1; }
+    else __sync_fetch_and_add(&pool->dropped,1);
+    bpf_spin_unlock(&pool->lock);
+    if (!credit) { buffer_prepare_failed(anchor,state,cookie);return XDP_DROP; }
     struct buffer_record *record=bpf_ringbuf_reserve(&buffer_events,sizeof(*record),0);
-    if (!record) { buffer_prepare_failed(anchor,lane,cookie); return XDP_DROP; }
+    if (!record) {
+        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        buffer_prepare_failed(anchor,state,cookie); return XDP_DROP;
+    }
     volatile __u64 *words=(void *)record->packet;
 #pragma clang loop unroll(full)
     for (int i=0;i<BUFFER_FRAME_SIZE/8;i++) words[i]=0;
     if (bpf_probe_read_kernel(record->packet,length,(void *)(long)ctx->data)) {
         bpf_ringbuf_discard(record,0);
-        buffer_prepare_failed(anchor,lane,cookie);
+        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        buffer_prepare_failed(anchor,state,cookie);
         return XDP_DROP;
     }
     record->session_id=id;
@@ -330,7 +429,6 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     record->reserved=pending->downlink;
     int admitted=0;
     bpf_spin_lock(&anchor->lock);
-    struct buffer_far *state=&anchor->far[lane];
     if (state->cookie==cookie && state->preparing) {
         state->preparing--;
         buffer_expire_bar(anchor,record->received_ns);
@@ -346,7 +444,11 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
         buffer_maybe_forward(state);
     }
     bpf_spin_unlock(&anchor->lock);
-    if (!admitted) { bpf_ringbuf_discard(record,0); return XDP_DROP; }
+    if (!admitted) {
+        bpf_ringbuf_discard(record,0);
+        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        return XDP_DROP;
+    }
     bpf_ringbuf_submit(record,0);
     return XDP_DROP;
 }

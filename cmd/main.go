@@ -138,6 +138,7 @@ func run(ctx context.Context) (runErr error) {
 	}
 
 	bpfObjects := ebpf.NewBpfObjects()
+	bpfObjects.SetBufferCapacity(config.Conf.MaxSessions, config.Conf.Buffering().Packets)
 	bpfObjects.SetPdrMapSize(config.Conf.PdrMapSize)
 	bpfObjects.SetFarMapSize(config.Conf.FarMapSize)
 	bpfObjects.SetQerMapSize(config.Conf.QerMapSize)

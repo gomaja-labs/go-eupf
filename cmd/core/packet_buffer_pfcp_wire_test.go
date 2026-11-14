@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -28,7 +29,11 @@ type bufferPFCPCapture struct {
 	err        error
 }
 
-func startBufferPFCPCapture(t *testing.T) *bufferPFCPCapture {
+func startBufferPFCPCapture(t *testing.T, limits ...int) *bufferPFCPCapture {
+	limit := 1 << 20
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
 	t.Helper()
 	iface, err := net.InterfaceByName("lo")
 	if err != nil {
@@ -38,13 +43,23 @@ func startBufferPFCPCapture(t *testing.T) *bufferPFCPCapture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, 4<<20); err != nil {
+		t.Fatal(errors.Join(err, unix.Close(fd)))
+	}
 	if err := unix.Bind(fd, &unix.SockaddrLinklayer{Ifindex: iface.Index, Protocol: 0x0300}); err != nil {
 		t.Fatal(errors.Join(err, unix.Close(fd)))
 	}
 	capture := &bufferPFCPCapture{stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(capture.done)
-		defer func() { capture.err = errors.Join(capture.err, unix.Close(fd)) }()
+		defer func() {
+			stats, err := unix.GetsockoptTpacketStats(fd, unix.SOL_PACKET, unix.PACKET_STATISTICS)
+			capture.err = errors.Join(capture.err, err)
+			if stats != nil && stats.Drops != 0 {
+				capture.err = errors.Join(capture.err, fmt.Errorf("PFCP fixture capture lost %d packets", stats.Drops))
+			}
+			capture.err = errors.Join(capture.err, unix.Close(fd))
+		}()
 		var data bytes.Buffer
 		writer := pcapgo.NewWriter(&data)
 		if err := writer.WriteFileHeader(65535, layers.LinkTypeEthernet); err != nil {
@@ -82,7 +97,7 @@ func startBufferPFCPCapture(t *testing.T) *bufferPFCPCapture {
 			if frame[43] != message.MsgTypeSessionReportRequest && frame[43] != message.MsgTypeSessionReportResponse {
 				continue
 			}
-			if data.Len() > 1<<20 {
+			if data.Len() > limit {
 				capture.err = errors.New("PFCP capture exceeded its bounded fixture")
 				return
 			}

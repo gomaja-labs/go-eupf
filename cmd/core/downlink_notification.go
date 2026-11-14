@@ -90,12 +90,19 @@ func (conn *PfcpConnection) noteDownlinkPacketLocked(session *Session, farID uin
 		}
 		flow.bar = associated
 	}
-	if flow.contains(qfi, present) || len(state.pending) == cap(state.pending) {
+	if flow.contains(qfi, present) {
 		return
 	}
 	flow.set(qfi, present, true)
 	state.fars[farID] = flow
+	if len(state.pending) == cap(state.pending) {
+		capacity := min(max(1, 2*cap(state.pending)), 65*len(session.FARs))
+		pending := make([]downlinkNotice, len(state.pending), capacity)
+		copy(pending, state.pending)
+		state.pending = pending
+	}
 	state.pending = append(state.pending, downlinkNotice{farID: farID, cookie: record.Cookie, pdrID: uint16(record.PDRID), qfi: qfi, qfiPresent: present, arrived: arrived, epoch: flow.epoch, bar: associated})
+	conn.watchDownlinkSession(session)
 }
 
 func downlinkBARAssociated(session *Session, far SFarInfo) bool {
@@ -110,9 +117,18 @@ func (conn *PfcpConnection) resetDownlinkFAR(flow *downlinkFARState) bool {
 	flow.flows, flow.absent = 0, false
 	return true
 }
-func (conn *PfcpConnection) resetBARNotifications(state *downlinkNotifications) {
+func (conn *PfcpConnection) resetBARNotifications(session *Session) {
+	state := session.downlink
+	if session.buffers != nil {
+		for id, cycle := range session.buffers.cycles {
+			if downlinkBARAssociated(session, session.FARs[id]) {
+				conn.resetKernelNotice(session, id, cycle.cookie, 10, 0)
+			}
+		}
+	}
 	for id, flow := range state.fars {
 		if flow.bar {
+			conn.resetKernelNotice(session, id, flow.cookie, 10, 0)
 			if !conn.resetDownlinkFAR(&flow) {
 				state.stopped = true
 			}
@@ -148,10 +164,11 @@ func (conn *PfcpConnection) applyDownlinkDurationLocked(session *Session, now ti
 	if state == nil {
 		return
 	}
+	defer conn.watchDownlinkSession(session)
 	if session.bar == nil {
 		if state.durationRevision != 0 || state.infinite || !state.extendedUntil.IsZero() {
 			markSuppressionEnd(state, now)
-			conn.resetBARNotifications(state)
+			conn.resetBARNotifications(session)
 			state.durationRevision = 0
 			state.extendedUntil = time.Time{}
 			state.infinite = false
@@ -186,7 +203,7 @@ func (conn *PfcpConnection) applyDownlinkDurationLocked(session *Session, now ti
 func (conn *PfcpConnection) endDownlinkDurationLocked(session *Session, now time.Time) {
 	state := session.downlink
 	markSuppressionEnd(state, now)
-	conn.resetBARNotifications(state)
+	conn.resetBARNotifications(session)
 	state.extendedUntil = time.Time{}
 	state.infinite = false
 	if session.bar == nil {
@@ -212,6 +229,9 @@ func (conn *PfcpConnection) endDownlinkDurationLocked(session *Session, now time
 func (conn *PfcpConnection) serviceDownlinkNotifications(now time.Time) {
 	conn.stateMu.Lock()
 	var outgoing []admittedRequest
+	conn.transport.mu.Lock()
+	available := min(128, max(0, conn.originatedRequestLimit()-len(conn.transport.pending)))
+	conn.transport.mu.Unlock()
 	for id, assoc := range conn.downlinkSessions {
 		session := assoc.Sessions[id]
 		if activeAssociation(conn.associationByID(assoc.ID)) != assoc || session == nil || session.downlink == nil || conn.isClosed() {
@@ -220,9 +240,16 @@ func (conn *PfcpConnection) serviceDownlinkNotifications(now time.Time) {
 		}
 		conn.applyDownlinkDurationLocked(session, now)
 		state := session.downlink
+		if available == 0 {
+			continue
+		}
 		pending := state.pending
 		state.pending = state.pending[:0]
 		for _, notice := range pending {
+			if available == 0 {
+				state.pending = append(state.pending, notice)
+				continue
+			}
 			far, ok := session.FARs[notice.farID]
 			if !ok || far.FarInfo.BufferCookie != notice.cookie || far.FarInfo.Action&12 != 12 || state.fars[notice.farID].epoch != notice.epoch {
 				continue
@@ -252,8 +279,13 @@ func (conn *PfcpConnection) serviceDownlinkNotifications(now time.Time) {
 			conn.transport.pending[report.Sequence()].downlink = bound
 			conn.transport.mu.Unlock()
 			outgoing = append(outgoing, admittedRequest{wire: wire, typ: report.MessageType(), peer: peer, socket: socket, trace: session.Traced})
+			available--
 		}
 		clear(state.pending[len(state.pending):cap(state.pending)])
+		conn.watchDownlinkSession(session)
+		if available == 0 {
+			break
+		}
 	}
 	conn.stateMu.Unlock()
 	_ = conn.sendAdmitted(outgoing)
@@ -284,6 +316,16 @@ func (conn *PfcpConnection) completeDownlinkNotificationLocked(request *pendingR
 	}
 	if result.outcome != requestAccepted {
 		flow := state.fars[bound.notice.farID]
+		if conn.packetBuffers != nil {
+			index := uint64(65)
+			if session.Is5G {
+				index = 64
+			}
+			if bound.notice.qfiPresent {
+				index = uint64(bound.notice.qfi)
+			}
+			conn.resetKernelNotice(session, bound.notice.farID, bound.notice.cookie, 9, index)
+		}
 		flow.set(bound.notice.qfi, bound.notice.qfiPresent, false)
 		state.fars[bound.notice.farID] = flow
 	}
@@ -297,4 +339,50 @@ func (conn *PfcpConnection) advanceDownlinkGenerationLocked(state *downlinkNotif
 		return
 	}
 	state.generation++
+}
+
+func (conn *PfcpConnection) resetKernelNotice(session *Session, farID uint32, cookie uint64, operation uint32, sequence uint64) {
+	if conn.packetBuffers == nil || session.buffers == nil {
+		return
+	}
+	for _, cycle := range session.buffers.owner.cycles {
+		if cycle == nil || cycle.farID != farID || cycle.cookie != cookie || cycle.canceled {
+			continue
+		}
+		if _, err := conn.packetBuffers.plane.BufferControl(ebpf.BufferCommand{SessionID: session.LocalSEID, Cookie: cookie, Lane: cycle.lane, Operation: operation, Sequence: sequence}); err != nil {
+			conn.packetBuffers.fail(err)
+		}
+		return
+	}
+}
+
+// Only sessions with pending reports or a finite duration need maintenance.
+// Ordinary idle BUFF sessions do not add a scan to every PFCP datagram.
+func (conn *PfcpConnection) watchDownlinkSession(session *Session) {
+	state := session.downlink
+	if state == nil || state.stopped || len(state.pending) == 0 && state.extendedUntil.IsZero() {
+		delete(conn.downlinkSessions, session.LocalSEID)
+		return
+	}
+	var assoc *NodeAssociation
+	if session.buffers != nil {
+		assoc = session.buffers.owner.association
+	}
+	if assoc == nil {
+		assoc = conn.downlinkSessions[session.LocalSEID]
+	}
+	if assoc == nil {
+		for _, candidate := range conn.NodeAssociations {
+			if candidate.Sessions[session.LocalSEID] == session {
+				assoc = candidate
+				break
+			}
+		}
+	}
+	if assoc != nil {
+		if conn.downlinkSessions == nil {
+			conn.downlinkSessions = make(map[uint64]*NodeAssociation)
+		}
+		conn.downlinkSessions[session.LocalSEID] = assoc
+	}
 }

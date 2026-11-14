@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	cilium "github.com/cilium/ebpf"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 
@@ -44,7 +45,6 @@ type bufferCycle struct {
 	cookie                                                  uint64
 	head                                                    uint32
 	received, completed                                     uint64
-	notified                                                uint64
 	canceled                                                bool
 	draining, terminal                                      bool
 	grace                                                   <-chan struct{}
@@ -60,10 +60,11 @@ type packetBufferSession struct {
 	revision uint64
 }
 type bufferOwner struct {
+	noticeReady                        bool
 	conn                               *PfcpConnection
 	association                        *NodeAssociation
 	session                            *Session
-	cycles                             [ebpf.BufferFarLanes]*bufferCycle
+	cycles                             map[uint32]*bufferCycle
 	nextCookie                         uint64
 	active, canceled, graced, released bool
 	terminal                           bool
@@ -82,6 +83,7 @@ type PacketBuffering struct {
 	options    BufferingOptions
 	mu         sync.Mutex
 	owners     map[uint64]*bufferOwner
+	work       map[uint64]*bufferOwner
 	reserved   uint32
 	storage    []byte
 	entries    []bufferedPacket
@@ -115,11 +117,14 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 	if err != nil {
 		return nil, err
 	}
+	if err := plane.ConfigureBufferPool(options.Packets); err != nil {
+		return nil, errors.Join(err, sender.Close())
+	}
 	reader, err := plane.NewBufferReader()
 	if err != nil {
 		return nil, errors.Join(err, sender.Close())
 	}
-	buffering := &PacketBuffering{plane: plane, sender: sender, complete: plane.BufferControl, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
+	buffering := &PacketBuffering{plane: plane, sender: sender, complete: plane.BufferControl, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), work: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
 	for i := range buffering.free {
 		buffering.free[i] = uint32(len(buffering.free) - 1 - i)
 	}
@@ -158,15 +163,15 @@ func (conn *PfcpConnection) SetPacketBuffering(buffering *PacketBuffering) error
 	return nil
 }
 
-// reservePacketBuffers runs on a private unpublished session. The pool reserve
-// is acquired before creating an anchor or publishing a buffering FAR.
+// reservePacketBuffers creates metadata for an unpublished session. Packet
+// storage is acquired only by XDP on arrival, independently of PFCP admission.
 func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, session *Session) (*bufferOwner, error) {
 	buffering := conn.packetBuffers
 	if buffering == nil {
 		return nil, errors.New("packet buffering runtime is unavailable")
 	}
 	buffering.mu.Lock()
-	if buffering.closed || buffering.reserved > buffering.options.Packets-buffering.options.PerSession {
+	if buffering.closed {
 		buffering.mu.Unlock()
 		return nil, fmt.Errorf("packet buffering reservation: %w", ebpf.ErrRuleCapacity)
 	}
@@ -174,7 +179,7 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 		buffering.mu.Unlock()
 		return nil, errors.New("buffering session identity already reserved")
 	}
-	owner := &bufferOwner{conn: conn, association: association, session: session}
+	owner := &bufferOwner{conn: conn, association: association, session: session, noticeReady: true, cycles: make(map[uint32]*bufferCycle)}
 	state := &packetBufferSession{owner: owner, cycles: make(map[uint32]*bufferCycle), revision: 1}
 	var lanes []ebpf.BufferLane
 	for farID, far := range session.FARs {
@@ -182,10 +187,6 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 			continue
 		}
 		lane := uint32(len(lanes))
-		if lane >= ebpf.BufferFarLanes {
-			buffering.mu.Unlock()
-			return nil, ebpf.ErrRuleCapacity
-		}
 		owner.nextCookie++
 		cycle := &bufferCycle{farID: farID, lane: lane, cookie: owner.nextCookie, head: noBufferedPacket}
 		owner.cycles[lane] = cycle
@@ -196,27 +197,23 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 		session.FARs[farID] = far
 		lanes = append(lanes, ebpf.BufferLane{Index: lane, Cookie: cycle.cookie, Mode: ebpf.BufferHold, UsesBAR: downlinkBARAssociated(session, far)})
 	}
-	buffering.reserved += buffering.options.PerSession
+	buffering.reserved++
 	buffering.owners[session.LocalSEID] = owner
 	buffering.mu.Unlock()
 	if err := buffering.plane.CreateBufferAnchor(session.LocalSEID, buffering.options.PerSession, lanes); err != nil {
 		buffering.mu.Lock()
 		delete(buffering.owners, session.LocalSEID)
-		buffering.reserved -= buffering.options.PerSession
+		buffering.reserved--
 		buffering.mu.Unlock()
 		return nil, err
 	}
 	session.buffers = state
-	session.downlink = newDownlinkNotifications(int(buffering.options.PerSession))
+	session.downlink = newDownlinkNotifications(0)
 	return owner, nil
 }
 
 func (conn *PfcpConnection) activatePacketBuffers(owner *bufferOwner) {
 	owner.active = true
-	if conn.downlinkSessions == nil {
-		conn.downlinkSessions = make(map[uint64]*NodeAssociation)
-	}
-	conn.downlinkSessions[owner.session.LocalSEID] = owner.association
 	conn.applyDownlinkDurationLocked(owner.session, time.Now())
 	conn.packetBuffers.noteQueued(owner)
 }
@@ -225,27 +222,29 @@ func (conn *PfcpConnection) activatePacketBuffers(owner *bufferOwner) {
 // notification progress separate from consumption so the first committed
 // packet remains the first one reported, including out-of-order ring delivery.
 func (buffering *PacketBuffering) noteQueued(owner *bufferOwner) {
-	if !owner.active || owner.canceled {
+	if !owner.active || owner.canceled || !owner.noticeReady {
 		return
 	}
 	session := owner.association.Sessions[owner.session.LocalSEID]
 	if session == nil || session.buffers == nil || session.buffers.owner != owner {
 		return
 	}
+	owner.noticeReady = false
 	for _, cycle := range owner.cycles {
 		if cycle == nil || cycle.canceled {
 			continue
 		}
-		for index := cycle.head; index != noBufferedPacket; index = buffering.entries[index].next {
-			packet := &buffering.entries[index]
-			if packet.record.Sequence <= cycle.notified {
-				continue
-			}
-			if packet.record.Sequence > cycle.received {
+		for range 65 {
+			record, present, err := buffering.plane.ReadBufferNotice(owner.session.LocalSEID, cycle.cookie, cycle.lane)
+			if err != nil {
+				buffering.fail(err)
 				break
 			}
-			owner.conn.noteDownlinkPacketLocked(session, cycle.farID, packet.record, packet.arrived)
-			cycle.notified = packet.record.Sequence
+			if !present {
+				break
+			}
+			arrived := buffering.baseTime.Add(time.Duration(record.ReceivedNS - buffering.baseNS))
+			owner.conn.noteDownlinkPacketLocked(session, cycle.farID, record, arrived)
 		}
 	}
 }
@@ -271,12 +270,6 @@ func (buffering *PacketBuffering) takePacket(owner *bufferOwner, cycle *bufferCy
 	}
 	buffering.entries[index] = bufferedPacket{record: record, arrived: arrived, next: noBufferedPacket, owner: owner, cycle: cycle}
 	return index, nil
-}
-func (buffering *PacketBuffering) releasePacket(index uint32) {
-	buffering.mu.Lock()
-	defer buffering.mu.Unlock()
-	buffering.entries[index] = bufferedPacket{}
-	buffering.free = append(buffering.free, index)
 }
 func (buffering *PacketBuffering) ownerSnapshot() []*bufferOwner {
 	buffering.mu.Lock()
@@ -304,7 +297,7 @@ func (buffering *PacketBuffering) consumePacket(record ebpf.BufferRecord) {
 	buffering.mu.Lock()
 	owner := buffering.owners[record.SessionID]
 	buffering.mu.Unlock()
-	if owner == nil || record.Lane >= ebpf.BufferFarLanes {
+	if owner == nil {
 		buffering.fail(errors.New("admitted packet has no reserved owner"))
 		return
 	}
@@ -349,7 +342,11 @@ func (buffering *PacketBuffering) consumePacket(record ebpf.BufferRecord) {
 		}
 		cycle.received++
 	}
+	if record.Notify {
+		owner.noticeReady = true
+	}
 	buffering.noteQueued(owner)
+	buffering.schedule(owner)
 	buffering.signal()
 }
 
@@ -363,7 +360,35 @@ func (buffering *PacketBuffering) servicePackets() {
 			return
 		case <-ticker.C:
 		}
-		for _, owner := range buffering.ownerSnapshot() {
+		for range 512 {
+			var id uint64
+			if err := buffering.plane.BufferNoticeReady.NextKey(nil, &id); err != nil {
+				if !errors.Is(err, cilium.ErrKeyNotExist) {
+					buffering.fail(err)
+				}
+				break
+			}
+			if err := buffering.plane.BufferNoticeReady.Delete(id); err != nil && !errors.Is(err, cilium.ErrKeyNotExist) {
+				buffering.fail(err)
+				break
+			}
+			buffering.mu.Lock()
+			owner := buffering.owners[id]
+			buffering.mu.Unlock()
+			if owner != nil {
+				owner.conn.stateMu.Lock()
+				owner.noticeReady = true
+				owner.conn.stateMu.Unlock()
+				buffering.schedule(owner)
+			}
+		}
+		buffering.mu.Lock()
+		owners := make([]*bufferOwner, 0, len(buffering.work))
+		for _, owner := range buffering.work {
+			owners = append(owners, owner)
+		}
+		buffering.mu.Unlock()
+		for _, owner := range owners {
 			buffering.serviceOutput(owner)
 		}
 	}
@@ -405,8 +430,10 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			} else if !packet.sent && !buffering.packetExpired(owner, cycle, packet, now) {
 				break
 			}
+			buffering.mu.Lock()
 			_, err := buffering.complete(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Sequence: packet.record.Sequence, Downlink: packet.record.Downlink})
 			if err != nil {
+				buffering.mu.Unlock()
 				buffering.ioFailure(cycle, now, fmt.Errorf("complete admitted buffer: %w", err))
 				break
 			}
@@ -414,7 +441,9 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			index := cycle.head
 			cycle.head = packet.next
 			cycle.completed = packet.record.Sequence
-			buffering.releasePacket(index)
+			buffering.entries[index] = bufferedPacket{}
+			buffering.free = append(buffering.free, index)
+			buffering.mu.Unlock()
 			buffering.signal()
 		}
 		if !owner.canceled && cycle.draining && cycle.ready && !cycle.canceled && cycle.head == noBufferedPacket {
@@ -431,7 +460,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 					buffering.fail(err)
 					continue
 				}
-				owner.cycles[cycle.lane] = nil
+				delete(owner.cycles, cycle.lane)
 			}
 		}
 	}
@@ -449,6 +478,19 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				return
 			}
 		}
+		for _, cycle := range owner.cycles {
+			if cycle == nil {
+				continue
+			}
+			if _, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 6}); err != nil {
+				buffering.fail(err)
+				return
+			}
+		}
+		if err := buffering.plane.BufferNoticeReady.Delete(owner.session.LocalSEID); err != nil && !errors.Is(err, cilium.ErrKeyNotExist) {
+			buffering.fail(err)
+			return
+		}
 		if err := buffering.plane.BufferAnchors.Delete(owner.session.LocalSEID); err != nil {
 			buffering.fail(err)
 			return
@@ -457,7 +499,8 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 		if !owner.released {
 			owner.released = true
 			delete(buffering.owners, owner.session.LocalSEID)
-			buffering.reserved -= buffering.options.PerSession
+			delete(buffering.work, owner.session.LocalSEID)
+			buffering.reserved--
 		}
 		buffering.mu.Unlock()
 		if owner.retirement != nil {
@@ -496,6 +539,7 @@ func (buffering *PacketBuffering) Close() error {
 					owner.terminal = false
 				}
 			}
+			buffering.schedule(owner)
 			owner.conn.stateMu.Unlock()
 		}
 		if len(owners) > 0 {
@@ -628,6 +672,18 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 			}
 		}
 		if chosen == nil {
+			active := owner.canceled && !owner.released
+			for _, cycle := range owner.cycles {
+				if cycle != nil && (cycle.canceled || cycle.draining || cycle.head != noBufferedPacket) {
+					active = true
+					break
+				}
+			}
+			if !active {
+				buffering.mu.Lock()
+				delete(buffering.work, owner.session.LocalSEID)
+				buffering.mu.Unlock()
+			}
 			conn.stateMu.Unlock()
 			return
 		}
@@ -670,4 +726,10 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 			return
 		}
 	}
+}
+
+func (buffering *PacketBuffering) schedule(owner *bufferOwner) {
+	buffering.mu.Lock()
+	buffering.work[owner.session.LocalSEID] = owner
+	buffering.mu.Unlock()
 }

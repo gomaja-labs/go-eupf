@@ -49,21 +49,25 @@ type BpfObjects struct {
 	qerMutex     sync.Mutex
 	urrMutex     sync.Mutex
 
-	qerMapSize uint32
-	farMapSize uint32
-	pdrMapSize uint32
-	urrMapSize uint32
+	qerMapSize     uint32
+	farMapSize     uint32
+	pdrMapSize     uint32
+	urrMapSize     uint32
+	bufferSessions uint32
+	bufferPackets  uint32
 }
 
 func NewBpfObjects() *BpfObjects {
 	return &BpfObjects{
-		farMutex:   sync.Mutex{},
-		qerMutex:   sync.Mutex{},
-		urrMutex:   sync.Mutex{},
-		qerMapSize: 1024,
-		farMapSize: 1024,
-		pdrMapSize: 1024,
-		urrMapSize: 1024,
+		farMutex:       sync.Mutex{},
+		qerMutex:       sync.Mutex{},
+		urrMutex:       sync.Mutex{},
+		qerMapSize:     1024,
+		farMapSize:     1024,
+		pdrMapSize:     1024,
+		urrMapSize:     1024,
+		bufferSessions: 65535,
+		bufferPackets:  4096,
 	}
 }
 
@@ -81,6 +85,17 @@ func (bpfObjects *BpfObjects) SetQerMapSize(qerMapSize uint32) {
 
 func (bpfObjects *BpfObjects) SetUrrMapSize(urrMapSize uint32) {
 	bpfObjects.urrMapSize = urrMapSize
+}
+
+// SetBufferCapacity sizes session metadata independently of the payload pool.
+func (bpfObjects *BpfObjects) SetBufferCapacity(sessions, packets uint32) {
+	if sessions == 0 {
+		sessions = 65535
+	}
+	if packets == 0 {
+		packets = 4096
+	}
+	bpfObjects.bufferSessions, bpfObjects.bufferPackets = sessions, packets
 }
 
 func (bpfObjects *BpfObjects) Load() error {
@@ -106,6 +121,9 @@ func (bpfObjects *BpfObjects) Load() error {
 		"pdr_map_teid_ip4":     bpfObjects.pdrMapSize,
 		"pdr_buckets":          4*bpfObjects.pdrMapSize + 1,
 		"urr_map":              bpfObjects.urrMapSize,
+		"buffer_anchors":       bpfObjects.bufferSessions,
+		"buffer_states":        2 * bpfObjects.farMapSize,
+		"buffer_notice_ready":  bpfObjects.bufferSessions,
 	}
 
 	for name, size := range desiredMapSizes {
@@ -158,6 +176,9 @@ func (bpfObjects *BpfObjects) Load() error {
 
 	bpfObjects.grace, err = newRuleGrace()
 	if err != nil {
+		return err
+	}
+	if err := bpfObjects.ConfigureBufferPool(bpfObjects.bufferPackets); err != nil {
 		return err
 	}
 	loaded = true

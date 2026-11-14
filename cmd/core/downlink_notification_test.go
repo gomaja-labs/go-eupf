@@ -249,6 +249,10 @@ func TestDownlinkInfiniteBufferingCanBeStoppedOrRemoved(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// The publication callback applies changed BAR controls before maintenance.
+			conn.stateMu.Lock()
+			conn.applyDownlinkDurationLocked(session, now.Add(24*time.Hour))
+			conn.stateMu.Unlock()
 			conn.serviceDownlinkNotifications(now.Add(24 * time.Hour))
 			if session.bar != nil && (session.bar.durationPresent || session.bar.dlPacketCountPresent) {
 				t.Fatal("stopped extended parameters remained provisioned")
@@ -406,6 +410,10 @@ func TestDownlinkCompletionCannotRearmAfterExtendedBufferingEnds(t *testing.T) {
 	if err := updateBAR(session, ie.NewUpdateBARWithinSessionModificationRequest(ie.NewBARID(0), ie.NewDLBufferingDuration(2*time.Second))); err != nil {
 		t.Fatal(err)
 	}
+	// Match packetBufferPlan.finish: publication starts the new duration.
+	conn.stateMu.Lock()
+	conn.applyDownlinkDurationLocked(session, now)
+	conn.stateMu.Unlock()
 	conn.serviceDownlinkNotifications(now)
 	conn.serviceDownlinkNotifications(now.Add(2 * time.Second))
 	queueDownlinkNotice(t, conn, session, 2, now.Add(2*time.Second))

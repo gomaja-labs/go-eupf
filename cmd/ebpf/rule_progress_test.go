@@ -76,7 +76,7 @@ func TestRuleConsistencyHasNoSharedPacketGate(t *testing.T) {
 		}
 		for _, member := range value.Members {
 			lock, ok := btf.UnderlyingType(member.Type).(*btf.Struct)
-			if ok && lock.Name == "bpf_spin_lock" && name != "buffer_anchors" && !kernelUpdateLocks[name] {
+			if ok && lock.Name == "bpf_spin_lock" && name != "buffer_anchors" && name != "buffer_pool" && !kernelUpdateLocks[name] {
 				t.Fatalf("shared packet gate in map %s", name)
 			}
 		}

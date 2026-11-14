@@ -224,12 +224,12 @@ func (buffering *PacketBuffering) reserveCycle(owner *bufferOwner, farID uint32)
 	if owner.nextCookie == math.MaxUint64 {
 		return nil, errors.New("buffer cookie exhausted")
 	}
-	for lane, existing := range owner.cycles {
-		if existing != nil {
+	for lane := uint32(0); uint64(lane) <= uint64(len(owner.cycles)); lane++ {
+		if owner.cycles[lane] != nil {
 			continue
 		}
 		owner.nextCookie++
-		cycle := &bufferCycle{farID: farID, lane: uint32(lane), cookie: owner.nextCookie, head: noBufferedPacket}
+		cycle := &bufferCycle{farID: farID, lane: lane, cookie: owner.nextCookie, head: noBufferedPacket}
 		if _, err := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: owner.session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 5, Mode: ebpf.BufferHold}); err != nil {
 			return nil, fmt.Errorf("reserve buffering lane: %w", err)
 		}
@@ -286,10 +286,6 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 			}
 		} else {
 			owner.active = true
-			if conn.downlinkSessions == nil {
-				conn.downlinkSessions = make(map[uint64]*NodeAssociation)
-			}
-			conn.downlinkSessions[owner.session.LocalSEID] = owner.association
 			if plan.before != nil && hasBufferedBAR(plan.before) && !hasBufferedBAR(plan.after) && plan.after.downlink != nil && plan.after.bar != nil && (plan.after.bar.durationPresent || plan.after.bar.dlPacketCountPresent) {
 				conn.endDownlinkDurationLocked(plan.after, plan.activated)
 			}
@@ -306,6 +302,9 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 		if plan.created {
 			owner.canceled, owner.terminal, owner.grace = true, terminal, plan.grace
 		}
+	}
+	if !committed || len(plan.cancel) > 0 || len(plan.drain) > 0 || plan.kind == deleteSessionMutation {
+		conn.packetBuffers.schedule(owner)
 	}
 	conn.packetBuffers.signal()
 }

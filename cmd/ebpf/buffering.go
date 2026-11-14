@@ -16,9 +16,6 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 )
 
-// BufferFarLanes includes current FARs and retiring buffering lifetimes.
-const BufferFarLanes = 128
-
 // BufferFrameSize is the current fixed ring payload class.
 const BufferFrameSize = config.BufferFrameBytes
 
@@ -38,12 +35,25 @@ type bufferFar struct {
 	Mode, Ready                 uint32
 	Preparing, Reserved         uint32
 	UsesBAR, Downlink           uint32
+	Notices                     uint64
+	AbsentNotice, AbsentSeen    uint32
+	Seen                        uint64
+	NoticeTime                  [65]uint64
+	NoticePDR                   [65]uint16
+	ReservedPDR                 [6]byte
+}
+type bufferKey struct {
+	SessionID      uint64
+	Lane, Reserved uint32
+}
+type bufferPool struct {
+	Lock, Outstanding, Limit, Reserved uint32
+	Dropped                            uint64
 }
 type bufferAnchor struct {
 	Lock, Outstanding, Limit, BAROutstanding         uint32
 	BARLimit, BARDLOutstanding, BARDLLimit, Reserved uint32
 	BARUntilNS                                       uint64
-	FAR                                              [BufferFarLanes]bufferFar
 }
 
 // BufferLane identifies one FAR buffering lifetime independently of FAR slots.
@@ -64,16 +74,35 @@ func (b *BpfObjects) CreateBufferAnchor(session uint64, limit uint32, lanes []Bu
 		return errors.New("zero buffering session identity")
 	}
 	anchor := bufferAnchor{Limit: limit, BARLimit: limit, BARDLLimit: limit}
+	if err := b.BufferAnchors.Update(session, &anchor, cilium.UpdateNoExist); err != nil {
+		return err
+	}
+	created := make([]bufferKey, 0, len(lanes))
+	success := false
+	defer func() {
+		if !success {
+			for _, key := range created {
+				_ = b.BufferStates.Delete(key)
+			}
+			_ = b.BufferAnchors.Delete(session)
+		}
+	}()
 	for _, lane := range lanes {
-		if lane.Index >= BufferFarLanes || lane.Cookie == 0 || lane.Mode != BufferHold || anchor.FAR[lane.Index].Cookie != 0 {
+		if lane.Cookie == 0 || lane.Mode != BufferHold {
 			return errors.New("invalid buffering lane")
 		}
-		anchor.FAR[lane.Index] = bufferFar{Cookie: lane.Cookie, Mode: lane.Mode}
+		state := bufferFar{Cookie: lane.Cookie, Mode: lane.Mode}
 		if lane.UsesBAR {
-			anchor.FAR[lane.Index].UsesBAR = 1
+			state.UsesBAR = 1
 		}
+		key := bufferKey{SessionID: session, Lane: lane.Index}
+		if err := b.BufferStates.Update(key, &state, cilium.UpdateNoExist); err != nil {
+			return err
+		}
+		created = append(created, key)
 	}
-	return b.BufferAnchors.Update(session, &anchor, cilium.UpdateNoExist)
+	success = true
+	return nil
 }
 
 // BufferCommand changes one lifetime or reads its admission/completion state.
@@ -94,6 +123,12 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	if b.UpfBufferControlFunc == nil || b.UpfBufferControlFunc.FD() < 0 {
 		return BufferCommand{}, errors.New("buffer control is not loaded")
 	}
+	key := bufferKey{SessionID: command.SessionID, Lane: command.Lane}
+	if command.Operation == 5 {
+		if err := b.BufferStates.Update(key, &bufferFar{}, cilium.UpdateNoExist); err != nil {
+			return BufferCommand{}, err
+		}
+	}
 	data := make([]byte, 96)
 	binary.LittleEndian.PutUint64(data, command.SessionID)
 	binary.LittleEndian.PutUint64(data[8:], command.Cookie)
@@ -113,11 +148,19 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	binary.LittleEndian.PutUint64(data[88:], command.BARUntilNS)
 	output := make([]byte, 96)
 	action, err := b.UpfBufferControlFunc.Run(&cilium.RunOptions{Data: data, DataOut: output})
-	if err != nil {
-		return BufferCommand{}, fmt.Errorf("buffer control: %w", err)
-	}
-	if action != 1 {
+	if err != nil || action != 1 {
+		if command.Operation == 5 {
+			_ = b.BufferStates.Delete(key)
+		}
+		if err != nil {
+			return BufferCommand{}, fmt.Errorf("buffer control: %w", err)
+		}
 		return BufferCommand{}, errors.New("buffer control rejected stale or out-of-order command")
+	}
+	if command.Operation == 6 {
+		if err := b.BufferStates.Delete(key); err != nil {
+			return BufferCommand{}, err
+		}
 	}
 	command.Mode = binary.LittleEndian.Uint32(output[32:])
 	command.Ready = binary.LittleEndian.Uint32(output[36:])
@@ -256,4 +299,36 @@ func parseBufferRecord(raw []byte) (BufferRecord, error) {
 		Kind: raw[50], NR: raw[51], SourceInterface: raw[52], OuterRemoval: raw[53], OuterRemovalPresent: raw[54], ExtensionDeletion: raw[55], QFI: raw[56], QFIPresent: raw[57] != 0, PPI: raw[58], Notify: raw[59] != 0, Downlink: raw[60]&1 != 0,
 		Packet: raw[64 : 64+length],
 	}, nil
+}
+
+// ConfigureBufferPool runs at startup before publishing any producers.
+func (b *BpfObjects) ConfigureBufferPool(limit uint32) error {
+	if b.BufferPool == nil || b.BufferPool.FD() < 0 || limit == 0 {
+		return errors.New("invalid buffer pool")
+	}
+	return b.BufferPool.Put(uint32(0), bufferPool{Limit: limit})
+}
+
+// BufferPoolUsage includes queued ring records, retained payloads, and all drops
+// caused by packet-storage limits. It never controls PFCP session admission.
+func (b *BpfObjects) BufferPoolUsage() (outstanding uint32, dropped uint64, err error) {
+	if b.BufferPool == nil || b.BufferPool.FD() < 0 {
+		return 0, 0, errors.New("buffer pool is not loaded")
+	}
+	var pool bufferPool
+	if err = b.BufferPool.Lookup(uint32(0), &pool); err != nil {
+		return 0, 0, err
+	}
+	return pool.Outstanding, pool.Dropped, nil
+}
+
+// ReadBufferNotice consumes one durable first-packet observation. Its storage
+// is independent of payload credits and of ring availability.
+func (b *BpfObjects) ReadBufferNotice(session, cookie uint64, lane uint32) (BufferRecord, bool, error) {
+	result, err := b.BufferControl(BufferCommand{SessionID: session, Cookie: cookie, Lane: lane, Operation: 8})
+	if err != nil || result.Preparing == 0 {
+		return BufferRecord{}, false, err
+	}
+	index := result.Preparing - 1
+	return BufferRecord{SessionID: session, Cookie: cookie, Lane: lane, PDRID: result.Limit, ReceivedNS: result.Produced, QFI: uint8(index & 63), QFIPresent: index < 64, Notify: true, Downlink: true}, true, nil
 }

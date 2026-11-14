@@ -23,12 +23,15 @@ import (
 func packetBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
 	return packetBufferFixtureOptions(t, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 }
-func packetBufferFixtureOptions(t *testing.T, options BufferingOptions) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
+func packetBufferFixtureOptions(t *testing.T, options BufferingOptions, configure ...func(*ebpf.BpfObjects)) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
 	t.Helper()
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		t.Fatal(err)
 	}
 	plane := ebpf.NewBpfObjects()
+	for _, apply := range configure {
+		apply(plane)
+	}
 	if err := plane.Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +69,11 @@ func packetBufferFixtureOptions(t *testing.T, options BufferingOptions) (*ebpf.B
 }
 func bufferKernelPacket(t *testing.T, id uint16) []byte {
 	t.Helper()
-	ip := &layers.IPv4{Version: 4, TTL: 64, Id: id, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 51, 100, 1}, DstIP: net.IP{198, 51, 100, 2}}
+	return bufferKernelPacketFor(t, id, net.IP{198, 51, 100, 2})
+}
+func bufferKernelPacketFor(t *testing.T, id uint16, destination net.IP) []byte {
+	t.Helper()
+	ip := &layers.IPv4{Version: 4, TTL: 64, Id: id, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 51, 100, 1}, DstIP: destination}
 	udp := &layers.UDP{SrcPort: 1234, DstPort: 4321}
 	if err := udp.SetNetworkLayerForChecksum(ip); err != nil {
 		t.Fatal(err)
@@ -160,23 +167,23 @@ func TestApplicationBufferReaderPreservesPacketsAndWaitsForCommit(t *testing.T) 
 	}
 }
 
-func TestPacketBufferReservationIsGlobalAndPrecedesPublication(t *testing.T) {
-	_, buffering, conn, assoc, first, _ := packetBufferFixture(t)
+// TS 29.244 V20.1.0 clause 5.2.3.1: accepting BUFF does not reserve packets.
+func TestPacketBufferSessionsDoNotReserveStorage(t *testing.T) {
+	_, buffering, conn, assoc, _, _ := packetBufferFixture(t)
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
-	if _, err := conn.reservePacketBuffers(assoc, first); err != nil {
-		t.Fatal(err)
+	for id := uint64(11); id < 27; id++ {
+		session := NewSession(id, id+100, "", "", false)
+		session.FARs[1] = SFarInfo{FarInfo: ebpf.FarInfo{Action: 12}}
+		if _, err := conn.reservePacketBuffers(assoc, session); err != nil {
+			t.Fatalf("BUFF session %d rejected with an empty pool: %v", id, err)
+		}
 	}
-	second := NewSession(12, 78, "", "", false)
-	if _, err := conn.reservePacketBuffers(assoc, second); err != nil {
-		t.Fatal(err)
-	}
-	third := NewSession(13, 79, "", "", false)
-	if _, err := conn.reservePacketBuffers(assoc, third); err == nil {
-		t.Fatal("third reservation exceeded the shared packet budget")
-	}
-	if raw, err := buffering.plane.BufferAnchors.LookupBytes(uint64(13)); err != nil || raw != nil {
-		t.Fatalf("unreserved anchor lookup length=%d error=%v", len(raw), err)
+	buffering.mu.Lock()
+	free := len(buffering.free)
+	buffering.mu.Unlock()
+	if free != 8 {
+		t.Fatalf("accepting sessions consumed packet storage: free=%d", free)
 	}
 }
 
@@ -564,7 +571,7 @@ func TestApplicationBufferDeletionWaitsForOutputAndCancelsRemainder(t *testing.T
 	buffering.mu.Lock()
 	reserved := buffering.reserved
 	buffering.mu.Unlock()
-	if reserved != 4 {
+	if reserved != 1 {
 		t.Fatalf("in-flight output lost its reservation: %d", reserved)
 	}
 	unblock()

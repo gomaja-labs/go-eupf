@@ -470,6 +470,7 @@ func (connection *PfcpConnection) Run() {
 	// A reassembled UDP payload can exceed the link MTU. Reading the maximum
 	// non-jumbo UDP size avoids silently truncating valid PFCP messages.
 	buf := make([]byte, 65535)
+	var nextDownlinkService time.Time
 	for {
 		select {
 		case <-connection.done:
@@ -498,7 +499,11 @@ func (connection *PfcpConnection) Run() {
 		default:
 		}
 		connection.serviceTransactions(time.Now())
-		connection.serviceDownlinkNotifications(time.Now())
+		now := time.Now()
+		if !now.Before(nextDownlinkService) {
+			connection.serviceDownlinkNotifications(now)
+			nextDownlinkService = time.Now().Add(20 * time.Millisecond)
+		}
 		connection.serviceHeartbeats(time.Now())
 		socket := connection.socket()
 		_ = socket.SetReadDeadline(time.Now().Add(50 * time.Millisecond))

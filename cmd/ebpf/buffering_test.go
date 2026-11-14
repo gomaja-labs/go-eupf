@@ -385,13 +385,13 @@ func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
 	}
 	// Synthetic producer paused between eligibility and the copy continuation.
 	// The anchor's first lane has its preparing count after the 32-byte state.
-	raw, err := b.BufferAnchors.LookupBytes(uint64(42))
+	raw, err := b.BufferStates.LookupBytes(bufferKey{SessionID: 42})
 	if err != nil || len(raw) < 52 {
 		t.Fatalf("anchor: %v", err)
 	}
-	offset := binary.Size(bufferAnchor{}) - BufferFarLanes*binary.Size(bufferFar{}) + 32
+	offset := 32
 	binary.LittleEndian.PutUint32(raw[offset:], 1)
-	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
+	if err := b.BufferStates.Put(bufferKey{SessionID: 42}, raw); err != nil {
 		t.Fatal(err)
 	}
 	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1})
@@ -399,7 +399,7 @@ func TestBufferPreparedProducerPreventsDirectMode(t *testing.T) {
 		t.Fatalf("prepared producer was bypassed: mode=%d error=%v", state.Mode, err)
 	}
 	binary.LittleEndian.PutUint32(raw[offset:], 0)
-	if err := b.BufferAnchors.Put(uint64(42), raw); err != nil {
+	if err := b.BufferStates.Put(bufferKey{SessionID: 42}, raw); err != nil {
 		t.Fatal(err)
 	}
 	state, err = b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1})
@@ -418,7 +418,15 @@ func TestBufferPreparedProducerRechecksTheSharedCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	anchor.Outstanding = 1
-	anchor.FAR[0].Produced, anchor.FAR[0].Preparing, anchor.FAR[0].Downlink = 1, 1, 1
+	var far bufferFar
+	key := bufferKey{SessionID: 42}
+	if err := b.BufferStates.Lookup(key, &far); err != nil {
+		t.Fatal(err)
+	}
+	far.Produced, far.Preparing, far.Downlink = 1, 1, 1
+	if err := b.BufferStates.Put(key, &far); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.BufferAnchors.Put(uint64(42), &anchor); err != nil {
 		t.Fatal(err)
 	}
