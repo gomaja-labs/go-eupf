@@ -113,7 +113,7 @@ func stageSessionBAR(session *Session, request any) error {
 	var err error
 	switch req := request.(type) {
 	case *message.SessionEstablishmentRequest:
-		err = createBAR(&candidate, req.CreateBAR)
+		err = createBARWithExtendedParameters(&candidate, req.CreateBAR, false)
 	case *message.SessionModificationRequest:
 		if err = removeBAR(&candidate, req.RemoveBAR); err == nil {
 			if req.RemoveBAR != nil {
@@ -166,6 +166,10 @@ func validateBARReferences(session *Session) error {
 }
 
 func createBAR(session *Session, value *ie.IE) error {
+	return createBARWithExtendedParameters(session, value, true)
+}
+
+func createBARWithExtendedParameters(session *Session, value *ie.IE, extended bool) error {
 	if value == nil {
 		return nil
 	}
@@ -185,10 +189,16 @@ func createBAR(session *Session, value *ie.IE) error {
 	}
 	// Table 7.5.2.6-1: BAR ID zero is a present, valid identifier.
 	bar := &bufferingActionRule{id: id}
-	if err := applyBARParameters(bar, fields.DownlinkDataNotificationDelay, fields.SuggestedBufferingPacketsCount, fields.DLBufferingDuration, fields.DLBufferingSuggestedPacketCount); err != nil {
+	// TS 29.244 V20.1.0 table 7.5.2.6-1: these two fields apply to
+	// Create BAR in Modification only. Ignore them in Establishment (7.6.10).
+	duration, dlCount := fields.DLBufferingDuration, fields.DLBufferingSuggestedPacketCount
+	if !extended {
+		duration, dlCount = nil, nil
+	}
+	if err := applyBARParameters(bar, fields.DownlinkDataNotificationDelay, fields.SuggestedBufferingPacketsCount, duration, dlCount); err != nil {
 		return &ruleFailure{ie.RuleIDTypeBAR, uint32(id), err}
 	}
-	return storeBAR(session, bar, fields.DLBufferingDuration != nil)
+	return storeBAR(session, bar, duration != nil)
 }
 
 func updateBAR(session *Session, value *ie.IE) error {
