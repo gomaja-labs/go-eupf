@@ -153,6 +153,7 @@ static __always_inline void buffer_expire_bar(struct buffer_anchor *anchor, __u6
 }
 
 // Private test-run control entry; never placed in the attached program array.
+#if defined(BUFFER_ADMISSION) || defined(BUFFER_CONTINUATION)
 SEC("xdp/upf_buffer_control")
 int upf_buffer_control_func(struct xdp_md *ctx) {
     struct buffer_command *command=(void *)(long)ctx->data;
@@ -259,6 +260,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     }
     return action;
 }
+#endif
 
 // Only BUFF resolves/copies this private request. No packet or map pointer
 // crosses the tail-call boundary; the original RCU reader pins rule versions.
@@ -400,6 +402,7 @@ static __always_inline void buffer_prepare_failed(struct buffer_anchor *anchor, 
 // Fixed slots are copied before sequence assignment. Reservation/copy failures
 // cannot strand a sequence. No helper runs while the admission lock is held.
 // TS 29.244 V20.1.0 clauses 5.2.3.1 and 5.2.4.2.
+#if defined(BUFFER_ADMISSION) || defined(BUFFER_CONTINUATION)
 SEC("xdp/upf_buffer_admission")
 int upf_buffer_admission_func(struct xdp_md *ctx) {
     __u32 key=0;
@@ -491,3 +494,4 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     bpf_ringbuf_submit(record,0);
     return XDP_DROP;
 }
+#endif

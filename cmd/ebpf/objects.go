@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
 )
 
 //
@@ -30,23 +31,30 @@ import (
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
-	renderMutex         sync.Mutex
-	renderCollection    *ebpf.Collection
-	admissionCollection *ebpf.Collection
-	sharedConfiguration *ebpf.Map
-	renderClosed        bool
-	bufferMutex         sync.Mutex
-	bufferReadClaimed   bool
-	bufferReadClosed    bool
-	bufferReader        *BufferReader
-	bucketMutex         sync.Mutex
-	bucketIDs           *IdTracker
-	ruleMutex           sync.Mutex
-	ruleKeys            ruleKeyIndex
-	ruleImages          map[pdrMutationKey]pdrImage
-	rulePoison          error
-	ruleClosed          bool
-	grace               *ruleGrace
+	renderMutex                      sync.Mutex
+	renderCollection                 *ebpf.Collection
+	admissionCollection              *ebpf.Collection
+	controllerCollection             *ebpf.Collection
+	initialEntrypoint, initialRouter *ebpf.Program
+	dataPlaneLinks                   *[]link.Link
+	// UpfBufferControlFunc loads when metadata first needs serialized control.
+	UpfBufferControlFunc *ebpf.Program
+	// UpfBufferAdmissionFunc loads before publishing the first BUFF producer.
+	UpfBufferAdmissionFunc *ebpf.Program
+	sharedConfiguration    *ebpf.Map
+	renderClosed           bool
+	bufferMutex            sync.Mutex
+	bufferReadClaimed      bool
+	bufferReadClosed       bool
+	bufferReader           *BufferReader
+	bucketMutex            sync.Mutex
+	bucketIDs              *IdTracker
+	ruleMutex              sync.Mutex
+	ruleKeys               ruleKeyIndex
+	ruleImages             map[pdrMutationKey]pdrImage
+	rulePoison             error
+	ruleClosed             bool
+	grace                  *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -171,7 +179,6 @@ func (bpfObjects *BpfObjects) Load() error {
 
 	if info, err := bpfObjects.FarMap.Info(); err == nil {
 		bpfObjects.farIdTracker = NewIdTracker(info.MaxEntries)
-
 	} else {
 		return err
 	}
@@ -223,6 +230,13 @@ func (bpfObjects *BpfObjects) Close() error {
 	}
 	bpfObjects.renderMutex.Lock()
 	bpfObjects.renderClosed = true
+	for _, program := range []*ebpf.Program{bpfObjects.initialEntrypoint, bpfObjects.initialRouter} {
+		if program != nil {
+			err = errors.Join(err, program.Close())
+		}
+	}
+	bpfObjects.initialEntrypoint, bpfObjects.initialRouter = nil, nil
+	bpfObjects.dataPlaneLinks = nil
 	if bpfObjects.renderCollection != nil {
 		bpfObjects.renderCollection.Close()
 		bpfObjects.renderCollection = nil
@@ -231,6 +245,12 @@ func (bpfObjects *BpfObjects) Close() error {
 		bpfObjects.admissionCollection.Close()
 		bpfObjects.admissionCollection = nil
 	}
+	if bpfObjects.controllerCollection != nil {
+		bpfObjects.controllerCollection.Close()
+		bpfObjects.controllerCollection = nil
+	}
+	bpfObjects.UpfBufferControlFunc = nil
+	bpfObjects.UpfBufferAdmissionFunc = nil
 	if bpfObjects.sharedConfiguration != nil {
 		err = errors.Join(err, bpfObjects.sharedConfiguration.Close())
 		bpfObjects.sharedConfiguration = nil
@@ -241,11 +261,13 @@ func (bpfObjects *BpfObjects) Close() error {
 	))
 }
 
-type LoaderFunc func(obj interface{}, opts *ebpf.CollectionOptions) error
-type Loader struct {
-	LoaderFunc
-	object interface{}
-}
+type (
+	LoaderFunc func(obj interface{}, opts *ebpf.CollectionOptions) error
+	Loader     struct {
+		LoaderFunc
+		object interface{}
+	}
+)
 
 func LoadAllObjects(opts *ebpf.CollectionOptions, loaders ...Loader) error {
 	for _, loader := range loaders {
@@ -268,6 +290,8 @@ func CloseAllObjects(closers ...io.Closer) error {
 // ResizeAllMaps changes capacities before Load. Live replacement would leave
 // attached programs reading old maps, so it is rejected without changing state.
 func (bpfObjects *BpfObjects) ResizeAllMaps(qerMapSize, farMapSize, pdrMapSize, urrMapSize uint32) error {
+	bpfObjects.renderMutex.Lock()
+	defer bpfObjects.renderMutex.Unlock()
 	if bpfObjects.UpfIpEntrypointFunc != nil {
 		return errors.New("map capacities can only change before Load")
 	}
@@ -330,7 +354,6 @@ func NewIdTracker(size uint32) *IdTracker {
 }
 
 func (t *IdTracker) GetNext() (next uint32, err error) {
-
 	i := t.bitmap.Iterator()
 	if i.HasNext() {
 		next := i.Next()
@@ -347,4 +370,19 @@ func (t *IdTracker) Release(id uint32) {
 	}
 
 	t.bitmap.Add(id)
+}
+
+// EditDataPlaneLinks serializes interface edits with first-BUFF program
+// installation. The edit callback owns the link slice until it returns.
+func (b *BpfObjects) EditDataPlaneLinks(links *[]link.Link, edit func(*ebpf.Program) error) error {
+	b.renderMutex.Lock()
+	defer b.renderMutex.Unlock()
+	if b.renderClosed || b.UpfIpEntrypointFunc == nil || b.UpfIpEntrypointFunc.FD() < 0 {
+		return errors.New("dataplane program is not loaded")
+	}
+	if b.dataPlaneLinks != nil && b.dataPlaneLinks != links {
+		return errors.New("dataplane link owner already registered")
+	}
+	b.dataPlaneLinks = links
+	return edit(b.UpfIpEntrypointFunc)
 }

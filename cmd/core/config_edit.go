@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	cilium "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -63,58 +64,60 @@ func BindDataPlaneInterfaces(
 	if links == nil {
 		return ErrNilInterface
 	}
-	desired := make(map[uint32]bool)
-	for _, name := range interfaceNames {
-		iface, err := net.InterfaceByName(name)
-		if err != nil {
-			return fmt.Errorf("%w: %s: %w", ErrLookupIface, name, err)
-		}
-		desired[uint32(iface.Index)] = true
-	}
-	existing := make(map[uint32]link.Link)
-	for _, l := range *links {
-		info, err := l.Info()
-		if err != nil {
-			return fmt.Errorf("inspect XDP link: %w", err)
-		}
-		if info.XDP() == nil {
-			return fmt.Errorf("expected an XDP link")
-		}
-		existing[info.XDP().Ifindex] = l
-	}
-	var added []link.Link
-	for index := range desired {
-		if _, ok := existing[index]; ok {
-			continue
-		}
-		l, err := link.AttachXDP(link.XDPOptions{Program: bpfObjects.UpfIpEntrypointFunc, Interface: int(index), Flags: StringToXDPAttachMode(xdpAttachMode)})
-		if err != nil {
-			var failures []error
-			failures = append(failures, fmt.Errorf("%w: %w", ErrAttachXDP, err))
-			for _, newLink := range added {
-				if err := newLink.Close(); err != nil {
-					*links = append(*links, newLink)
-					failures = append(failures, err)
-				}
+	return bpfObjects.EditDataPlaneLinks(links, func(program *cilium.Program) error {
+		desired := make(map[uint32]bool)
+		for _, name := range interfaceNames {
+			iface, err := net.InterfaceByName(name)
+			if err != nil {
+				return fmt.Errorf("%w: %s: %w", ErrLookupIface, name, err)
 			}
-			return errors.Join(failures...)
+			desired[uint32(iface.Index)] = true
 		}
-		added = append(added, l)
-	}
-	kept := added
-	var failures []error
-	for index, l := range existing {
-		if desired[index] {
-			kept = append(kept, l)
-			continue
+		existing := make(map[uint32]link.Link)
+		for _, l := range *links {
+			info, err := l.Info()
+			if err != nil {
+				return fmt.Errorf("inspect XDP link: %w", err)
+			}
+			if info.XDP() == nil {
+				return fmt.Errorf("expected an XDP link")
+			}
+			existing[info.XDP().Ifindex] = l
 		}
-		if err := l.Close(); err != nil {
-			kept = append(kept, l)
-			failures = append(failures, fmt.Errorf("%w: %w", ErrCloseOldLink, err))
+		var added []link.Link
+		for index := range desired {
+			if _, ok := existing[index]; ok {
+				continue
+			}
+			l, err := link.AttachXDP(link.XDPOptions{Program: program, Interface: int(index), Flags: StringToXDPAttachMode(xdpAttachMode)})
+			if err != nil {
+				var failures []error
+				failures = append(failures, fmt.Errorf("%w: %w", ErrAttachXDP, err))
+				for _, newLink := range added {
+					if err := newLink.Close(); err != nil {
+						*links = append(*links, newLink)
+						failures = append(failures, err)
+					}
+				}
+				return errors.Join(failures...)
+			}
+			added = append(added, l)
 		}
-	}
-	*links = kept
-	return errors.Join(failures...)
+		kept := added
+		var failures []error
+		for index, l := range existing {
+			if desired[index] {
+				kept = append(kept, l)
+				continue
+			}
+			if err := l.Close(); err != nil {
+				kept = append(kept, l)
+				failures = append(failures, fmt.Errorf("%w: %w", ErrCloseOldLink, err))
+			}
+		}
+		*links = kept
+		return errors.Join(failures...)
+	})
 }
 
 // UpdateDataPlaneAddresses publishes a validated candidate's interface and

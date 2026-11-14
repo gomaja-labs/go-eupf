@@ -15,7 +15,7 @@ import (
 )
 
 // Packet storage cannot limit metadata admission. The fixture uses real BPF
-// maps but bypasses PFCP capability rejection while buffering is staged.
+// maps and stages lifetimes directly; the public PFCP scale proof is separate.
 func TestPacketBufferAdmitsEveryConfiguredSession(t *testing.T) {
 	pipelineQuiet(t)
 	const count = 16384
@@ -128,10 +128,10 @@ func TestPacketBufferAdmitsEveryConfiguredSession(t *testing.T) {
 			t.Fatal(capture.err)
 		}
 		dir := os.Getenv("EUPF_BUFFER_CAPTURE_DIR")
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "buffer-sessions-16384.pcap"), capture.data, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "buffer-sessions-16384.pcap"), capture.data, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

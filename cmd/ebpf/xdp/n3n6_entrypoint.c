@@ -61,7 +61,6 @@ struct {
     .values = {
         [0] = (void *)&upf_ip_entrypoint_func,
         [1] = (void *)&upf_router_solicitation_func,
-        [3] = (void *)&upf_buffer_admission_func,
     },
 };
 
@@ -314,6 +313,9 @@ int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
     return marking;
 }
 
+// The initial program has the base rejection path. The BUFF-capable program
+// replaces it, sharing every live map, before the first BUFF publication.
+#if defined(BUFFER_ADMISSION) || defined(BUFFER_CONTINUATION)
 // The ordinary FORW rejection alone enters buffering. Its request is processed
 // in a separately verified frame, loaded before the first BUFF publication.
 static __always_inline enum xdp_action buffer_defer(struct packet_context *ctx, const struct pdr *pdr, const struct far_info *far) {
@@ -333,6 +335,12 @@ static __always_inline enum xdp_action buffer_defer(struct packet_context *ctx, 
     ctx->continuation=2;
     return UPF_LOCAL_TUNNEL;
 }
+
+#else
+static __always_inline enum xdp_action buffer_defer(struct packet_context *ctx, const struct pdr *pdr, const struct far_info *far) {
+    return XDP_DROP;
+}
+#endif
 
 static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *ctx) {
     if (!ctx->ip4 || (const char *)(ctx->ip4+1) > ctx->data_end) return XDP_ABORTED;

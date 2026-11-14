@@ -207,3 +207,23 @@ func TestBufferContinuationsShareLiveConfiguration(t *testing.T) {
 		t.Fatalf("native release source did not change: action=%d", action)
 	}
 }
+
+func TestBufferMetadataControlDoesNotLoadOutput(t *testing.T) {
+	b := loadDatapath(t)
+	if b.UpfBufferControlFunc != nil || b.UpfBufferAdmissionFunc != nil {
+		t.Fatal("ordinary load prepared unused buffering programs")
+	}
+	if err := b.UpfIpEntrypointFunc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.CreateBufferAnchor(42, 2, []BufferLane{{Cookie: 7, Mode: BufferHold}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
+	if err != nil || state.Mode != BufferHold {
+		t.Fatalf("metadata control required packet output: %+v %v", state, err)
+	}
+	if b.UpfBufferControlFunc == nil || b.UpfBufferAdmissionFunc != nil || b.admissionCollection != nil || b.renderCollection != nil {
+		t.Fatal("metadata preparation loaded output")
+	}
+}

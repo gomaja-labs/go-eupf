@@ -441,6 +441,9 @@ func TestBufferPreparedProducerRechecksTheSharedCapacity(t *testing.T) {
 	if err := b.BufferPendingPacket.Put(uint32(0), pending); err != nil {
 		t.Fatal(err)
 	}
+	if err := b.prepareBufferAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	action, _, err := b.UpfBufferAdmissionFunc.Test(bufferedFrame(t, 2, 100))
 	if err != nil || action != 1 {
 		t.Fatalf("prepared continuation: %d %v", action, err)

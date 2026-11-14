@@ -256,25 +256,8 @@ func run(ctx context.Context) (runErr error) {
 		}
 	}()
 
-	for _, ifaceName := range config.Conf.InterfaceName {
-		iface, err := net.InterfaceByName(ifaceName)
-		if err != nil {
-			return fmt.Errorf("lookup network interface %q: %w", ifaceName, err)
-		}
-
-		// Attach the program.
-		l, err := link.AttachXDP(link.XDPOptions{
-			Program:   bpfObjects.UpfIpEntrypointFunc,
-			Interface: iface.Index,
-			Flags:     core.StringToXDPAttachMode(config.Conf.XDPAttachMode),
-		})
-		if err != nil {
-			return fmt.Errorf("attach XDP program: %w", err)
-		}
-
-		links = append(links, l)
-
-		log.Info().Msgf("Attached XDP program to iface %q (index %d)", iface.Name, iface.Index)
+	if err := core.BindDataPlaneInterfaces(bpfObjects, &links, config.Conf.InterfaceName, config.Conf.XDPAttachMode); err != nil {
+		return fmt.Errorf("attach dataplane interfaces: %w", err)
 	}
 
 	log.Info().Msgf("Initialize resources: UEIP pool (CIDR: \"%s\"), TEID pool (size: %d)", config.Conf.UEIPPool, config.Conf.FTEIDPool)

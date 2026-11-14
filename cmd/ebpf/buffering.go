@@ -120,8 +120,9 @@ type BufferCommand struct {
 // BufferControl uses a private program to serialize with producer admission.
 // It never replaces an anchor containing counters owned by running XDP calls.
 func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error) {
-	if b.UpfBufferControlFunc == nil || b.UpfBufferControlFunc.FD() < 0 {
-		return BufferCommand{}, errors.New("buffer control is not loaded")
+	program, err := b.bufferControlProgram()
+	if err != nil {
+		return BufferCommand{}, err
 	}
 	if command.Operation == 0 {
 		b.renderMutex.Lock()
@@ -151,7 +152,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	}
 	binary.LittleEndian.PutUint64(data[88:], command.BARUntilNS)
 	output := make([]byte, 96)
-	action, err := b.UpfBufferControlFunc.Run(&cilium.RunOptions{Data: data, DataOut: output})
+	action, err := program.Run(&cilium.RunOptions{Data: data, DataOut: output})
 	if err != nil || action != 1 {
 		if command.Operation == 5 {
 			_ = b.BufferStates.Delete(key)
@@ -294,6 +295,7 @@ func (r *BufferReader) Read() (BufferRecord, error) {
 	}
 	return parseBufferRecord(r.record.RawSample)
 }
+
 func parseBufferRecord(raw []byte) (BufferRecord, error) {
 	if len(raw) < 64 {
 		return BufferRecord{}, fmt.Errorf("buffer record header: %w", io.ErrUnexpectedEOF)
@@ -372,6 +374,7 @@ func (b *BpfObjects) putBufferBinding(slot uint32, info FarInfo) error {
 	}
 	return b.BufferBindings.Put(slot, bufferBinding{SessionID: info.BufferSessionID, Cookie: info.BufferCookie, Lane: info.BufferLane})
 }
+
 func (b *BpfObjects) clearBufferBinding(slot uint32) error {
 	if b.BufferBindings == nil {
 		return errors.New("buffer binding map is not loaded")

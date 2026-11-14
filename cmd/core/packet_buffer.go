@@ -103,7 +103,7 @@ type PacketBuffering struct {
 }
 
 // NewPacketBuffering preallocates payloads and starts the sole ring consumer.
-// Rules remain unsupported until their complete publication/lifetime is wired.
+// Session journals publish buffering lifetimes only after output preparation.
 func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*PacketBuffering, error) {
 	if plane == nil || options.Packets == 0 || options.PerSession == 0 || options.PerSession > options.Packets || options.Packets > 1<<20 || options.FrameBytes != ebpf.BufferFrameSize || options.Retention <= 0 {
 		return nil, errors.New("invalid packet buffering capacity")
@@ -139,12 +139,14 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 
 // Failures exposes a terminal reader/accounting error to process supervision.
 func (buffering *PacketBuffering) Failures() <-chan error { return buffering.failures }
+
 func (buffering *PacketBuffering) fail(err error) {
 	select {
 	case buffering.failures <- err:
 	default:
 	}
 }
+
 func (buffering *PacketBuffering) signal() {
 	select {
 	case buffering.progress <- struct{}{}:
@@ -282,6 +284,7 @@ func (buffering *PacketBuffering) takePacket(owner *bufferOwner, cycle *bufferCy
 	buffering.entries[index] = bufferedPacket{record: record, arrived: arrived, next: noBufferedPacket, owner: owner, cycle: cycle}
 	return index, nil
 }
+
 func (buffering *PacketBuffering) ownerSnapshot() []*bufferOwner {
 	buffering.mu.Lock()
 	defer buffering.mu.Unlock()
@@ -291,6 +294,7 @@ func (buffering *PacketBuffering) ownerSnapshot() []*bufferOwner {
 	}
 	return owners
 }
+
 func (buffering *PacketBuffering) readPackets() {
 	defer buffering.wg.Done()
 	for {
@@ -304,6 +308,7 @@ func (buffering *PacketBuffering) readPackets() {
 		buffering.consumePacket(record)
 	}
 }
+
 func (buffering *PacketBuffering) consumePacket(record ebpf.BufferRecord) {
 	buffering.mu.Lock()
 	owner := buffering.owners[record.SessionID]
@@ -414,6 +419,7 @@ func (buffering *PacketBuffering) servicePackets() {
 		}
 	}
 }
+
 func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time) {
 	if owner.released || !owner.active && !owner.canceled {
 		return
