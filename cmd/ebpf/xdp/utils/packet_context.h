@@ -16,7 +16,8 @@ struct packet_context {
     const struct pdr *return_pdr;
     __u8 return_nr_flag;
     __u8 pdr_matched_key;
-    __u8 continuation; // existing local-tunnel dispatcher: 0 local, 2 BUFF
+    __u8 continuation; // existing dispatcher: 0 local, 2 processing, 3 admission
+    __u8 buffer_deferred;
     __u32 pdr_id; // uses the existing pointer-alignment padding
     char *data;
     const char *data_end;

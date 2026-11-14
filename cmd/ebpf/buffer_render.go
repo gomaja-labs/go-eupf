@@ -16,7 +16,7 @@ import (
 // RenderBufferedPacket applies forwarding to an already processed packet.
 // The caller pins the FAR slot until all rendering and transmission I/O ends.
 func (b *BpfObjects) RenderBufferedPacket(record BufferRecord, far uint32) (RenderedBuffer, error) {
-	if b.UpfBufferRenderFunc == nil || b.UpfBufferRenderFunc.FD() < 0 || len(record.Packet) < 14 || len(record.Packet) > BufferFrameSize || record.Kind < 1 || record.Kind > 3 || record.Cookie == 0 || far == 0 {
+	if b.UpfIpEntrypointFunc == nil || b.UpfIpEntrypointFunc.FD() < 0 || len(record.Packet) < 14 || len(record.Packet) > BufferFrameSize || record.Kind < 1 || record.Kind > 3 || record.Cookie == 0 || far == 0 {
 		return RenderedBuffer{}, errors.New("invalid buffered render request")
 	}
 	b.renderMutex.Lock()
@@ -43,9 +43,6 @@ func (b *BpfObjects) RenderBufferedPacket(record BufferRecord, far uint32) (Rend
 		if err := collection.Maps["buffer_rendered"].Update(key, &saved, cilium.UpdateNoExist); err != nil {
 			return RenderedBuffer{}, err
 		}
-	}
-	if err := b.copyBufferConfiguration(collection); err != nil {
-		return RenderedBuffer{}, err
 	}
 	if err := collection.Maps["buffer_current"].Put(uint32(0), key); err != nil {
 		return RenderedBuffer{}, err

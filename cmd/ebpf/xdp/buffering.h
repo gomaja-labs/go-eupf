@@ -27,7 +27,7 @@ struct {
 // return_pdr already identifies the selected entry on the base path. Resolve
 // its ID only after entering BUFF; generated router replies carry a scalar ID.
 static __always_inline __u32 buffer_pdr_id(struct packet_context *ctx) {
-    if (ctx->locally_generated && ctx->ip6) return ctx->pdr_id;
+    if (ctx->buffer_deferred || (ctx->locally_generated && ctx->ip6)) return ctx->pdr_id;
     if (!ctx->return_pdr) return ~0U;
     const struct pdr_entry *entry=(void *)((const char *)ctx->return_pdr-__builtin_offsetof(struct pdr_entry,return_pdr));
     return entry->pdr_id;
@@ -259,6 +259,20 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     }
     return action;
 }
+
+// Only BUFF resolves/copies this private request. No packet or map pointer
+// crosses the tail-call boundary; the original RCU reader pins rule versions.
+struct buffer_request {
+    struct pdr pdr,return_pdr;
+    __u32 pdr_id;
+    __u8 kind,nr,trace,source_interface,locally_generated,return_nr,reserved[2];
+};
+struct {
+    __uint(type,BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries,1);
+    __type(key,__u32);
+    __type(value,struct buffer_request);
+} buffer_request SEC(".maps");
 
 // Scalar continuation state is per CPU. An XDP invocation remains on its CPU
 // through the tail call; packet/map pointers never cross this boundary.

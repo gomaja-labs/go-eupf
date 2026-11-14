@@ -23,27 +23,30 @@ import (
 //
 
 //go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -type pdr_entry -target bpf IpEntrypoint 	xdp/n3n6_entrypoint.c -- -I. -O2 -Wall -g
+//go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf BufferAdmission xdp/n3n6_entrypoint.c -- -DBUFFER_ADMISSION -I. -O2 -Wall -g
 //go:generate go tool bpf2go -tags linux -cflags "$BPF_CFLAGS" -target bpf BufferEntrypoint xdp/n3n6_entrypoint.c -- -DBUFFER_CONTINUATION -I. -O2 -Wall -g
 //go:generate go tool bpf2go -tags linux -target bpf ZeroEntrypoint 	xdp/zero_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N3Entrypoint 	xdp/n3_entrypoint.c -- -I. -O2 -Wall
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
-	renderMutex       sync.Mutex
-	renderCollection  *ebpf.Collection
-	renderClosed      bool
-	bufferMutex       sync.Mutex
-	bufferReadClaimed bool
-	bufferReadClosed  bool
-	bufferReader      *BufferReader
-	bucketMutex       sync.Mutex
-	bucketIDs         *IdTracker
-	ruleMutex         sync.Mutex
-	ruleKeys          ruleKeyIndex
-	ruleImages        map[pdrMutationKey]pdrImage
-	rulePoison        error
-	ruleClosed        bool
-	grace             *ruleGrace
+	renderMutex         sync.Mutex
+	renderCollection    *ebpf.Collection
+	admissionCollection *ebpf.Collection
+	sharedConfiguration *ebpf.Map
+	renderClosed        bool
+	bufferMutex         sync.Mutex
+	bufferReadClaimed   bool
+	bufferReadClosed    bool
+	bufferReader        *BufferReader
+	bucketMutex         sync.Mutex
+	bucketIDs           *IdTracker
+	ruleMutex           sync.Mutex
+	ruleKeys            ruleKeyIndex
+	ruleImages          map[pdrMutationKey]pdrImage
+	rulePoison          error
+	ruleClosed          bool
+	grace               *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
@@ -140,9 +143,15 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err := configureGTPRestoration(spec); err != nil {
 		return err
 	}
-	if err := spec.LoadAndAssign(&bpfObjects.IpEntrypointObjects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
+	var objects struct {
+		IpEntrypointObjects
+		Configuration *ebpf.Map `ebpf:".bss"`
+	}
+	if err := spec.LoadAndAssign(&objects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
 		return err
 	}
+	bpfObjects.IpEntrypointObjects = objects.IpEntrypointObjects
+	bpfObjects.sharedConfiguration = objects.Configuration
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
 	bpfObjects.bufferMutex.Lock()
@@ -217,6 +226,14 @@ func (bpfObjects *BpfObjects) Close() error {
 	if bpfObjects.renderCollection != nil {
 		bpfObjects.renderCollection.Close()
 		bpfObjects.renderCollection = nil
+	}
+	if bpfObjects.admissionCollection != nil {
+		bpfObjects.admissionCollection.Close()
+		bpfObjects.admissionCollection = nil
+	}
+	if bpfObjects.sharedConfiguration != nil {
+		err = errors.Join(err, bpfObjects.sharedConfiguration.Close())
+		bpfObjects.sharedConfiguration = nil
 	}
 	bpfObjects.renderMutex.Unlock()
 	return errors.Join(err, CloseAllObjects(

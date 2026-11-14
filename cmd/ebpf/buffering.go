@@ -367,9 +367,15 @@ func (b *BpfObjects) putBufferBinding(slot uint32, info FarInfo) error {
 	if info.BufferSessionID == 0 {
 		return errors.New("buffer binding has no session")
 	}
+	if err := b.prepareBufferAdmission(); err != nil {
+		return err
+	}
 	return b.BufferBindings.Put(slot, bufferBinding{SessionID: info.BufferSessionID, Cookie: info.BufferCookie, Lane: info.BufferLane})
 }
 func (b *BpfObjects) clearBufferBinding(slot uint32) error {
+	if b.BufferBindings == nil {
+		return errors.New("buffer binding map is not loaded")
+	}
 	err := b.BufferBindings.Delete(slot)
 	if isKeyAbsent(err) {
 		return nil

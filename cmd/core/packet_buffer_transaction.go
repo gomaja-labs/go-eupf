@@ -221,6 +221,9 @@ func (plan *packetBufferPlan) publish(conn *PfcpConnection, tx ebpf.RuleTransact
 }
 
 func (buffering *PacketBuffering) reserveCycle(owner *bufferOwner, farID uint32) (*bufferCycle, error) {
+	if err := buffering.prepareOutput(owner.session.LocalSEID); err != nil {
+		return nil, err
+	}
 	if owner.nextCookie == math.MaxUint64 {
 		return nil, errors.New("buffer cookie exhausted")
 	}

@@ -13,7 +13,7 @@ type IpEntrypointObjects struct {
 	BufferStates              *ebpf.Map
 	BufferPool                *ebpf.Map
 	BufferNoticeReady         *ebpf.Map
-	UpfBufferRenderFunc       *ebpf.Program
+	BufferRequest             *ebpf.Map
 	BufferPendingPacket       *ebpf.Map
 	UpfBufferAdmissionFunc    *ebpf.Program
 	BufferAnchors             *ebpf.Map

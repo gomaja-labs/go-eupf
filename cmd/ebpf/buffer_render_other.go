@@ -9,3 +9,7 @@ func (b *BpfObjects) RenderBufferedPacket(record BufferRecord, far uint32) (Rend
 }
 
 func (b *BpfObjects) discardBufferRender(command BufferCommand) error { return nil }
+
+func (b *BpfObjects) prepareBufferAdmission() error {
+	return errors.New("buffer admission requires Linux")
+}

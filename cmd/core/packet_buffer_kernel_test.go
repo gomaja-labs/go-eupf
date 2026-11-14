@@ -350,6 +350,7 @@ func TestDownlinkDropResponseCancelsActualAdmittedPackets(t *testing.T) {
 
 type bufferSenderFunc func(ebpf.RenderedBuffer) error
 
+func (send bufferSenderFunc) Prepare() error                        { return nil }
 func (send bufferSenderFunc) Send(packet ebpf.RenderedBuffer) error { return send(packet) }
 func (send bufferSenderFunc) Close() error                          { return nil }
 

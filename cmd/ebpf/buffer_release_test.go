@@ -7,7 +7,10 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 	"unsafe"
+
+	cilium "github.com/cilium/ebpf"
 )
 
 func TestBufferingKeepsOrdinaryFARLayout(t *testing.T) {
@@ -135,5 +138,72 @@ func TestBufferBindingReclaimedWithItsFARVersion(t *testing.T) {
 				t.Fatalf("retired binding still exists: %+v %v", binding, err)
 			}
 		})
+	}
+}
+
+func TestBufferContinuationsShareLiveConfiguration(t *testing.T) {
+	b := loadDatapath(t)
+	if err := b.CreateBufferAnchor(42, 2, []BufferLane{{Cookie: 7, Mode: BufferHold}}); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := b.NewBufferReader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	far := FarInfo{Action: 4, OuterHeaderCreation: 1, Teid: 200, RemoteIP: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), BufferSessionID: 42, BufferCookie: 7}
+	if err := b.UpdateFar(3, far); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{SessionID: 42, PdrID: 9, FarId: 3}); err != nil {
+		t.Fatal(err)
+	}
+	packet := bufferedFrame(t, 2, 100)
+	if action, _ := runDatapath(t, b, packet); action != 1 {
+		t.Fatalf("admission action=%d", action)
+	}
+	reader.SetDeadline(time.Now().Add(time.Second))
+	record, err := reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	far.Action = 2
+	if err := b.UpdateFar(3, far); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.BufferKernelIngressProgram(); err != nil {
+		t.Fatal(err)
+	}
+	var cfg IpEntrypointDataplaneConfig
+	if err := b.GlobalConfig.Get(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.N3Ipv4Address = binary.LittleEndian.Uint32(net.IP{192, 0, 2, 10})
+	if err := b.GlobalConfig.Set(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for name, collection := range map[string]*cilium.Collection{"admission": b.admissionCollection, "renderer": b.renderCollection} {
+		var current IpEntrypointDataplaneConfig
+		if err := collection.Variables["global_config"].Get(&current); err != nil || current != cfg {
+			t.Fatalf("%s uses stale configuration: %+v %v", name, current, err)
+		}
+	}
+	rendered, err := b.RenderBufferedPacket(record, 3)
+	if err != nil || rendered.Action != 4 || !bytes.Equal(rendered.Frame[26:30], net.IP{192, 0, 2, 10}) {
+		t.Fatalf("render source did not change: action=%d error=%v", rendered.Action, err)
+	}
+	if _, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 1, Mode: BufferDrain, Ready: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Sequence: record.Sequence, Downlink: true}); err != nil {
+		t.Fatal(err)
+	}
+	action, current := runDatapath(t, b, packet)
+	if action != 4 || !bytes.Equal(current[26:30], net.IP{192, 0, 2, 10}) {
+		t.Fatalf("native release source did not change: action=%d", action)
 	}
 }

@@ -44,13 +44,13 @@ func (b *BpfObjects) loadBufferRendererLocked() (*cilium.Collection, error) {
 	if err != nil {
 		return nil, err
 	}
-	keep := map[string]bool{"upf_ip_entrypoint_func": true, "upf_router_solicitation_func": true, "upf_buffer_render_func": true, "upf_buffer_kernel_func": true, "upf_buffer_downlink_func": true}
+	keep := map[string]bool{"upf_ip_entrypoint_func": true, "upf_router_solicitation_func": true, "upf_buffer_render_func": true, "upf_buffer_kernel_func": true, "upf_buffer_downlink_func": true, "upf_buffer_process_func": true}
 	for name := range spec.Programs {
 		if !keep[name] {
 			delete(spec.Programs, name)
 		}
 	}
-	spec.Maps["jmp_table"].Contents = []cilium.MapKV{{Key: uint32(0), Value: "upf_ip_entrypoint_func"}, {Key: uint32(1), Value: "upf_router_solicitation_func"}, {Key: uint32(3), Value: "upf_buffer_downlink_func"}}
+	spec.Maps["jmp_table"].Contents = []cilium.MapKV{{Key: uint32(0), Value: "upf_ip_entrypoint_func"}, {Key: uint32(1), Value: "upf_router_solicitation_func"}, {Key: uint32(2), Value: "upf_buffer_process_func"}, {Key: uint32(4), Value: "upf_buffer_downlink_func"}}
 	spec.Maps["buffer_rendered"].MaxEntries = b.bufferPackets
 	replacements := make(map[string]*cilium.Map)
 	maps := reflect.ValueOf(b.IpEntrypointMaps)
@@ -70,11 +70,12 @@ func (b *BpfObjects) loadBufferRendererLocked() (*cilium.Collection, error) {
 		spec.Maps[name].MaxEntries = info.MaxEntries
 		replacements[name] = m
 	}
+	replacements[".bss"] = b.sharedConfiguration
 	collection, err := cilium.NewCollectionWithOptions(spec, cilium.CollectionOptions{MapReplacements: replacements})
 	if err != nil {
 		return nil, fmt.Errorf("load private buffer programs: %w", err)
 	}
-	if err := collection.Maps["jmp_table"].Put(uint32(2), b.UpfBufferAdmissionFunc); err != nil {
+	if err := collection.Maps["jmp_table"].Put(uint32(3), b.UpfBufferAdmissionFunc); err != nil {
 		collection.Close()
 		return nil, err
 	}
@@ -82,26 +83,14 @@ func (b *BpfObjects) loadBufferRendererLocked() (*cilium.Collection, error) {
 	return collection, nil
 }
 
-func (b *BpfObjects) copyBufferConfiguration(collection *cilium.Collection) error {
-	var config IpEntrypointDataplaneConfig
-	var until uint64
-	if err := b.GlobalConfig.Get(&config); err != nil {
-		return err
-	}
-	if err := b.GtpErrorSuppressUntil.Get(&until); err != nil {
-		return err
-	}
-	if err := collection.Variables["global_config"].Set(config); err != nil {
-		return err
-	}
-	return collection.Variables["gtp_error_suppress_until"].Set(until)
-}
-
-// BufferKernelIngressProgram prepares all buffered forwarding programs before
-// runtime readiness and returns the TC program owned by these BpfObjects.
+// BufferKernelIngressProgram loads buffered forwarding on first BUFF admission
+// and returns the TC program owned by these BpfObjects.
 func (b *BpfObjects) BufferKernelIngressProgram() (*cilium.Program, error) {
 	b.renderMutex.Lock()
 	defer b.renderMutex.Unlock()
+	if err := b.loadBufferAdmissionLocked(); err != nil {
+		return nil, err
+	}
 	collection, err := b.loadBufferRendererLocked()
 	if err != nil {
 		return nil, err
@@ -118,4 +107,65 @@ func (b *BpfObjects) discardBufferRender(command BufferCommand) error {
 		return nil
 	}
 	return err
+}
+
+// The attached entry contains only the base forwarding path plus a BUFF request
+// continuation. Load its policing/admission processor before publishing a BUFF
+// FAR. Both builds share the same live configuration and rule maps.
+func (b *BpfObjects) loadBufferAdmissionLocked() error {
+	if b.renderClosed || b.UpfIpEntrypointFunc == nil || b.UpfIpEntrypointFunc.FD() < 0 {
+		return errors.New("buffer programs are not loaded")
+	}
+	if b.admissionCollection != nil {
+		return nil
+	}
+	spec, err := LoadBufferAdmission()
+	if err != nil {
+		return err
+	}
+	for name := range spec.Programs {
+		if name != "upf_buffer_process_func" && name != "upf_buffer_downlink_func" {
+			delete(spec.Programs, name)
+		}
+	}
+	spec.Maps["jmp_table"].Contents = nil
+	replacements := map[string]*cilium.Map{".bss": b.sharedConfiguration}
+	maps := reflect.ValueOf(b.IpEntrypointMaps)
+	for i := 0; i < maps.NumField(); i++ {
+		name := maps.Type().Field(i).Tag.Get("ebpf")
+		if spec.Maps[name] == nil {
+			continue
+		}
+		m, ok := maps.Field(i).Interface().(*cilium.Map)
+		if !ok || m == nil {
+			return fmt.Errorf("missing shared admission map %s", name)
+		}
+		info, err := m.Info()
+		if err != nil {
+			return err
+		}
+		spec.Maps[name].MaxEntries = info.MaxEntries
+		replacements[name] = m
+	}
+	collection, err := cilium.NewCollectionWithOptions(spec, cilium.CollectionOptions{MapReplacements: replacements})
+	if err != nil {
+		return fmt.Errorf("load buffer admission: %w", err)
+	}
+	if err := b.JmpTable.Put(uint32(4), collection.Programs["upf_buffer_downlink_func"]); err != nil {
+		collection.Close()
+		return err
+	}
+	if err := b.JmpTable.Put(uint32(2), collection.Programs["upf_buffer_process_func"]); err != nil {
+		err = errors.Join(err, b.JmpTable.Delete(uint32(4)))
+		collection.Close()
+		return err
+	}
+	b.admissionCollection = collection
+	return nil
+}
+
+func (b *BpfObjects) prepareBufferAdmission() error {
+	b.renderMutex.Lock()
+	defer b.renderMutex.Unlock()
+	return b.loadBufferAdmissionLocked()
 }

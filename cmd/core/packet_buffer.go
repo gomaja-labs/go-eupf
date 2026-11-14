@@ -13,6 +13,8 @@ import (
 
 	cilium "github.com/cilium/ebpf"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/rs/zerolog/log"
 )
 
 // BufferingOptions bounds shared payload storage and each session's admission.
@@ -27,6 +29,7 @@ type BufferingOptions struct {
 const noBufferedPacket = uint32(math.MaxUint32)
 
 type packetBufferSender interface {
+	Prepare() error
 	Send(ebpf.RenderedBuffer) error
 	Close() error
 }
@@ -169,6 +172,14 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 	buffering := conn.packetBuffers
 	if buffering == nil {
 		return nil, errors.New("packet buffering runtime is unavailable")
+	}
+	for _, far := range session.FARs {
+		if far.FarInfo.Action&4 != 0 {
+			if err := buffering.prepareOutput(session.LocalSEID); err != nil {
+				return nil, err
+			}
+			break
+		}
 	}
 	buffering.mu.Lock()
 	if buffering.closed {
@@ -744,4 +755,15 @@ func (buffering *PacketBuffering) schedule(owner *bufferOwner) {
 	buffering.mu.Lock()
 	buffering.work[owner.session.LocalSEID] = owner
 	buffering.mu.Unlock()
+}
+
+// Initialize before accepting any BUFF state. Packet storage is untouched on
+// failure: no such lifetime has been published and no packet can be retained.
+// TS 29.244 V20.1.0 clause 7.5.3, table 8.2.1-1: System failure (77).
+func (buffering *PacketBuffering) prepareOutput(seid uint64) error {
+	if err := buffering.sender.Prepare(); err != nil {
+		log.Error().Err(err).Uint64("seid", seid).Msg("Cannot initialize buffered forwarding; rejecting BUFF before publication")
+		return &requestIEError{ie.CauseSystemFailure, ie.ApplyAction, fmt.Errorf("initialize buffered forwarding: %w", err)}
+	}
+	return nil
 }

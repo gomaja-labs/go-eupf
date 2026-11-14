@@ -43,11 +43,13 @@ func (c *UpfConfig) ValidateBuffering() error {
 // packet descriptor/free index, 894 bytes per one-FAR owner, 284 bytes per FAR
 // in a many-FAR owner, and 4555 bytes per FAR with all 65 notice identities.
 // Each term is rounded up separately; payloads have one fixed allocation.
+// A prepared one-packet runtime after deferred program loading retained 71048
+// bytes; round that complete small shape to 128 KiB before doubling it.
 // See docs/pfcp-transport.md for the measured shapes and their limits.
 func (c *UpfConfig) BufferMemoryReserve() int64 {
 	p := c.Buffering()
 	sessions, fars := c.bufferMetadataCapacity()
-	const fixedRuntime = 32 << 10
+	const fixedRuntime = 128 << 10
 	return 2*fixedRuntime + int64(p.Packets)*(BufferFrameBytes+2*160) +
 		2*1024*sessions + 2*320*(2*fars) + 2*4608*fars
 }
@@ -64,7 +66,11 @@ func (c *UpfConfig) BufferMemoryReserve() int64 {
 // round to 4608 independently of the Go payload allocation.
 func (c *UpfConfig) BufferKernelMemoryReserve() int64 {
 	sessions, fars := c.bufferMetadataCapacity()
-	return 320*sessions + 1152*(2*fars) + 4608*int64(c.Buffering().Packets)
+	// Deferred admission/render programs and the kernel conduit measured 1806336
+	// kernel bytes at one packet. At 65536 slots the empty result hash adds
+	// about 16 bytes/slot, within the 4608-vs-4103 per-packet rounding below.
+	const deferredRuntime = 2 << 20
+	return deferredRuntime + 320*sessions + 1152*(2*fars) + 4608*int64(c.Buffering().Packets)
 }
 
 func (c *UpfConfig) bufferMetadataCapacity() (sessions, fars int64) {

@@ -27,6 +27,9 @@ static __noinline void buffer_restore_reply(struct packet_context *packet) {
     }
 }
 #endif
+// The ordinary build has no unused renderer program. Only the private build
+// loads it, on first BUFF admission.
+#ifdef BUFFER_CONTINUATION
 SEC("xdp/upf_buffer_render")
 int upf_buffer_render_func(struct xdp_md *xdp) {
     struct buffer_record *input=(void *)(long)xdp->data;
@@ -81,7 +84,7 @@ int upf_buffer_render_func(struct xdp_md *xdp) {
 done:
 #ifdef BUFFER_CONTINUATION
     if (action==UPF_DOWNLINK_IP4 || action==UPF_DOWNLINK_IP6) {
-        bpf_tail_call(xdp,&jmp_table,3);
+        bpf_tail_call(xdp,&jmp_table,4);
         return buffer_result_finish(xdp,XDP_ABORTED,0);
     }
     if (action==UPF_ROUTER_SOLICITATION) {
@@ -94,7 +97,7 @@ done:
     }
     if (action==UPF_BUFFER_PACKET) {
         buffer_result_admitted();
-        bpf_tail_call(xdp,&jmp_table,2);
+        bpf_tail_call(xdp,&jmp_table,3);
         return XDP_DROP;
     }
     return buffer_result_finish(xdp,action,output);
@@ -108,3 +111,5 @@ done:
     return XDP_PASS;
 #endif
 }
+
+#endif

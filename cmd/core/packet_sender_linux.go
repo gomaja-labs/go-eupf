@@ -6,33 +6,52 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"golang.org/x/sys/unix"
 )
 
 type bufferPacketSender struct {
+	mu     sync.Mutex
+	plane  *ebpf.BpfObjects
+	closed bool
 	fd     int
 	kernel *bufferKernelLink
 }
 
 func newBufferPacketSender(plane *ebpf.BpfObjects) (packetBufferSender, error) {
+	return &bufferPacketSender{plane: plane, fd: -1}, nil
+}
+
+// Prepare loads output only when a BUFF lifetime is first admitted. Failures
+// occur before rule publication, so no retained packet depends on a failed load.
+func (sender *bufferPacketSender) Prepare() error {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if sender.closed {
+		return errors.New("buffer output is closed")
+	}
+	if sender.fd >= 0 {
+		return nil
+	}
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open buffered packet output: %w", err)
+		return fmt.Errorf("open buffered packet output: %w", err)
 	}
 	if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1); err != nil {
-		return nil, errors.Join(err, unix.Close(fd))
+		return errors.Join(err, unix.Close(fd))
 	}
-	program, err := plane.BufferKernelIngressProgram()
+	program, err := sender.plane.BufferKernelIngressProgram()
 	if err != nil {
-		return nil, errors.Join(err, unix.Close(fd))
+		return errors.Join(err, unix.Close(fd))
 	}
 	kernel, err := newBufferKernelLink(program.FD())
 	if err != nil {
-		return nil, errors.Join(err, kernel.Close(), unix.Close(fd))
+		return errors.Join(err, kernel.Close(), unix.Close(fd))
 	}
-	return &bufferPacketSender{fd: fd, kernel: kernel}, nil
+	sender.fd, sender.kernel = fd, kernel
+	return nil
 }
 func (sender *bufferPacketSender) Send(packet ebpf.RenderedBuffer) error {
 	if len(packet.Frame) < 14 || packet.Action < 2 || packet.Action > 4 {
@@ -61,5 +80,16 @@ func (sender *bufferPacketSender) Send(packet ebpf.RenderedBuffer) error {
 	return nil
 }
 func (sender *bufferPacketSender) Close() error {
-	return errors.Join(sender.kernel.Close(), unix.Close(sender.fd))
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if sender.closed {
+		return nil
+	}
+	sender.closed = true
+	var err error
+	if sender.fd >= 0 {
+		err = unix.Close(sender.fd)
+		sender.fd = -1
+	}
+	return errors.Join(sender.kernel.Close(), err)
 }

@@ -156,6 +156,9 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	})
 	buffering.sender = bufferSenderFunc(func(packet ebpf.RenderedBuffer) error {
 		once.Do(func() { close(entered); <-release })
+		if allKernel && packet.Action != 2 {
+			return fmt.Errorf("fixed kernel continuation changed to action %d", packet.Action)
+		}
 		err := original.Send(packet)
 		if err == nil {
 			offset := 54
@@ -249,6 +252,24 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	case <-entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("drain did not start")
+	}
+	if allKernel {
+		// Select the fixed kernel continuation for every retained packet before
+		// any send starts neighbour resolution. Linux v5.15 net/core/filter.c:
+		// bpf_fib_set_fwd_params accepts an existing unresolved neighbour, so
+		// recomputing after the first send can select a different continuation.
+		func() {
+			conn.stateMu.RLock()
+			defer conn.stateMu.RUnlock()
+			current := assoc.Sessions[session.LocalSEID]
+			cycle := current.buffers.cycles[1]
+			for index := cycle.head; index != noBufferedPacket; index = buffering.entries[index].next {
+				rendered, err := plane.RenderBufferedPacket(buffering.entries[index].record, current.FARs[1].GlobalId)
+				if err != nil || rendered.Action != 2 {
+					t.Fatalf("select fixed kernel continuation: action=%d error=%v", rendered.Action, err)
+				}
+			}
+		}()
 	}
 	time.Sleep(10 * time.Millisecond)
 	unblock.Do(func() { close(release) })
