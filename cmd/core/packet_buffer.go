@@ -378,8 +378,8 @@ func (buffering *PacketBuffering) servicePackets() {
 			if owner != nil {
 				owner.conn.stateMu.Lock()
 				owner.noticeReady = true
-				owner.conn.stateMu.Unlock()
 				buffering.schedule(owner)
+				owner.conn.stateMu.Unlock()
 			}
 		}
 		buffering.mu.Lock()
@@ -728,6 +728,8 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 	}
 }
 
+// schedule requires owner.conn.stateMu: the current session pointer can change
+// when a journal publishes a replacement.
 func (buffering *PacketBuffering) schedule(owner *bufferOwner) {
 	buffering.mu.Lock()
 	buffering.work[owner.session.LocalSEID] = owner
