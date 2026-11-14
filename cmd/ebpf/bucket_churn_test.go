@@ -26,7 +26,22 @@ func pinPublicationCPU(t *testing.T, cpu int) func() {
 	if err := unix.SchedGetaffinity(0, &original); err != nil {
 		t.Fatal(err)
 	}
-	next.Set(cpu % runtime.NumCPU())
+	count := original.Count()
+	if count == 0 {
+		runtime.UnlockOSThread()
+		t.Fatal("no CPU is available to the publication test")
+	}
+	index := cpu % count
+	for candidate := range 1024 {
+		if !original.IsSet(candidate) {
+			continue
+		}
+		if index == 0 {
+			next.Set(candidate)
+			break
+		}
+		index--
+	}
 	if err := unix.SchedSetaffinity(0, &next); err != nil {
 		t.Fatal(err)
 	}
