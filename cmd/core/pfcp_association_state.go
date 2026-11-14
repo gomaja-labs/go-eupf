@@ -255,14 +255,21 @@ func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, en
 		}
 	}
 	if budget := state.responseBudgets[id]; budget != nil {
+		removed, bytes := 0, 0
 		for element := budget.entries.Front(); element != nil; {
 			next := element.ownerNext
-			e := element
-			entry := state.responses[e.key]
-			if (!keepSetup || e.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entry.entity == entity) {
-				state.removeResponse(e)
+			if (!keepSetup || element.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || element.entity == entity) {
+				removed++
+				bytes += element.size
+				state.unlinkResponse(element)
 			}
 			element = next
+		}
+		// state.mu excludes mutation of this endpoint's indexes. Return the
+		// shared reservation once after unlinking the batch; until then the
+		// global budget remains conservatively charged to these outcomes.
+		if removed != 0 {
+			state.replay.Change(state.replayOwner(id), -removed, -bytes)
 		}
 	}
 }
