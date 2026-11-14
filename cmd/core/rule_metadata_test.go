@@ -3,7 +3,9 @@ package core
 import (
 	"errors"
 	"net"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
@@ -29,8 +31,8 @@ func TestInformativeRuleMetadataDoesNotRejectForwarding(t *testing.T) {
 func TestBehaviourChangingRuleMetadataIsRejected(t *testing.T) {
 	for _, rule := range []*ie.IE{
 		ie.NewCreateQER(ie.NewQERID(1), ie.NewGBR(1000, 1000)),
-		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(4)),
-		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(8)),
+		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(16)),
+		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(32)),
 		ie.NewCreateURR(ie.NewURRID(1), ie.NewMeasurementInformation(1)),
 	} {
 		if err := validateRuleCapability(rule); !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
@@ -46,8 +48,28 @@ func TestBehaviourChangingRuleMetadataIsRejected(t *testing.T) {
 func TestForwardingEstablishmentsFromCommonSMFShapes(t *testing.T) {
 	for _, shape := range []string{"Open5GS_buffering", "Open5GS_forwarding", "free5GC"} {
 		t.Run(shape, func(t *testing.T) {
+			var plane *ebpf.BpfObjects
+			if shape == "Open5GS_buffering" {
+				plane = bufferingSMFShapePlane(t)
+			}
 			conn, peer := PreparePfcpConnectionWithConfig(t, config.UpfConfig{})
 			conn.ResourceManager, _ = service.NewResourceManager("", 32)
+			if plane != nil {
+				buffering, err := NewPacketBuffering(plane, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: 30 * time.Second})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := buffering.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				conn.mapOperations = plane
+				if err := conn.SetPacketBuffering(buffering); err != nil {
+					t.Fatal(err)
+				}
+			}
+
 			uplink := ie.NewFTEID(15, 0, nil, nil, 0)
 			want := uint8(1)
 			if shape == "free5GC" {
@@ -57,7 +79,6 @@ func TestForwardingEstablishmentsFromCommonSMFShapes(t *testing.T) {
 			action := uint8(2)
 			if shape == "Open5GS_buffering" {
 				action = 12
-				want = ie.CauseServiceNotSupported
 			}
 			rules := []*ie.IE{
 				ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(0), uplink, ie.NewNetworkInstanceFQDN("internet"), ie.NewUEIPAddress(2, "192.0.2.10", "", 0, 0), ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN33GPPAccess)), ie.NewOuterHeaderRemoval(6, 0), ie.NewFARID(1), ie.NewQERID(1)),
@@ -91,4 +112,29 @@ func TestForwardingEstablishmentsFromCommonSMFShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func bufferingSMFShapePlane(t *testing.T) *ebpf.BpfObjects {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("packet buffering requires Linux")
+	}
+	if err := ebpf.IncreaseResourceLimits(); err != nil {
+		t.Fatal(err)
+	}
+	plane := ebpf.NewBpfObjects()
+	plane.SetPdrMapSize(64)
+	plane.SetFarMapSize(64)
+	plane.SetQerMapSize(64)
+	plane.SetUrrMapSize(64)
+	plane.SetBufferCapacity(32, 8)
+	if err := plane.Load(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := plane.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return plane
 }

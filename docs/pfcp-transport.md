@@ -249,7 +249,7 @@ One application reader consumes a bounded fixed-slot ring shared by N4, Sxa and 
 
 A successful send is recorded before kernel acknowledgement; an acknowledgement retry does not repeat transmission. Rule mutation waits for an active renderer/send operation, and canceled lifetimes retain their reservation until producer grace, consumed/completed records, I/O completion and a successful terminal transaction result. Grace callbacks signal completion without waiting for ring consumption. Completed drain guards are removed through fresh FAR publication and another grace period.
 
-The current renderer and AF_PACKET output use BPF test-run and `PACKET_QDISC_BYPASS` on Linux 6.18 and 5.15. Native IPv4/IPv6 inside IPv4 GTP-U is covered by focused comparisons, and the application sender has a receiver capture. Local-tunnel and kernel continuations are implemented; final release acceptance and capability activation remain pending. Outer Header Creation supports IPv4/UDP/GTP-U; inner IPv4 and IPv6 packets are supported. BUFF, NOCP and BAR remain rejected; no new buffering feature bits are advertised. See [configuration](Configuration.md#packet-storage-settings) for limits.
+The current renderer and AF_PACKET output use BPF test-run and `PACKET_QDISC_BYPASS` on Linux 6.18 and 5.15. Native IPv4/IPv6 inside IPv4 GTP-U is covered by focused comparisons, and the application sender has a receiver capture. Local-tunnel and kernel continuations resume the ordinary forwarding helpers. Outer Header Creation supports IPv4/UDP/GTP-U; inner IPv4 and IPv6 packets are supported. BUFF, NOCP and BAR are accepted; DDND, DLBD, UDBC and DBDM are advertised. BUCP, DDDS, EDBNC and PPI are not implemented. See [configuration](Configuration.md#packet-storage-settings) for limits.
 
 Buffered output resumes the same forwarding helpers as ordinary XDP. A private
 program build captures the final action without adding instructions to ordinary
@@ -272,7 +272,6 @@ kernel-path sends on one receive backlog. Kernel queue admission is the boundary
 subsequent neighbour or qdisc delays can let a later XDP redirect overtake that
 packet on the wire, as they can on the ordinary fast path. Cancellation applies
 only before hand-over. See [data-plane ordering](dataplane.md#buffered-packet-hand-over).
-BUFF, NOCP and BAR remain rejected while release acceptance is pending.
 
 Buffered output is prepared before accepting the first BUFF lifetime, so unused
 buffering does not load its private processing/rendering programs or create output

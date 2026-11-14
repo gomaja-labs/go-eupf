@@ -110,7 +110,7 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectUnsupportedFields(f, "FARID", "ApplyAction", "ForwardingParameters"); err != nil {
+		if err := rejectUnsupportedFields(f, "FARID", "ApplyAction", "ForwardingParameters", "BARID"); err != nil {
 			return err
 		}
 		if err := validateSupportedAction(f.ApplyAction); err != nil {
@@ -128,7 +128,7 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectUnsupportedFields(f, "FARID", "ApplyAction", "UpdateForwardingParameters"); err != nil {
+		if err := rejectUnsupportedFields(f, "FARID", "ApplyAction", "UpdateForwardingParameters", "BARID"); err != nil {
 			return err
 		}
 		if err := validateSupportedAction(f.ApplyAction); err != nil {
@@ -272,8 +272,14 @@ func validateSupportedAction(action *ie.IE) error {
 	if err != nil {
 		return err
 	}
-	if flags[0]&^uint8(3) != 0 {
+	if flags[0]&^uint8(15) != 0 {
 		return unsupportedRuleIE(ie.ApplyAction)
+	}
+	// TS 29.244 V20.1.0 clause 8.2.26: exactly one base action;
+	// NOCP can accompany only BUFF. Unsupported actions remain rejected above.
+	base := flags[0] & 7
+	if base == 0 || base&(base-1) != 0 || flags[0]&8 != 0 && base != 4 {
+		return invalidRequestIE(ie.ApplyAction, ie.ErrInvalidValue)
 	}
 	if len(flags) > 1 && flags[1]&0x1f != 0 {
 		return unsupportedRuleIE(ie.ApplyAction)
@@ -371,7 +377,7 @@ func validateURRSubset(method, triggers, volume *ie.IE, create bool) error {
 func validateSessionCapability(request interface{}) error {
 	switch r := request.(type) {
 	case *message.SessionEstablishmentRequest:
-		if err := rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "CreateFAR", "CreateQER", "CreateURR", "PDNType", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType", "RecoveryTimeStamp", "PFCPSEReqFlags"); err != nil {
+		if err := rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "CreateFAR", "CreateQER", "CreateURR", "CreateBAR", "PDNType", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType", "RecoveryTimeStamp", "PFCPSEReqFlags"); err != nil {
 			return err
 		}
 		if r.PFCPSEReqFlags != nil {
@@ -384,7 +390,7 @@ func validateSessionCapability(request interface{}) error {
 			}
 		}
 	case *message.SessionModificationRequest:
-		return rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "UpdatePDR", "RemovePDR", "CreateFAR", "UpdateFAR", "RemoveFAR", "CreateQER", "UpdateQER", "RemoveQER", "CreateURR", "UpdateURR", "RemoveURR", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType")
+		return rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "UpdatePDR", "RemovePDR", "CreateFAR", "UpdateFAR", "RemoveFAR", "CreateQER", "UpdateQER", "RemoveQER", "CreateURR", "UpdateURR", "RemoveURR", "CreateBAR", "UpdateBAR", "RemoveBAR", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType")
 	}
 	return nil
 }

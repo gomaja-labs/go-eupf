@@ -253,7 +253,7 @@ The default Helm UPF limit is 512 MiB and one CPU (request: 512 MiB, 500m CPU), 
 
 ### Packet storage settings
 
-These settings take effect at startup and are shared by all PFCP endpoints. BUFF, NOCP and BAR remain rejected by the capability gate while buffering acceptance is incomplete; storage settings do not enable them.
+These settings take effect at startup and are shared by all PFCP endpoints. BUFF and BUFF|NOCP FARs use this bounded pool; BAR parameters can reduce the shared session limit and extend downlink retention. An empty storage allowance still permits first-packet notification. See [buffering behavior](pfcp-transport.md#packet-buffering-runtime).
 
 | File key | Flag | Environment | Default | Bounds |
 | --- | --- | --- | --- | --- |

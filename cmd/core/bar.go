@@ -105,8 +105,7 @@ func storeBAR(session *Session, bar *bufferingActionRule, durationUpdated bool) 
 	return nil
 }
 
-// stageSessionBAR applies to a private candidate only. The capability gate
-// continues rejecting BAR until the packet buffering runtime is enabled.
+// stageSessionBAR applies BAR instructions to a private candidate only.
 // TS 29.244 V20.1.0 tables 7.5.2.6-1, 7.5.4.11-1, 7.5.4.12-1, 7.5.9.2-1.
 func stageSessionBAR(session *Session, request any) error {
 	candidate := *session

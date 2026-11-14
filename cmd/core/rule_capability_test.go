@@ -24,7 +24,7 @@ func TestUnsupportedRuleContentRejected(t *testing.T) {
 		{"guaranteed bitrate", ie.NewCreateQER(ie.NewQERID(7), ie.NewGateStatus(0, 0), ie.NewGBR(100, 100)), 76, ie.RuleIDTypeQER, 7},
 		{"application detection", ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPDI(ie.NewUEIPAddress(6, "192.0.2.7", "", 0, 0), ie.NewApplicationID("test-application"))), 76, ie.RuleIDTypePDR, 7},
 		{"invalid forwarding policy", ie.NewCreateFAR(ie.NewFARID(7), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(1), ie.New(ie.ForwardingPolicy, []byte{1, 'x'}))), 70, ie.RuleIDTypeFAR, 7},
-		{"buffering", ie.NewCreateFAR(ie.NewFARID(7), ie.NewApplyAction(4)), 76, ie.RuleIDTypeFAR, 7},
+		{"duplication", ie.NewCreateFAR(ie.NewFARID(7), ie.NewApplyAction(18)), 76, ie.RuleIDTypeFAR, 7},
 		{"missing volume threshold", ie.NewCreateURR(ie.NewURRID(7), ie.NewMeasurementMethod(0, 1, 0), ie.NewReportingTriggers(2, 0)), 67, ie.RuleIDTypeURR, 7},
 	} {
 		t.Run(test.name, func(t *testing.T) {

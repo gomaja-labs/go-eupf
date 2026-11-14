@@ -152,7 +152,10 @@ func NewPfcpConnection(
 
 	log.Info().Msgf("Starting PFCP connection: %v with Node ID: %v, N3 address: %v, N9 address: %v", udpAddr, nodeId, n3Addr, n9Addr)
 
-	featuresOctets := []uint8{0, 0, 0x40} // BUNDL: IE octet 7 (payload byte 2), TS 29.244 V20.1.0 table 8.2.25-1
+	// TS 29.244 V20.1.0 table 8.2.25-1: DDND (Sxa), DLBD and
+	// DBDM (Sxa/N4), and UDBC (Sxb/Sxc/N4). BUCP, DDDS and EDBNC
+	// are not implemented.
+	featuresOctets := []uint8{0x06, 0x04, 0x40, 0, 0, 0, 0, 0x02} // BUNDL: IE octet 7 (payload byte 2), TS 29.244 V20.1.0 table 8.2.25-1
 	// TS 29.244 V20.1.0 table 8.2.25-1: EMPU is payload byte 1, bit 1.
 	featuresOctets[1] |= 1
 	// TS 29.244 V20.1.0 clause 5.5.1: EPC and 5GC require UP allocation.

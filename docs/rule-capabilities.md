@@ -14,9 +14,10 @@ Offending IE. Capacity exhaustion uses Cause 75 (No resources available) and
 Failed Rule ID. Invalid new CP F-TEID allocation uses Cause 71. Missing/invalid
 mandatory fields retain the procedural causes specified in clauses 7.5–7.6.
 The old FAR-trigger polling path is removed; usage polling never reads or mutates
-published FARs. BUFF/NOCP, BAR provisioning and buffering controls stay rejected
-while the buffering release acceptance is pending. These tables do not claim
-compatibility with every SMF feature.
+published FARs. BUFF/NOCP and BAR control the bounded application packet pool.
+DDND, DLBD, UDBC and DBDM advertise the implemented buffering parameters
+(TS 29.244 V20.1.0 table 8.2.25-1). These tables do not claim compatibility
+with every SMF feature.
 
 ## PDR
 
@@ -76,10 +77,10 @@ compatibility with every SMF feature.
 | IE | Treatment | Reason / supported subset | TS 29.244 V20.1.0 table |
 |---|---|---|---|
 | FAR ID | Implemented | Session-local identity. | 7.5.2.3-1, 7.5.4.3-1 |
-| Apply Action | Implemented | FORW or DROP only. BUFF/NOCP and other actions are rejected. | 7.5.2.3-1, 7.5.4.3-1 |
+| Apply Action | Implemented | Exactly one of FORW, DROP or BUFF; NOCP only with BUFF. Other actions are rejected. | 7.5.2.3-1, 7.5.4.3-1 |
 | Forwarding Parameters | Implemented | Supported routing/tunnel subset below. | 7.5.2.3-1 |
 | Duplicating Parameters | Rejected | Packet duplication is not implemented. | 7.5.2.3-1 |
-| BAR ID | Rejected | Buffering release acceptance is pending; BUFF and NOCP remain rejected. | 7.5.2.3-1, 7.5.4.3-1 |
+| BAR ID | Implemented | Associates the session BAR with a FAR; an unknown reference rejects the transaction. | 7.5.2.3-1, 7.5.4.3-1 |
 | Redundant Transmission Forwarding Parameters | Rejected | Redundant tunnel transmission is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
 | MBS Multicast Parameters | Rejected | MBS multicast transmission is not implemented. | 7.5.2.3-1 |
 | Add MBS Unicast Parameters | Rejected | MBS unicast replication is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
@@ -173,14 +174,14 @@ compatibility with every SMF feature.
 
 | IE | Treatment | Reason / supported subset | TS 29.244 V20.1.0 table |
 |---|---|---|---|
-| BAR ID | Rejected | Buffering controls are not accepted or advertised until kernel-output ordering is complete. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
-| Downlink Data Notification Delay | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
-| Suggested Buffering Packets Count | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
-| MT-EDT Control Information | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1 |
-| MT-SDT Control Information | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1 |
-| DL Buffering Duration | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
-| DL Buffering Suggested Packet Count | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
-| Extended DL Buffering Notification Policy | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.4.11-1, 7.5.9.2-1 |
+| BAR ID | Implemented | One session-local BAR, including ID zero; create, update, remove and Report Response updates. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| Downlink Data Notification Delay | Implemented | EPC notification delay; ignored for 5GC notification timing (clauses 5.2.4.2, 5.2.2.3.1). | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| Suggested Buffering Packets Count | Implemented | Shared UL/DL bound for associated FARs, further bounded by local pool/session limits; zero retains notification without payload storage (clause 8.2.100). | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| MT-EDT Control Information | Rejected | MT-EDT, MT-SDT and extended notification policy are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1 |
+| MT-SDT Control Information | Rejected | MT-EDT, MT-SDT and extended notification policy are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1 |
+| DL Buffering Duration | Implemented | Extended DL retention and notification suppression in Create BAR during Modification, Update BAR and Report Response; ignored during Establishment (table 7.5.2.6-1). | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| DL Buffering Suggested Packet Count | Implemented | Shared DL-only bound during extended buffering; same message contexts as DL Buffering Duration (clause 8.2.30). | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| Extended DL Buffering Notification Policy | Rejected | MT-EDT, MT-SDT and extended notification policy are not implemented or advertised. | 7.5.4.11-1, 7.5.9.2-1 |
 
 ## Bounds and peer shapes
 
@@ -207,15 +208,15 @@ The read-only peer-source review used:
   `internal/pfcp/message/build_establishment.go` constructs Source Interface,
   F-TEID choice, Network Instance, UE IP, SDF, FAR, QER and optional URR/BAR
   children. Its SMF-allocated F-TEID request is tested and rejects with Cause 71. Its optional
-  GBR, buffering, periodic/quota measurement and separate UL/DL thresholds
+  GBR, periodic/quota measurement and separate UL/DL thresholds
   remain explicit rejections. Eight PDI QFI alternatives and 64 session rules
   provide bounded sets rather than claiming the peer's unrestricted list sizes.
 
 `TestForwardingEstablishmentsFromCommonSMFShapes` follows Open5GS's default
 UL/DL plus cp2up/up2cp rules (`context.c:2395-2444,2785-2832`,
 `npcf-handler.c:729-775`) and free5GC's CP allocation (`datapath.go:679`). The
-Open5GS default BUFF|NOCP/BAR request remains rejected with Cause 76. Its
-forwarding variant accepts the four PDRs, including the CP-function rules.
+Open5GS default BUFF|NOCP/BAR request and its forwarding variant accept the
+four PDRs, including the CP-function rules.
 free5GC's CP-allocated tunnel remains rejected with Cause 71. These are
 synthetic requests constructed from pinned source, not live interoperability. The tests
 for implemented, informative and unsupported fields are separate.
@@ -289,9 +290,9 @@ Cause 76 with the offending field/Failed Rule ID.
 Scenarios 3 (CP buffering), 4 (CP-constructed End Markers) and 5 (Control Plane
 CIoT) are outside this supported subset. Their basic IP-payload forwarding can
 overlap the rows above, but full extension-header preservation, nested End
-Marker semantics and CIoT procedures are not claimed. BUFF/NOCP/BAR controls
-remain rejected with Cause 76; there is no separate scenario discriminator
-that makes every overlapping ordinary FORW rule reject. UP-constructed ordinary N3/N9/EPC End Markers are supported and advertised as EMPU. The per-FAR SNDEM flag in Update Forwarding Parameters sends to the old F-TEID after rule publication and a data-plane grace period. Unchanged F-TEIDs and requests without SNDEM send nothing. N19 emits no marker. Labeled N3/N9 data-forwarding tunnels use the PDR deletion instruction or one mapped QER QFI (TS 29.281 V19.2.0 clause 7.3.2.3).
+Marker semantics and CIoT procedures are not claimed. Buffering support does
+not add those procedures; there is no separate scenario discriminator that makes
+every overlapping ordinary FORW rule reject. UP-constructed ordinary N3/N9/EPC End Markers are supported and advertised as EMPU. The per-FAR SNDEM flag in Update Forwarding Parameters sends to the old F-TEID after rule publication and a data-plane grace period. Unchanged F-TEIDs and requests without SNDEM send nothing. N19 emits no marker. Labeled N3/N9 data-forwarding tunnels use the PDR deletion instruction or one mapped QER QFI (TS 29.281 V19.2.0 clause 7.3.2.3).
 
 N3, N9 and N4-u outer tunnel endpoints remain IPv4. N4-u uses the configured N3
 IPv4 address. CHOOSE offering V4 and V6 receives V4 only; a V6-only offer returns
