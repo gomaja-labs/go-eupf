@@ -194,7 +194,7 @@ static __noinline const struct pdr *select_pdr(struct packet_context *ctx,struct
         if (entry->match_mode) {
             if (entry->match_mode!=1 && entry->match_mode!=packet->source_interface+2) continue;
         } else if (!match_pdr_entry(entry,packet)) continue;
-        ctx->trace=entry->trace_flag;ctx->nr_flag=entry->nr_flag;ctx->pdr_id=entry->pdr_id;
+        ctx->trace=entry->trace_flag;ctx->nr_flag=entry->nr_flag;
         ctx->return_pdr=&entry->return_pdr;ctx->return_nr_flag=entry->return_nr_flag;
         if (entry->notify==1 && __sync_val_compare_and_swap(&entry->notify,1,2)==1)
             output_sdf_event(ctx->xdp_ctx,session->session_id,entry->pdr_id,packet);
@@ -211,7 +211,6 @@ static __always_inline const struct pdr *select_unfiltered_pdr(struct packet_con
     struct pdr_entry *entry = &session->entries[0];
     if (!entry->match_mode || entry->notify == 1) return 0;
     if (entry->match_mode != 1 && entry->match_mode != ctx->source_interface + 2) return 0;
-    ctx->pdr_id = entry->pdr_id;
     ctx->trace = entry->trace_flag;
     ctx->nr_flag = entry->nr_flag;
     ctx->return_pdr = &entry->return_pdr;
@@ -315,6 +314,53 @@ int enforce_qers(const struct pdr *pdr,__u64 packet_size,__u32 uplink) {
     return marking;
 }
 
+// Buffering is reached only from the base FORW rejection. Neither binding
+// lookup nor notification/accounting state is touched by a plain FORW packet.
+// TS 29.244 V20.1.0 clauses 5.2.3.1 and 5.2.4.2.
+static __always_inline enum xdp_action buffer_n6_packet(struct packet_context *ctx, const struct pdr *pdr, const struct far_info *far) {
+    if (!(far->action & FAR_BUFF)) return XDP_DROP;
+    __u64 size;
+    if (ctx->ip4) {
+        size=bounded_wire_length(ctx->ip4->tot_len);
+        if (size<ctx->ip4->ihl*4 || (const char *)ctx->ip4+size>ctx->data_end) return XDP_DROP;
+    } else if (ctx->ip6) {
+        size=bounded_wire_length(ctx->ip6->payload_len)+sizeof(*ctx->ip6);
+        if ((const char *)ctx->ip6+size>ctx->data_end) return XDP_DROP;
+    } else return XDP_DROP;
+    int marking=enforce_qers(pdr,size,0);
+    if (marking<0) return XDP_DROP;
+    if (!ctx->locally_generated) {
+        if (ctx->ip4) {
+            if ((const char *)(ctx->ip4+1)>ctx->data_end) return XDP_ABORTED;
+            if (ctx->ip4->ttl<=1) return XDP_PASS;
+            __u16 old,new;
+            __builtin_memcpy(&old,&ctx->ip4->ttl,sizeof(old));
+            ctx->ip4->ttl--;
+            __builtin_memcpy(&new,&ctx->ip4->ttl,sizeof(new));
+            ipv4_csum_replace(&ctx->ip4->check,old,new);
+        } else if (ctx->ip6) {
+            if ((const char *)(ctx->ip6+1)>ctx->data_end) return XDP_ABORTED;
+            if (ctx->ip6->hop_limit<=1) return XDP_PASS;
+            ctx->ip6->hop_limit--;
+        } else return XDP_ABORTED;
+    }
+    for (int i=0;i<URR_LIST_SIZE;i++) update_urr(pdr->urr_id[i],0,size);
+    int action=buffer_admit(ctx,pdr,far,marking,0);
+    if (action!=BUFFER_DIRECT) {
+        if (action==UPF_BUFFER_PACKET) {
+            ctx->continuation=2;
+#ifdef BUFFER_CONTINUATION
+            buffer_result_admitted();
+#endif
+            return UPF_LOCAL_TUNNEL;
+        }
+        return action;
+    }
+    if (!(far->action & FAR_BUFFER_RELEASE) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
+    __u8 tos=marking>>8 ? marking>>8 : far->transport_level_marking>>8;
+    return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
+}
+
 static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *ctx) {
     if (!ctx->ip4 || (const char *)(ctx->ip4+1) > ctx->data_end) return XDP_ABORTED;
     struct iphdr *ip4 = ctx->ip4;
@@ -340,11 +386,11 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
 
 
     // Only forwarding action is supported at the moment
-    if (!(far->action & (FAR_FORW | FAR_BUFF)))
-        return XDP_DROP;
+    if (!(far->action & FAR_FORW))
+        return buffer_n6_packet(ctx,pdr,far);
 
     // Only outer header GTP/UDP/IPv4 is supported at the moment
-    if (!(far->action & FAR_BUFF) && !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
+    if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
     const __u64 packet_size=bounded_wire_length(ip4->tot_len);
@@ -367,11 +413,6 @@ static __noinline enum xdp_action handle_n6_packet_ipv4(struct packet_context *c
         update_urr(pdr->urr_id[i], 0, packet_size);
     }
 
-    if (far->buffer_session_id) {
-        int buffered=buffer_admit(ctx,pdr,far,marking,0);
-        if (buffered!=BUFFER_DIRECT) return buffered;
-    }
-    if (!(far->action & FAR_FORW)) return XDP_DROP;
     upf_printk("upf: [n6] use mapping %pI4 -> teid:%u", &ip4->daddr, far->teid);
     return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
@@ -392,11 +433,11 @@ static __noinline enum xdp_action forward_n6_packet_ipv6(struct packet_context *
     upf_printk("upf: [n6] downlink session for ip:%pI6c far:%d action:%d", &ip6->daddr, pdr->far_id, far->action);
 
     // Only forwarding action supported at the moment
-    if (!(far->action & (FAR_FORW | FAR_BUFF)))
-        return XDP_DROP;
+    if (!(far->action & FAR_FORW))
+        return buffer_n6_packet(ctx,pdr,far);
 
     // Only outer header GTP/UDP/IPv4 is supported at the moment
-    if (!(far->action & FAR_BUFF) && !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
+    if (!(far->outer_header_creation & OHC_GTP_U_UDP_IPv4))
         return XDP_DROP;
 
     const __u64 packet_size=bounded_wire_length(ip6->payload_len)+sizeof(*ip6);
@@ -417,11 +458,6 @@ static __noinline enum xdp_action forward_n6_packet_ipv6(struct packet_context *
         update_urr(pdr->urr_id[i], 0, packet_size);
     }
 
-    if (far->buffer_session_id) {
-        int buffered=buffer_admit(ctx,pdr,far,marking,0);
-        if (buffered!=BUFFER_DIRECT) return buffered;
-    }
-    if (!(far->action & FAR_FORW)) return XDP_DROP;
     upf_printk("upf: [n6] use mapping %pI6c -> teid:%u", &ip6->daddr, far->teid);
     return send_to_gtp_tunnel(ctx, global_config.n3_ipv4_address, far->remoteip, tos, marking & 0x7f, far->teid, ctx->nr_flag && (marking & 0x80));
 }
@@ -556,6 +592,29 @@ static __always_inline enum xdp_action finish_gtp_forwarding(struct packet_conte
     return XDP_ABORTED;
 }
 
+static __always_inline enum xdp_action buffer_gtp_packet(struct packet_context *ctx, const struct pdr *pdr, const struct far_info *far) {
+    if (!(far->action & FAR_BUFF)) return XDP_DROP;
+    int uplink=ctx->source_interface==0 || (ctx->source_interface==3 && far->destination_interface_present &&
+        (far->destination_interface==1 || far->destination_interface==2));
+    int marking=enforce_qers(pdr,ctx->tpdu_length,uplink);
+    if (marking<0) return XDP_DROP;
+    for (int i=0;i<URR_LIST_SIZE;i++) update_urr(pdr->urr_id[i],uplink?ctx->tpdu_length:0,uplink?0:ctx->tpdu_length);
+    int action=buffer_admit(ctx,pdr,far,marking,uplink);
+    if (action!=BUFFER_DIRECT) {
+        if (action==UPF_BUFFER_PACKET) {
+            ctx->continuation=2;
+#ifdef BUFFER_CONTINUATION
+            buffer_result_admitted();
+#endif
+            return UPF_LOCAL_TUNNEL;
+        }
+        return action;
+    }
+    if (!(far->action & FAR_BUFFER_RELEASE)) return XDP_DROP;
+    __u32 removal=pdr->outer_header_removal | ((__u32)pdr->outer_header_removal_present<<8) | ((__u32)pdr->gtp_extension_header_deletion<<16);
+    return finish_gtp_forwarding(ctx,far,marking,removal,0);
+}
+
 static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) {
     if (!ctx->gtp) {
         upf_printk("upf: [n3] unexpected packet context. no gtp header");
@@ -617,8 +676,8 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
 
 
     // Only forwarding action supported at the moment
-    if (!(far->action & (FAR_FORW | FAR_BUFF)))
-        return XDP_DROP;
+    if (!(far->action & FAR_FORW))
+        return buffer_gtp_packet(ctx,pdr,far);
 
     /*
      *   Step 3: search for QER and apply QER instructions
@@ -637,14 +696,100 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
         update_urr(pdr->urr_id[i], uplink ? packet_size : 0, uplink ? 0 : packet_size);
     }
 
-    if (far->buffer_session_id) {
-        int buffered=buffer_admit(ctx,pdr,far,marking,uplink);
-        if (buffered!=BUFFER_DIRECT) return buffered;
-    }
-    if (!(far->action & FAR_FORW)) return XDP_DROP;
+    upf_printk("upf: [n3] session for teid:%u far:%d outer_header_removal:%d", teid, pdr->far_id, pdr->outer_header_removal);
 
-    __u32 removal=pdr->outer_header_removal | ((__u32)pdr->outer_header_removal_present<<8) | ((__u32)pdr->gtp_extension_header_deletion<<16);
-    return finish_gtp_forwarding(ctx,far,marking,removal,0);
+    __u8 tos = marking >> 8 ? marking >> 8 : far->transport_level_marking >> 8;
+    // N9: Only outer header GTP/UDP/IPv4 is supported at the moment
+    if (far->outer_header_creation & OHC_GTP_U_UDP_IPv4)
+    {
+        upf_printk("upf: [n3] session for teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);
+        if (from_cp) {
+            // CP-originated downlink packets need the session's DL QFI and
+            // PDU Session Container, rather than retaining an absent CP QFI.
+            if (remove_gtp_header(ctx)) return XDP_ABORTED;
+            return send_to_gtp_tunnel(ctx,global_config.n3_ipv4_address,far->remoteip,tos,marking&0x7f,far->teid,ctx->nr_flag && (marking&0x80));
+        }
+        // TS 29.244 V20.1.0 clause 5.17.3 applies the same container
+        // mapping to G-PDUs and End Markers on forwarding tunnels.
+        if (pdr->gtp_extension_header_deletion & 1) {
+            if (delete_gtp_container(ctx)) return XDP_DROP;
+        } else if (!ctx->qfi_present && (marking & 0x80)) {
+            if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
+        }
+        __u32 local=global_config.n9_ipv4_address;
+        if (far->destination_interface_present && far->destination_interface==3) {
+            local=global_config.n3_ipv4_address;
+            ctx->ip4->tos=tos;
+        }
+        update_gtp_tunnel(ctx, local, far->remoteip, 0, far->teid);
+
+        if(is_local_ip(ctx->ip4->daddr)) {
+            upf_printk("upf: [n3] process locally teid:%u -> %u remote:%pI4", teid, far->teid, &far->remoteip);
+            return UPF_LOCAL_TUNNEL;
+            //return handle_gtp_packet(ctx);
+        }
+    } else if (pdr->outer_header_removal_present && (pdr->outer_header_removal == OHR_GTP_U_UDP_IPv4 || pdr->outer_header_removal == OHR_GTP_U_UDP_IP)) {
+        long result = remove_gtp_header(ctx);
+        if (result) {
+            upf_printk("upf: [n3] handle_gtp_packet: can't remove gtp header: %d", result);
+            return XDP_ABORTED;
+        }
+    }
+
+    /*
+     * Decrement IP TTL and reply TTL exeeded message (debug purspose only)
+     */
+    // if(ctx->ip4 && ctx->ip4->ttl < 2)
+    // {
+    //     if (-1 == add_icmp_over_ip4_headers(ctx, far->localip, ctx->ip4->saddr))
+    //         return XDP_ABORTED;
+
+    //     upf_printk("upf: send icmp ttl exeeded %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+    //     return handle_n6_packet_ipv4(ctx);
+    // }
+
+    /*
+     * Reply to ping requests (debug purspose only)
+     */
+    if(ctx->ip4 && is_local_ip(ctx->ip4->daddr) && ctx->ip4->protocol == IPPROTO_ICMP)
+    {
+        upf_printk("upf: [n3] prepare icmp ping reply to request %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+        if (-1 == prepare_icmp_echo_reply(ctx, ctx->ip4->daddr, ctx->ip4->saddr))
+            return XDP_ABORTED;
+
+        upf_printk("upf: [n3] send icmp ping reply %pI4 -> %pI4", &ctx->ip4->saddr, &ctx->ip4->daddr);
+        return UPF_DOWNLINK_IP4;
+    }
+
+    if(global_config.ip6_ra_support && ctx->ip6 && ctx->ip6->nexthdr == IPPROTO_ICMPV6)
+    {
+        const struct in6_addr rs_address = { .in6_u.u6_addr8 = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}};
+        if(*((__u128*)ctx->ip6->daddr.s6_addr) == *((__u128*)rs_address.s6_addr))
+        {
+            const char *data_end = (const char *)(long)ctx->xdp_ctx->data_end;
+            struct icmp6hdr *icmp6 = (struct icmp6hdr *)(ctx->ip6 + 1);
+            if ((const char *)(icmp6 + 1) <= data_end) {
+                if(icmp6->icmp6_type == ICMPV6_ROUTER_SOLICITATION) {
+                    return UPF_ROUTER_SOLICITATION;
+                }
+            }
+        }
+    }
+
+    /*
+     *   Step 4: Route packet finally
+     */
+    if (ctx->ip4) {
+        increment_counter(ctx->n3_n6_counter, tx_n6);
+        update_tos_ipv4(ctx->ip4, tos);
+        return route_ipv4(ctx->xdp_ctx, ctx->eth, ctx->ip4);
+    } else if (ctx->ip6) {
+        increment_counter(ctx->n3_n6_counter, tx_n6);
+        update_tos_ipv6(ctx->ip6, tos);
+        return route_ipv6(ctx->xdp_ctx, ctx->eth, ctx->ip6);
+    }
+
+    return XDP_ABORTED;
 }
 
 static __noinline enum xdp_action handle_router_solicitation(struct packet_context *ctx) {
@@ -824,7 +969,7 @@ struct router_reply_context {
 
 static __always_inline int continue_router_solicitation(struct xdp_md *ctx, struct packet_context *packet) {
     if (!packet->return_pdr) return XDP_DROP;
-    struct router_reply_context saved={.pdr_id=packet->pdr_id,.magic=ROUTER_REPLY_MAGIC,.nr=packet->return_nr_flag,.trace=packet->trace};
+    struct router_reply_context saved={.pdr_id=buffer_pdr_id(packet),.magic=ROUTER_REPLY_MAGIC,.nr=packet->return_nr_flag,.trace=packet->trace};
     __builtin_memcpy(&saved.pdr,packet->return_pdr,sizeof(saved.pdr));
     if (bpf_xdp_adjust_head(ctx,-(int)sizeof(saved))) return XDP_ABORTED;
     void *data=(void *)(long)ctx->data;
@@ -867,15 +1012,8 @@ int upf_router_solicitation_func(struct xdp_md *ctx) {
         action=forward_n6_packet_ipv6(&packet,&saved.pdr);
     }
     if (action==UPF_LOCAL_TUNNEL) {
-        bpf_tail_call(ctx,&jmp_table,0);
+        bpf_tail_call(ctx,&jmp_table,packet.continuation);
         BUFFER_RETURN(ctx,XDP_ABORTED);
-    }
-    if (action==UPF_BUFFER_PACKET) {
-#ifdef BUFFER_CONTINUATION
-        buffer_result_admitted();
-#endif
-        bpf_tail_call(ctx,&jmp_table,2);
-        BUFFER_RETURN(ctx,XDP_DROP);
     }
     statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK]++;
     if (global_config.trace_out && packet.trace && (action==XDP_TX || action==XDP_REDIRECT))
@@ -927,15 +1065,8 @@ int upf_ip_entrypoint_func(struct xdp_md *ctx) {
     // Dispatch local tunnel recursion only from the entry frame. This keeps
     // bounded kernel tail calls independent of ordinary BPF subprogram stacks.
     if (action == UPF_LOCAL_TUNNEL) {
-        bpf_tail_call(ctx, &jmp_table, 0);
+        bpf_tail_call(ctx, &jmp_table, context.continuation);
         BUFFER_RETURN(ctx,XDP_ABORTED);
-    }
-    if (action==UPF_BUFFER_PACKET) {
-#ifdef BUFFER_CONTINUATION
-        buffer_result_admitted();
-#endif
-        bpf_tail_call(ctx,&jmp_table,2);
-        BUFFER_RETURN(ctx,XDP_DROP);
     }
     statistic->xdp_actions[action & EUPF_MAX_XDP_ACTION_MASK] += 1;
 
@@ -961,8 +1092,7 @@ int upf_buffer_downlink_func(struct xdp_md *ctx) {
     int protocol=parse_ethernet(&packet),action=XDP_ABORTED;
     if (protocol==ETH_P_IP && parse_ip4(&packet)>=0) action=handle_n6_packet_ipv4(&packet);
     else if (protocol==ETH_P_IPV6 && parse_ip6(&packet)>=0) action=handle_n6_packet_ipv6(&packet);
-    if (action==UPF_LOCAL_TUNNEL) { bpf_tail_call(ctx,&jmp_table,0);return buffer_result_finish(ctx,XDP_ABORTED,0); }
-    if (action==UPF_BUFFER_PACKET) { buffer_result_admitted();bpf_tail_call(ctx,&jmp_table,2);return XDP_DROP; }
+    if (action==UPF_LOCAL_TUNNEL) { bpf_tail_call(ctx,&jmp_table,packet.continuation);return buffer_result_finish(ctx,XDP_ABORTED,0); }
     return buffer_result_finish(ctx,action,0);
 }
 #endif

@@ -170,6 +170,11 @@ func (tx *ruleTransaction) Rollback() error {
 		if err := clearInitializedRules[IpEntrypointFarInfo](b.FarMap, tx.allocatedFAR, tx.newFAR); err != nil {
 			return err
 		}
+		for _, id := range tx.allocatedFAR {
+			if err := b.clearBufferBinding(id); err != nil {
+				return err
+			}
+		}
 		if err := clearInitializedRules[IpEntrypointQerInfo](b.QerMap, tx.allocatedQER, tx.newQER); err != nil {
 			return err
 		}
@@ -316,8 +321,23 @@ func (tx *ruleTransaction) NewUrr(info UrrInfo) (uint32, error) {
 	return id, nil
 }
 func (tx *ruleTransaction) UpdateFar(id uint32, info FarInfo) error {
+	if !tx.newFAR[id] {
+		return errors.New("rule configuration requires a fresh reserved slot")
+	}
+	if tx.beforeWrite != nil {
+		if err := tx.beforeWrite(); err != nil {
+			return err
+		}
+	}
+	if err := tx.objects.putBufferBinding(id, info); err != nil {
+		return err
+	}
 	value := farMapValue(info)
-	return initializeRule(tx, tx.objects.FarMap, id, &value, tx.newFAR)
+	if err := tx.objects.FarMap.Put(id, &value); err != nil {
+		return err
+	}
+	tx.newFAR[id] = false
+	return nil
 }
 func (tx *ruleTransaction) UpdateQer(id uint32, info QerInfo) error {
 	value := qerMapValue(info)
@@ -374,6 +394,9 @@ func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	// Clearing an unreachable value is reclamation, not a rule-plan write.
 	tx.retired = append(tx.retired, func() error {
 		if err := tx.objects.FarMap.Put(id, &IpEntrypointFarInfo{}); err != nil {
+			return err
+		}
+		if err := tx.objects.clearBufferBinding(id); err != nil {
 			return err
 		}
 		tx.objects.ReleaseFAR(id)

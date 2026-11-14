@@ -184,8 +184,7 @@ func (bpfObjects *BpfObjects) NewFar(farInfo FarInfo) (uint32, error) {
 
 	log.Debug().Msgf("EBPF: Put FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
-	farToStore := farMapValue(farInfo)
-	if err := bpfObjects.FarMap.Put(internalId, &farToStore); err != nil {
+	if err := bpfObjects.UpdateFar(internalId, farInfo); err != nil {
 		bpfObjects.ReleaseFAR(internalId)
 		return 0, fmt.Errorf("create FAR: %w", err)
 	}
@@ -193,6 +192,9 @@ func (bpfObjects *BpfObjects) NewFar(farInfo FarInfo) (uint32, error) {
 }
 
 func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
+	if bpfObjects.BufferBindings == nil {
+		return FarInfo{}, errors.New("buffer binding map is not loaded")
+	}
 	log.Debug().Msgf("EBPF: Get FAR: internalId=%d", internalId)
 
 	farToStore := IpEntrypointFarInfo{}
@@ -201,7 +203,6 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	}
 
 	farInfo := FarInfo{
-		BufferSessionID: farToStore.BufferSessionId, BufferCookie: farToStore.BufferCookie, BufferLane: farToStore.BufferLane,
 		EndMarkerSuppressed:         farToStore.EndMarkerSuppressed != 0,
 		Action:                      farToStore.Action,
 		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
@@ -212,18 +213,40 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 		DestinationInterfacePresent: farToStore.DestinationInterfacePresent != 0,
 	}
 
+	var binding bufferBinding
+	if err := bpfObjects.BufferBindings.Lookup(internalId, &binding); err != nil && !isKeyAbsent(err) {
+		return FarInfo{}, err
+	}
+	farInfo.BufferSessionID, farInfo.BufferCookie, farInfo.BufferLane = binding.SessionID, binding.Cookie, binding.Lane
+	if farInfo.Action&bufferReleaseAction != 0 && binding.Cookie != 0 {
+		farInfo.Action = (farInfo.Action &^ (bufferReleaseAction | 4)) | 2
+	}
 	log.Debug().Msgf("EBPF: Get FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 	return farInfo, nil
 }
 
 func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) error {
+	if bpfObjects.BufferBindings == nil {
+		return errors.New("buffer binding map is not loaded")
+	}
 	if internalId == 0 {
 		return fmt.Errorf("cannot update reserved FAR 0")
 	}
 	log.Debug().Msgf("EBPF: Update FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
+	var before bufferBinding
+	err := bpfObjects.BufferBindings.Lookup(internalId, &before)
+	if err != nil && !isKeyAbsent(err) {
+		return err
+	}
+	if err := bpfObjects.putBufferBinding(internalId, farInfo); err != nil {
+		return err
+	}
 	farToStore := farMapValue(farInfo)
-	return bpfObjects.FarMap.Update(internalId, &farToStore, ebpf.UpdateExist)
+	if err := bpfObjects.FarMap.Update(internalId, &farToStore, ebpf.UpdateExist); err != nil {
+		return errors.Join(err, bpfObjects.putBufferBinding(internalId, FarInfo{BufferSessionID: before.SessionID, BufferCookie: before.Cookie, BufferLane: before.Lane}))
+	}
+	return nil
 }
 
 func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
@@ -232,6 +255,9 @@ func (bpfObjects *BpfObjects) DeleteFar(intenalId uint32) error {
 	}
 	log.Debug().Msgf("EBPF: Delete FAR: intenalId=%d", intenalId)
 	if err := bpfObjects.FarMap.Update(intenalId, &IpEntrypointFarInfo{}, ebpf.UpdateExist); err != nil && !isKeyAbsent(err) {
+		return err
+	}
+	if err := bpfObjects.clearBufferBinding(intenalId); err != nil {
 		return err
 	}
 	bpfObjects.ReleaseFAR(intenalId)
@@ -765,5 +791,9 @@ func (tx *ruleTransaction) RetireQer(id uint32) error {
 }
 
 func farMapValue(info FarInfo) IpEntrypointFarInfo {
-	return IpEntrypointFarInfo{BufferSessionId: info.BufferSessionID, BufferCookie: info.BufferCookie, BufferLane: info.BufferLane, EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: info.Action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
+	action := info.Action
+	if action&2 != 0 && info.BufferCookie != 0 {
+		action = (action &^ 2) | 4 | bufferReleaseAction
+	}
+	return IpEntrypointFarInfo{EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
 }

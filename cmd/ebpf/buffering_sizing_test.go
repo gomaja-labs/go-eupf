@@ -12,6 +12,9 @@ func TestBufferMapSizingMatchesTheMemoryPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if int(spec.Maps["buffer_bindings"].ValueSize) != binary.Size(bufferBinding{}) {
+		t.Fatal("buffer binding geometry differs from Go serialization")
+	}
 	if int(spec.Maps["buffer_anchors"].ValueSize) != binary.Size(bufferAnchor{}) {
 		t.Fatal("buffer anchor geometry differs from Go memory accounting")
 	}

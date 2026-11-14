@@ -55,7 +55,10 @@ func (c *UpfConfig) BufferMemoryReserve() int64 {
 // BufferKernelMemoryReserve covers growing metadata independently of packet
 // storage. Measured cgroup deltas at 1024 and 65535 sessions are rounded up to
 // 320 bytes per session (anchor and wakeup) and 1152 per FAR lifetime; the
-// lifetime map accommodates current and retiring versions. Empty maps and the
+// lifetime map accommodates current and retiring versions. The FAR-slot binding
+// map measured 104-108 kernel bytes per populated slot; the same 1152-byte
+// rounding per lifetime covers that map alongside both live/retiring states.
+// Empty maps and the
 // fixed ring and continuation programs are part of the observed loaded baseline.
 // A full N=4096 rendered-result map measured 4103 kernel bytes per packet;
 // round to 4608 independently of the Go payload allocation.

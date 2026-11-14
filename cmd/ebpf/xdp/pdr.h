@@ -166,9 +166,6 @@ enum outer_header_creation_values {
 };
 
 struct far_info {
-    __u64 buffer_session_id;
-    __u64 buffer_cookie;
-    __u32 buffer_lane;
     __u8 action;
     __u8 outer_header_creation;
     __u8 end_marker_suppressed;

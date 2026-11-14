@@ -36,9 +36,10 @@ int upf_buffer_render_func(struct xdp_md *xdp) {
     __u32 length=input->length;
     if (length<14 || length>BUFFER_FRAME_SIZE || (const char *)input+64+length>end) return XDP_ABORTED;
     struct far_info *far=bpf_map_lookup_elem(&far_map,&slot);
-    if (!far || !(far->action&FAR_FORW) || !input->cookie ||
-        far->buffer_session_id!=input->session_id || far->buffer_cookie!=input->cookie ||
-        far->buffer_lane!=input->lane) return XDP_ABORTED;
+    struct buffer_binding *binding=bpf_map_lookup_elem(&buffer_bindings,&slot);
+    if (!far || !(far->action&FAR_BUFFER_RELEASE) || !binding || !input->cookie ||
+        binding->session_id!=input->session_id || binding->cookie!=input->cookie ||
+        binding->lane!=input->lane) return XDP_ABORTED;
 #ifdef BUFFER_CONTINUATION
     struct buffer_render_result *cached=buffer_current_result();
     if (!cached || __sync_val_compare_and_swap(&cached->status,0,1)!=0) return XDP_DROP;
@@ -88,7 +89,7 @@ done:
         return buffer_result_finish(xdp,action,0);
     }
     if (action==UPF_LOCAL_TUNNEL) {
-        bpf_tail_call(xdp,&jmp_table,0);
+        bpf_tail_call(xdp,&jmp_table,packet.continuation);
         return buffer_result_finish(xdp,XDP_ABORTED,0);
     }
     if (action==UPF_BUFFER_PACKET) {

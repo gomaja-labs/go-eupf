@@ -7,10 +7,31 @@
 
 #define BUFFER_FRAME_SIZE 2048
 #define BUFFER_DIRECT 8
+// Internal action bit; the PFCP validator never accepts it from the peer.
+#define FAR_BUFFER_RELEASE 0x80
 #define BUFFER_HOLD 1
 #define BUFFER_DRAIN 2
 #define BUFFER_FORWARD 3
 #define BUFFER_DISCARD 4
+
+// Immutable slot identity retires with its FAR version after producer grace.
+struct buffer_binding { __u64 session_id,cookie; __u32 lane,reserved; };
+struct {
+    __uint(type,BPF_MAP_TYPE_HASH);
+    __uint(map_flags,BPF_F_NO_PREALLOC);
+    __uint(max_entries,FAR_MAP_SIZE);
+    __type(key,__u32);
+    __type(value,struct buffer_binding);
+} buffer_bindings SEC(".maps");
+
+// return_pdr already identifies the selected entry on the base path. Resolve
+// its ID only after entering BUFF; generated router replies carry a scalar ID.
+static __always_inline __u32 buffer_pdr_id(struct packet_context *ctx) {
+    if (ctx->locally_generated && ctx->ip6) return ctx->pdr_id;
+    if (!ctx->return_pdr) return ~0U;
+    const struct pdr_entry *entry=(void *)((const char *)ctx->return_pdr-__builtin_offsetof(struct pdr_entry,return_pdr));
+    return entry->pdr_id;
+}
 
 struct buffer_far {
     __u64 cookie;
@@ -270,8 +291,12 @@ struct {
 #define UPF_BUFFER_PACKET 13
 
 static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr *pdr, const struct far_info *far, int marking, int uplink) {
-    __u64 id=far->buffer_session_id, cookie=far->buffer_cookie;
-    __u64 lane=far->buffer_lane;
+    __u32 slot=pdr->far_id;
+    struct buffer_binding *binding=bpf_map_lookup_elem(&buffer_bindings,&slot);
+    if (!binding) return XDP_DROP;
+    __u64 id=binding->session_id,cookie=binding->cookie;
+    __u64 lane=binding->lane;
+    __u32 pdr_id=buffer_pdr_id(ctx);
     __u32 key=0;
     if (!id || !cookie) return XDP_DROP;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
@@ -289,13 +314,13 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
         direct=state->mode==BUFFER_FORWARD;
         // NOCP observes arrival independently of every packet-storage bound.
         // TS 29.244 V20.1.0 clause 5.2.3.1.
-        if ((far->action&FAR_NOCP) && !uplink && ctx->pdr_id<=0xffff && state->mode==BUFFER_HOLD) {
+        if ((far->action&FAR_NOCP) && !uplink && pdr_id<=0xffff && state->mode==BUFFER_HOLD) {
             __u32 flow=64;
             if (ctx->nr_flag && ((marking&0x80) || ctx->qfi_present)) flow=(marking&0x80) ? marking&0x3f : ctx->qfi&0x3f;
             __u64 bit=1ULL<<(flow&63);
             if ((flow==64 && !state->absent_seen) || (flow<64 && !(state->seen&bit))) {
                 state->notice_time[flow]=now;
-                state->notice_pdr[flow]=ctx->pdr_id;
+                state->notice_pdr[flow]=pdr_id;
                 if (flow==64) state->absent_notice=state->absent_seen=1;
                 else { state->notices|=bit;state->seen|=bit; }
                 notice_ready=1;
@@ -321,7 +346,7 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     pending->received_ns=now;
     pending->downlink=!uplink;
     pending->lane=lane;
-    pending->pdr_id=ctx->pdr_id;
+    pending->pdr_id=pdr_id;
     pending->ingress_ifindex=ctx->xdp_ctx->ingress_ifindex;
     pending->marking=marking;
     pending->kind=ctx->gtp ? 3 : ctx->ip6 ? 2 : 1;

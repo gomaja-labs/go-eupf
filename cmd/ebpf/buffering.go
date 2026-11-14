@@ -350,3 +350,29 @@ func (b *BpfObjects) ReadBufferNotice(session, cookie uint64, lane uint32) (Buff
 	index := result.Preparing - 1
 	return BufferRecord{SessionID: session, Cookie: cookie, Lane: lane, PDRID: result.Limit, ReceivedNS: result.Produced, QFI: uint8(index & 63), QFIPresent: index < 64, Notify: true, Downlink: true}, true, nil
 }
+
+// bufferReleaseAction occupies an otherwise unsupported PFCP action bit only in
+// kernel-private versions; a plain FORW never reaches the buffering maps.
+const bufferReleaseAction uint8 = 0x80
+
+type bufferBinding struct {
+	SessionID, Cookie uint64
+	Lane, Reserved    uint32
+}
+
+func (b *BpfObjects) putBufferBinding(slot uint32, info FarInfo) error {
+	if info.BufferCookie == 0 {
+		return b.clearBufferBinding(slot)
+	}
+	if info.BufferSessionID == 0 {
+		return errors.New("buffer binding has no session")
+	}
+	return b.BufferBindings.Put(slot, bufferBinding{SessionID: info.BufferSessionID, Cookie: info.BufferCookie, Lane: info.BufferLane})
+}
+func (b *BpfObjects) clearBufferBinding(slot uint32) error {
+	err := b.BufferBindings.Delete(slot)
+	if isKeyAbsent(err) {
+		return nil
+	}
+	return err
+}

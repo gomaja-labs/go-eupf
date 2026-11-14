@@ -126,6 +126,7 @@ func (bpfObjects *BpfObjects) Load() error {
 		"pdr_buckets":          4*bpfObjects.pdrMapSize + 1,
 		"urr_map":              bpfObjects.urrMapSize,
 		"buffer_anchors":       bpfObjects.bufferSessions,
+		"buffer_bindings":      bpfObjects.farMapSize,
 		"buffer_states":        2 * bpfObjects.farMapSize,
 		"buffer_notice_ready":  bpfObjects.bufferSessions,
 	}
