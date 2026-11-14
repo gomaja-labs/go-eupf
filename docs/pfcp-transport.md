@@ -264,3 +264,8 @@ send retries from repeating QER/URR processing on later local legs. Successful
 completion removes that cache entry with the packet's idempotent acknowledgement.
 The runtime requires NET_RAW in addition to its existing BPF and network
 administration capabilities. The kernel needs veth, clsact and cls_bpf support.
+
+Kernel handoff currently confirms queue admission rather than egress completion.
+Later direct XDP output can therefore overtake an earlier kernel-queued packet,
+including while neighbour resolution or an output qdisc delays it. Strict drain
+ordering across these paths is unresolved; BUFF, NOCP and BAR remain rejected.

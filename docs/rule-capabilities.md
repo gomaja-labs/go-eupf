@@ -14,8 +14,9 @@ Offending IE. Capacity exhaustion uses Cause 75 (No resources available) and
 Failed Rule ID. Invalid new CP F-TEID allocation uses Cause 71. Missing/invalid
 mandatory fields retain the procedural causes specified in clauses 7.5–7.6.
 The old FAR-trigger polling path is removed; usage polling never reads or mutates
-published FARs. BUFF/NOCP, BAR provisioning and buffering controls stay rejected until buffering
-is implemented. These tables do not claim compatibility with every SMF feature.
+published FARs. BUFF/NOCP, BAR provisioning and buffering controls stay rejected
+while kernel-output ordering remains unresolved. These tables do not claim
+compatibility with every SMF feature.
 
 ## PDR
 
@@ -78,7 +79,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 | Apply Action | Implemented | FORW or DROP only. BUFF/NOCP and other actions are rejected. | 7.5.2.3-1, 7.5.4.3-1 |
 | Forwarding Parameters | Implemented | Supported routing/tunnel subset below. | 7.5.2.3-1 |
 | Duplicating Parameters | Rejected | Packet duplication is not implemented. | 7.5.2.3-1 |
-| BAR ID | Rejected | Buffering is not implemented; BUFF and NOCP remain rejected. | 7.5.2.3-1, 7.5.4.3-1 |
+| BAR ID | Rejected | Kernel-output ordering remains unresolved; BUFF and NOCP remain rejected. | 7.5.2.3-1, 7.5.4.3-1 |
 | Redundant Transmission Forwarding Parameters | Rejected | Redundant tunnel transmission is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
 | MBS Multicast Parameters | Rejected | MBS multicast transmission is not implemented. | 7.5.2.3-1 |
 | Add MBS Unicast Parameters | Rejected | MBS unicast replication is not implemented. | 7.5.2.3-1, 7.5.4.3-1 |
@@ -172,7 +173,7 @@ is implemented. These tables do not claim compatibility with every SMF feature.
 
 | IE | Treatment | Reason / supported subset | TS 29.244 V20.1.0 table |
 |---|---|---|---|
-| BAR ID | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
+| BAR ID | Rejected | Buffering controls are not accepted or advertised until kernel-output ordering is complete. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
 | Downlink Data Notification Delay | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
 | Suggested Buffering Packets Count | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1, 7.5.9.2-1 |
 | MT-EDT Control Information | Rejected | Buffering, data notification and buffer-size/duration controls are not implemented or advertised. | 7.5.2.6-1, 7.5.4.11-1 |
