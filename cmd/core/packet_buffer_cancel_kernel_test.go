@@ -91,15 +91,12 @@ func TestPacketBufferCancellationReclaimsPackets(t *testing.T) {
 			default:
 			}
 			// Every retained descriptor and global kernel credit has been returned.
-			var pool struct {
-				Lock, Outstanding, Limit, Reserved uint32
-				Dropped                            uint64
-			}
-			if err := plane.BufferPool.Lookup(uint32(0), &pool); err != nil {
+			outstanding, _, err := plane.BufferPoolUsage()
+			if err != nil {
 				t.Fatal(err)
 			}
-			if pool.Outstanding != 0 {
-				t.Fatalf("cancellation retained %d global credits", pool.Outstanding)
+			if outstanding != 0 {
+				t.Fatalf("cancellation retained %d global credits", outstanding)
 			}
 			if outcome != "stop duration" {
 				conn.stateMu.RLock()
