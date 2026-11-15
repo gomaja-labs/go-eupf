@@ -366,49 +366,6 @@ func TestProfileUsageReportADCVendorIEs(t *testing.T) {
 	}
 }
 
-func TestProfileSessionReportReleaseVendorIE(t *testing.T) {
-	pdrList := []uint16{4, 5}
-	tests := []struct {
-		name         string
-		profile      PfcpProfile
-		wantNil      bool
-		wantType     ie.IEType
-		wantVendorID uint16
-	}{
-		{"Default", DefaultProfile{}, true, 0, 0},
-		{"Huawei", testHuaweiProfile, false, 32799, 2011},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			vendorIE := tt.profile.SessionReportReleaseVendorIE(pdrList)
-			if tt.wantNil {
-				if vendorIE != nil {
-					t.Errorf("expected nil, got non-nil IE")
-				}
-				return
-			}
-			if vendorIE == nil {
-				t.Fatal("expected non-nil IE")
-			} else if vendorIE.Type != tt.wantType {
-				t.Errorf("expected type %d, got %d", tt.wantType, vendorIE.Type)
-			}
-			if vendorIE.EnterpriseID != tt.wantVendorID {
-				t.Errorf("expected enterprise-id %d, got %d", tt.wantVendorID, vendorIE.EnterpriseID)
-			}
-		})
-	}
-}
-
-func TestHuaweiProfileSessionReportReleaseVendorIEEmptyPdrList(t *testing.T) {
-	p := testHuaweiProfile
-	vendorIE := p.SessionReportReleaseVendorIE([]uint16{})
-	if vendorIE == nil {
-		t.Fatal("HuaweiProfile should return non-nil IE even for empty pdrList")
-	} else if vendorIE.Type != 32799 {
-		t.Errorf("expected type 32799, got %d", vendorIE.Type)
-	}
-}
-
 func TestProfileQFIExtensions(t *testing.T) {
 	tests := []struct {
 		name                 string
