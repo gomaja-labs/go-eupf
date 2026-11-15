@@ -57,7 +57,7 @@ func TestBufferNoticeSurvivesEveryStorageBound(t *testing.T) {
 				t.Fatalf("storage did not fill: %+v %v", before, err)
 			}
 			putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1})
-			if action, _, err := b.UpfIpEntrypointFunc.Test(bufferedFrame(t, 2, 101)); err != nil || action != 1 {
+			if action, _, err := b.UpfIpEntrypointFunc.Test(bufferedFrame(t, 2, 101, 63)); err != nil || action != 1 {
 				t.Fatalf("overflow: %d %v", action, err)
 			}
 			after, err := b.BufferControl(BufferCommand{SessionID: 42, Cookie: 7, Operation: 3})
@@ -66,7 +66,11 @@ func TestBufferNoticeSurvivesEveryStorageBound(t *testing.T) {
 			}
 			for _, qfi := range []uint8{1, 9} {
 				notice, present, err := b.ReadBufferNotice(42, 7, 0)
-				if err != nil || !present || !notice.QFIPresent || notice.QFI != qfi || notice.PDRID != 9 {
+				dscp := uint8(0)
+				if qfi == 9 {
+					dscp = 63
+				}
+				if err != nil || !present || !notice.QFIPresent || notice.QFI != qfi || notice.PDRID != 9 || notice.PPI != dscp {
 					t.Fatalf("missing first-flow notice QFI=%d: %+v %t %v", qfi, notice, present, err)
 				}
 			}

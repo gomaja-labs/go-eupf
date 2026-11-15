@@ -40,7 +40,8 @@ type bufferFar struct {
 	Seen                        uint64
 	NoticeTime                  [65]uint64
 	NoticePDR                   [65]uint16
-	ReservedPDR                 [6]byte
+	NoticeDSCP                  [65]byte
+	ReservedPDR                 [5]byte
 }
 type bufferKey struct {
 	SessionID      uint64
@@ -112,6 +113,7 @@ type bufferNoticeSnapshot struct {
 	absentSeen, absentPending uint32
 	times                     [65]uint64
 	pdrs                      [65]uint16
+	dscp                      [65]byte
 }
 
 type BufferCommand struct {
@@ -144,7 +146,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 	}
 	size := 96
 	if command.Operation == 10 || command.Operation == 11 {
-		size += 680
+		size += 744
 	}
 	data := make([]byte, size)
 	binary.LittleEndian.PutUint64(data, command.SessionID)
@@ -175,6 +177,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 		for i := range saved.pdrs {
 			binary.LittleEndian.PutUint16(data[640+2*i:], saved.pdrs[i])
 		}
+		copy(data[770:], saved.dscp[:])
 	}
 	output := make([]byte, size)
 	action, err := program.Run(&cilium.RunOptions{Data: data, DataOut: output})
@@ -200,6 +203,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 		for i := range saved.pdrs {
 			saved.pdrs[i] = binary.LittleEndian.Uint16(output[640+2*i:])
 		}
+		copy(saved.dscp[:], output[770:835])
 		command.notices = saved
 	}
 	command.Mode = binary.LittleEndian.Uint32(output[32:])
@@ -408,7 +412,7 @@ func (b *BpfObjects) ReadBufferNotice(session, cookie uint64, lane uint32) (Buff
 		return BufferRecord{}, false, err
 	}
 	index := result.Preparing - 1
-	return BufferRecord{SessionID: session, Cookie: cookie, Lane: lane, PDRID: result.Limit, ReceivedNS: result.Produced, QFI: uint8(index & 63), QFIPresent: index < 64, Notify: true, Downlink: true}, true, nil
+	return BufferRecord{SessionID: session, Cookie: cookie, Lane: lane, PDRID: result.Limit, ReceivedNS: result.Produced, QFI: uint8(index & 63), QFIPresent: index < 64, PPI: uint8(result.Ready), Notify: true, Downlink: true}, true, nil
 }
 
 // bufferReleaseAction occupies an otherwise unsupported PFCP action bit only in

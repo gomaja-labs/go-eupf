@@ -28,6 +28,7 @@ type downlinkNotice struct {
 	cookie     uint64
 	pdrID      uint16
 	qfi        uint8
+	dscp       uint8
 	qfiPresent bool
 	arrived    time.Time
 }
@@ -72,7 +73,7 @@ func (state *downlinkFARState) set(qfi uint8, present, value bool) {
 func (conn *PfcpConnection) noteDownlinkPacketLocked(session *Session, farID uint32, record ebpf.BufferRecord, arrived time.Time) {
 	state := session.downlink
 	far, exists := session.FARs[farID]
-	if state == nil || state.stopped || !exists || record.SessionID != session.LocalSEID || record.Cookie == 0 || record.Cookie != far.FarInfo.BufferCookie || far.FarInfo.Action&12 != 12 || !record.Notify || record.PDRID > math.MaxUint16 || record.QFI > 63 {
+	if state == nil || state.stopped || !exists || record.SessionID != session.LocalSEID || record.Cookie == 0 || record.Cookie != far.FarInfo.BufferCookie || far.FarInfo.Action&12 != 12 || !record.Notify || record.PDRID > math.MaxUint16 || record.QFI > 63 || record.PPI > 63 {
 		return
 	}
 	conn.applyDownlinkDurationLocked(session, arrived)
@@ -101,7 +102,7 @@ func (conn *PfcpConnection) noteDownlinkPacketLocked(session *Session, farID uin
 		copy(pending, state.pending)
 		state.pending = pending
 	}
-	state.pending = append(state.pending, downlinkNotice{farID: farID, cookie: record.Cookie, pdrID: uint16(record.PDRID), qfi: qfi, qfiPresent: present, arrived: arrived, epoch: flow.epoch, bar: associated})
+	state.pending = append(state.pending, downlinkNotice{farID: farID, cookie: record.Cookie, pdrID: uint16(record.PDRID), qfi: qfi, dscp: record.PPI, qfiPresent: present, arrived: arrived, epoch: flow.epoch, bar: associated})
 	conn.watchDownlinkSession(session)
 }
 
@@ -263,9 +264,14 @@ func (conn *PfcpConnection) serviceDownlinkNotifications(now time.Time) {
 				continue
 			}
 			children := []*ie.IE{ie.NewPDRID(notice.pdrID)}
+			// TS 29.244 V20.1.0 table 7.5.8.2-1; RFC 2474 section 3
+			// (updated by RFC 3168): carry the triggering packet's six-bit
+			// DSCP, independently of the ECN bits and optional QFI.
+			qfi := uint8(0)
 			if notice.qfiPresent {
-				children = append(children, ie.NewDownlinkDataServiceInformation(false, true, 0, notice.qfi))
+				qfi = notice.qfi
 			}
+			children = append(children, ie.NewDownlinkDataServiceInformation(true, notice.qfiPresent, notice.dscp, qfi))
 			report := message.NewSessionReportRequest(session.RemoteSEID, 0, ie.NewReportType(0, 0, 0, 1), ie.NewDownlinkDataReport(children...))
 			peer := &net.UDPAddr{IP: cloneIP(session.controlIP(conn)), Port: 8805}
 			socket := conn.socket()

@@ -23,7 +23,8 @@ func TestBufferNotificationResetRollbackPreservesConcurrentObservations(t *testi
 			send := func(qfi uint8, id uint16) {
 				t.Helper()
 				putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: qfi, QfiPresent: 1})
-				if action, _, err := b.UpfIpEntrypointFunc.Test(bufferedFrame(t, 2, id)); err != nil || action != 1 {
+				dscp := map[uint16]byte{100: 7, 101: 31, 102: 63}[id]
+				if action, _, err := b.UpfIpEntrypointFunc.Test(bufferedFrame(t, 2, id, dscp)); err != nil || action != 1 {
 					t.Fatalf("admit: %d %v", action, err)
 				}
 			}
@@ -64,7 +65,11 @@ func TestBufferNotificationResetRollbackPreservesConcurrentObservations(t *testi
 			}
 			for _, qfi := range want {
 				notice, present, err := b.ReadBufferNotice(42, 7, 0)
-				if err != nil || !present || notice.QFI != qfi || notice.PDRID != 9 {
+				dscp := uint8(63)
+				if qfi == 5 {
+					dscp = 7
+				}
+				if err != nil || !present || notice.QFI != qfi || notice.PDRID != 9 || notice.PPI != dscp {
 					t.Fatalf("rollback notice QFI=%d: %+v %t %v", qfi, notice, present, err)
 				}
 				if qfi == 5 && oldTime != 0 && notice.ReceivedNS != oldTime {

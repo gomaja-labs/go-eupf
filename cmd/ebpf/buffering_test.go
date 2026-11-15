@@ -65,9 +65,12 @@ func TestBufferAdmissionRecordsProcessedDownlink(t *testing.T) {
 	}
 }
 
-func bufferedFrame(t *testing.T, destination byte, id uint16) []byte {
+func bufferedFrame(t *testing.T, destination byte, id uint16, dscp ...byte) []byte {
 	t.Helper()
 	ip := &layers.IPv4{Version: 4, TTL: 64, Id: id, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 51, 100, 1}, DstIP: net.IP{198, 51, 100, destination}}
+	if len(dscp) > 0 {
+		ip.TOS = dscp[0]<<2 | 3
+	}
 	udp := &layers.UDP{SrcPort: 1234, DstPort: 4321}
 	if err := udp.SetNetworkLayerForChecksum(ip); err != nil {
 		t.Fatal(err)

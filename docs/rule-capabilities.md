@@ -126,7 +126,7 @@ with every SMF feature.
 | DL Flow Level Marking | Rejected | Flow-level marking beyond the supported QFI/RQI and FAR DSCP is not implemented. | 7.5.2.5-1, 7.5.4.5-1 |
 | QoS flow identifier | Implemented | QFI in a 5GS PDU Session Container. | 7.5.2.5-1, 7.5.4.5-1 |
 | Reflective QoS | Implemented | RQI marking; a QFI binding is required. | 7.5.2.5-1, 7.5.4.5-1 |
-| Paging Policy Indicator | Rejected | Paging-policy marking is not implemented. | 7.5.2.5-1, 7.5.4.5-1 |
+| Paging Policy Indicator | Rejected | QER-provisioned marking is not implemented (clause 5.36). Downlink Data Service Information separately reports the triggering packet's DSCP under table 7.5.8.2-1. | 7.5.2.5-1, 7.5.4.5-1 |
 | Averaging Window | Rejected | Only the documented fixed burst policy is implemented. | 7.5.2.5-1, 7.5.4.5-1 |
 | QER Control Indications | Rejected | Rate-status control/reporting is not implemented. | 7.5.2.5-1, 7.5.4.5-1 |
 | QER Indications | Rejected | PDU-set/data-burst/SCONE marking is not advertised. | 7.5.2.5-1, 7.5.4.5-1 |

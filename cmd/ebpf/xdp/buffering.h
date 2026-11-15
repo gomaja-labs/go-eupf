@@ -49,7 +49,8 @@ struct buffer_far {
     __u64 seen;
     __u64 notice_time[65];
     __u16 notice_pdr[65];
-    __u8 reserved_pdr[6];
+    __u8 notice_dscp[65];
+    __u8 reserved_pdr[5];
 };
 
 static __always_inline void buffer_maybe_forward(struct buffer_far *far) {
@@ -165,7 +166,8 @@ struct buffer_notice_snapshot {
     __u32 absent_seen,absent_pending;
     __u64 times[65];
     __u16 pdrs[65];
-    __u8 reserved[6];
+    __u8 dscp[65];
+    __u8 reserved[5];
 };
 
 static __always_inline void buffer_expire_bar(struct buffer_anchor *anchor, __u64 now) {
@@ -196,7 +198,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     if (!anchor || !far || !pool) return XDP_ABORTED;
     int release=0;
     __u64 notice_time=0;
-    __u32 notice_pdr=0,notice_index=65;
+    __u32 notice_pdr=0,notice_index=65,notice_dscp=0;
     __u64 now=bpf_ktime_get_ns();
     int action=XDP_ABORTED;
     bpf_spin_lock(&anchor->lock);
@@ -249,6 +251,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
             if (notice_index<65) {
                 notice_time=far->notice_time[notice_index];
                 notice_pdr=far->notice_pdr[notice_index];
+                notice_dscp=far->notice_dscp[notice_index];
                 if (notice_index<64) far->notices &= ~(1ULL<<notice_index);
                 else far->absent_notice=0;
             }
@@ -266,7 +269,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
                 saved->seen=far->seen;saved->pending=far->notices;
                 saved->absent_seen=far->absent_seen;saved->absent_pending=far->absent_notice;
 #pragma clang loop unroll(disable)
-                for (int i=0;i<65;i++) { saved->times[i]=far->notice_time[i];saved->pdrs[i]=far->notice_pdr[i]; }
+                for (int i=0;i<65;i++) { saved->times[i]=far->notice_time[i];saved->pdrs[i]=far->notice_pdr[i];saved->dscp[i]=far->notice_dscp[i]; }
                 far->notices=far->seen=0;far->absent_notice=far->absent_seen=0;
                 action=XDP_DROP;
             }
@@ -282,7 +285,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
 #pragma clang loop unroll(disable)
                 for (int i=0;i<65;i++) {
                     if ((i<64 && (saved->pending & (1ULL<<i))) || (i==64 && saved->absent_pending)) {
-                        far->notice_time[i]=saved->times[i];far->notice_pdr[i]=saved->pdrs[i];
+                        far->notice_time[i]=saved->times[i];far->notice_pdr[i]=saved->pdrs[i];far->notice_dscp[i]=saved->dscp[i];
                     }
                 }
                 action=XDP_DROP;
@@ -301,6 +304,7 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
         command->sequence=notice_index<65 ? notice_index+1 : 0;
         command->produced=notice_time;
         command->limit=notice_pdr;
+        command->ready=notice_dscp;
     }
     bpf_spin_unlock(&anchor->lock);
     if (release) {
@@ -335,7 +339,7 @@ struct buffer_pending {
     __u32 lane;
     __u32 pdr_id;
     __u32 ingress_ifindex;
-    __u32 ppi_offset;
+    __u32 dscp;
     __u16 marking;
     __u8 kind;
     __u8 nr;
@@ -371,6 +375,22 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     if (!anchor || !state) return XDP_DROP;
     struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&key);
     if (!pool) return XDP_DROP;
+    // Ethernet is followed by either the native IP header or by the parsed
+    // IPv4/UDP/GTP envelope. Keep only a bounded scalar cursor across tail calls.
+    __u32 offset=14;
+    if (ctx->gtp) {
+        if (!ctx->ip4 || (const char *)(ctx->ip4+1)>ctx->data_end) {
+            return XDP_DROP;
+        }
+        offset+=ctx->ip4->ihl*4+8+ctx->gtp_header_length;
+    }
+    __u32 dscp=0;
+    asm volatile("" : "+r"(offset));
+    offset &= 0xfff;
+    const __u8 *ip=(void *)((long)ctx->xdp_ctx->data+offset);
+    if ((const void *)(ip+2)>(const void *)(long)ctx->xdp_ctx->data_end) return XDP_DROP;
+    if ((ip[0]>>4)==4) dscp=ip[1]>>2;
+    else if ((ip[0]>>4)==6) dscp=((ip[0]&15)<<2)|(ip[1]>>6);
     int direct=0, eligible=0, notice_ready=0, canceled=1;
     __u64 now=bpf_ktime_get_ns();
     bpf_spin_lock(&anchor->lock);
@@ -388,6 +408,7 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
             if ((flow==64 && !state->absent_seen) || (flow<64 && !(state->seen&bit))) {
                 state->notice_time[flow]=now;
                 state->notice_pdr[flow]=pdr_id;
+                state->notice_dscp[flow]=dscp;
                 if (flow==64) state->absent_notice=state->absent_seen=1;
                 else { state->notices|=bit;state->seen|=bit; }
                 notice_ready=1;
@@ -426,19 +447,7 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     pending->qfi=(marking&0x80) ? marking&0x3f : ctx->qfi;
     pending->qfi_present=(marking&0x80) || ctx->qfi_present;
     pending->notify=(far->action&FAR_NOCP) && !uplink;
-    // Ethernet is followed by either the native IP header or by the parsed
-    // IPv4/UDP/GTP envelope. Keep only a bounded scalar cursor across tail calls.
-    __u32 offset=14;
-    if (ctx->gtp) {
-        if (!ctx->ip4 || (const char *)(ctx->ip4+1)>ctx->data_end) {
-            bpf_spin_lock(&anchor->lock);
-            if (state->cookie==cookie && state->preparing) { state->preparing--; buffer_maybe_forward(state); }
-            bpf_spin_unlock(&anchor->lock);
-            return XDP_DROP;
-        }
-        offset+=ctx->ip4->ihl*4+8+ctx->gtp_header_length;
-    }
-    pending->ppi_offset=offset<BUFFER_FRAME_SIZE-1 ? offset : ~0U;
+    pending->dscp=dscp;
     return UPF_BUFFER_PACKET;
 }
 
@@ -513,13 +522,7 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     record->extension_deletion=pending->extension_deletion;
     record->qfi=pending->qfi;
     record->qfi_present=pending->qfi_present;
-    record->ppi=0;
-    __u32 offset=pending->ppi_offset;
-    if (offset<BUFFER_FRAME_SIZE-1 && offset+2<=length) {
-        __u8 first=record->packet[offset],second=record->packet[offset+1];
-        if ((first>>4)==4) record->ppi=second>>2;
-        else if ((first>>4)==6) record->ppi=((first&15)<<2)|(second>>6);
-    }
+    record->ppi=pending->dscp;
     record->notify=pending->notify;
     record->reserved=pending->downlink;
     int admitted=0,canceled=1;

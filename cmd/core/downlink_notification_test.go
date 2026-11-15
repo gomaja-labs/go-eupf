@@ -86,10 +86,12 @@ func TestDownlinkNotificationCoalescesPerFAROrFlow(t *testing.T) {
 				flow := uint16(64)
 				if len(fields.DownlinkDataServiceInformation) > 0 {
 					service, err := fields.DownlinkDataServiceInformation[0].DownlinkDataServiceInformation()
-					if err != nil || service.Flags&1 != 0 {
-						t.Fatalf("unexpected paging-policy support: %+v %v", service, err)
+					if err != nil || service.Flags&1 == 0 || service.PagingPolicyIndication != 0 {
+						t.Fatalf("missing triggering packet DSCP: %+v %v", service, err)
 					}
-					flow = uint16(service.QFI)
+					if service.Flags&2 != 0 {
+						flow = uint16(service.QFI)
+					}
 				}
 				if !is5G && (pdr != 1 && pdr != 2 || flow != 64) {
 					t.Fatalf("EPC did not retain its first packet: PDR=%d flow=%d", pdr, flow)
