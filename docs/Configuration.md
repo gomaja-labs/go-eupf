@@ -271,3 +271,19 @@ IPv6 records. For a wildcard PFCP bind, the UDP API does not expose the selected
 local address per datagram: the record shows `0.0.0.0` for an IPv4 peer or `::`
 for an IPv6 peer, with the bound PFCP port. These unspecified addresses identify
 a capture limitation, not a Node ID or a guessed tunnel address.
+
+### Inactivity release
+
+`inactivity_release_timeout` (`--inactivity-release-timeout`,
+`UPF_INACTIVITY_RELEASE_TIMEOUT`) is a startup setting in whole seconds, 0–86400.
+The default 0 disables local inactivity release; any other value deletes a session
+through the same transaction and final-report procedure as REST release
+(TS 29.244 V20.1.0 clause 5.18.2). Helm exposes the environment variable and the
+configuration-file example, and the CLI configuration schema carries the key.
+The common configuration validation checks its bound for every source.
+
+This local policy differs from a CP-provisioned User Plane Inactivity Timer:
+that timer sends one UPIR and preserves the session until the CP supplies further
+instructions (clause 5.11.2). Activity sampling targets 100 ms, with receive-loop
+and scheduler delay. See [PFCP transport](pfcp-transport.md) for update,
+reclamation and failure semantics. Per-PDR UPINT is rejected.

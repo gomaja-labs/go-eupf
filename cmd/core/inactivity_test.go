@@ -255,3 +255,38 @@ func TestInactivityCounterReclamationWaitsForRuleGrace(t *testing.T) {
 		t.Fatal("response returned counter slot twice")
 	}
 }
+
+func FuzzSessionInactivityTimerUpdate(f *testing.F) {
+	for _, payload := range [][]byte{nil, {0}, {0, 0, 0, 0}, {0, 0, 0, 1}, {0xff, 0xff, 0xff, 0xff}, {0, 0, 0, 1, 0}} {
+		f.Add(payload)
+	}
+	f.Fuzz(func(t *testing.T, payload []byte) {
+		if len(payload) > 65531 {
+			t.Skip()
+		}
+		conn := newProtocolConnection(t)
+		plane := &activityPlane{MapOperationsMock: &MapOperationsMock{}}
+		conn.mapOperations = plane
+		assoc := NewNodeAssociation("inactive.example", "127.0.0.1")
+		original := NewSession(11, 77, "", "", false)
+		assoc.Sessions[11] = original
+		conn.NodeAssociations[assoc.ID] = assoc
+		request := message.NewSessionModificationRequest(11, 1, ie.New(ie.UserPlaneInactivityTimer, payload))
+		response, _, err := HandlePfcpSessionModificationRequest(conn, request, assoc.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cause, err := response.(*message.SessionModificationResponse).Cause.Cause()
+		if err != nil {
+			t.Fatal(err)
+		}
+		current := assoc.Sessions[11]
+		if cause != ie.CauseRequestAccepted {
+			if current != original || current.activity != nil || plane.active {
+				t.Fatal("rejected timer changed live state or leaked its reservation")
+			}
+		} else if current.inactivityArmed != (current.inactivityTimer > 0) || (current.activity != nil) != plane.active {
+			t.Fatal("accepted timer left inconsistent activity ownership")
+		}
+	})
+}

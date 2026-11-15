@@ -29,10 +29,18 @@ One frame leaves per received marker (TS 29.281 V19.2.0 clauses 5.2.2.7 and
 N19 and N19mb do not emit or relay End Markers
 (TS 29.244 V20.1.0 clause 5.3.2; TS 29.281 V19.2.0 clause 7.3.2).
 
-BUFF, NOCP, BAR, and the buffering capability bits remain unsupported.
-UP-initiated session release with final USAR/UISR, TEBUR, and PSDBU is not
-implemented; EPFAR is not advertised. The management session-release helper
-does not provide the clause 5.18.2 procedure.
+BUFF, NOCP and bounded BAR control are supported as described in the capability
+table. Generic-XDP kernel continuations carry an authenticated private envelope
+so released packets are counted and classified once.
+
+Local session release stops forwarding through the deletion transaction and
+reports final USAR/TEBUR or UISR, with PSDBU in the last request
+(TS 29.244 V20.1.0 clause 5.18.2). EPFAR is advertised and negotiated preparation
+from either peer reports and deletes sessions before URSS. The local
+`inactivity_release_timeout` setting shares received-packet activity with the
+CP's session-level User Plane Inactivity Timer. The latter requests UPIR and
+leaves forwarding intact (clauses 5.11.2 and 5.18.1). Per-PDR UPINT remains
+unsupported and UPIDP is not advertised.
 
 Unknown-tunnel Error Indications are suppressed during `restoration_period`
 after startup, using the same period as automatic UE IPv4 restoration
