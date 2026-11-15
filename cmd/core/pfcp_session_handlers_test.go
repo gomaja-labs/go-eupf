@@ -427,6 +427,8 @@ func TestSeveralSdfFiltersSupport(t *testing.T) {
 }
 
 func TestFTUPInAssociationSetupResponse(t *testing.T) {
+	previous := config.Conf
+	t.Cleanup(func() { config.Conf = previous })
 
 	config.Conf = config.UpfConfig{
 		FTEIDPool: 65536,
@@ -640,6 +642,8 @@ func TestIPAllocationInSessionEstablishmentResponse(t *testing.T) {
 }
 
 func TestUEIPInAssociationSetupResponse(t *testing.T) {
+	previous := config.Conf
+	t.Cleanup(func() { config.Conf = previous })
 
 	config.Conf = config.UpfConfig{
 		UEIPPool:    "10.61.0.0/16",
