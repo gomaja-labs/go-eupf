@@ -150,7 +150,9 @@ type FarInfo struct {
 	BufferCookie    uint64 `json:"-"`
 	BufferLane      uint32 `json:"-"`
 	// EndMarkerSuppressed is derived from the N19/N19mb destination label.
-	EndMarkerSuppressed         bool
+	EndMarkerSuppressed bool
+	// InsertHandoverContainer is derived from N3/N9 data-forwarding labels.
+	InsertHandoverContainer     bool
 	DestinationInterface        uint8
 	DestinationInterfacePresent bool
 	Action                      uint8
@@ -165,6 +167,7 @@ func (f FarInfo) MarshalJSON() ([]byte, error) {
 	binary.LittleEndian.PutUint32(remoteIP, f.RemoteIP)
 	data := map[string]interface{}{
 		"end_marker_suppressed":         f.EndMarkerSuppressed,
+		"insert_handover_container":     f.InsertHandoverContainer,
 		"action":                        f.Action,
 		"outer_header_creation":         f.OuterHeaderCreation,
 		"teid":                          f.Teid,
@@ -204,6 +207,7 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 
 	farInfo := FarInfo{
 		EndMarkerSuppressed:         farToStore.EndMarkerSuppressed != 0,
+		InsertHandoverContainer:     farToStore.InsertHandoverContainer != 0,
 		Action:                      farToStore.Action,
 		OuterHeaderCreation:         farToStore.OuterHeaderCreation,
 		Teid:                        farToStore.Teid,
@@ -795,5 +799,5 @@ func farMapValue(info FarInfo) IpEntrypointFarInfo {
 	if action&2 != 0 && info.BufferCookie != 0 {
 		action = (action &^ 2) | 4 | bufferReleaseAction
 	}
-	return IpEntrypointFarInfo{EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
+	return IpEntrypointFarInfo{InsertHandoverContainer: boolByte(info.InsertHandoverContainer), EndMarkerSuppressed: boolByte(info.EndMarkerSuppressed), Action: action, OuterHeaderCreation: info.OuterHeaderCreation, Teid: info.Teid, Remoteip: info.RemoteIP, TransportLevelMarking: info.TransportLevelMarking, DestinationInterface: info.DestinationInterface, DestinationInterfacePresent: boolByte(info.DestinationInterfacePresent)}
 }

@@ -263,6 +263,7 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 	if isNullIE(value) {
 		far.InterfaceType, far.InterfaceTypePresent = 0, false
 		far.FarInfo.EndMarkerSuppressed = false
+		far.FarInfo.InsertHandoverContainer = false
 		return nil
 	}
 	typ, err := value.TGPPInterfaceType()
@@ -275,6 +276,9 @@ func retainFarInterfaceType(value *ie.IE, far *SFarInfo) error {
 		return nil
 	}
 	far.InterfaceType, far.InterfaceTypePresent = typ, true
+	// TS 29.244 V20.1.0 clause 5.17.3: insertion belongs only
+	// to EPS-to-5GS data forwarding, explicitly labelled by the CP.
+	far.FarInfo.InsertHandoverContainer = typ == ie.TGPPInterfaceTypeN3ForDataForwarding || typ == ie.TGPPInterfaceTypeN9DataForwarding
 	far.FarInfo.EndMarkerSuppressed = typ == ie.TGPPInterfaceTypeN19 || typ == ie.TGPPInterfaceTypeN19mb
 	return nil
 }

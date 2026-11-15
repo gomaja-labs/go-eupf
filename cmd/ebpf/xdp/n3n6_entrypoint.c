@@ -573,7 +573,7 @@ static __noinline enum xdp_action handle_gtp_packet(struct packet_context *ctx) 
         // mapping to G-PDUs and End Markers on forwarding tunnels.
         if (pdr->gtp_extension_header_deletion & 1) {
             if (delete_gtp_container(ctx)) return XDP_DROP;
-        } else if (!ctx->qfi_present && (marking & 0x80)) {
+        } else if (far->insert_handover_container && !ctx->qfi_present && (marking & 0x80)) {
             if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
         }
         __u32 local=global_config.n9_ipv4_address;
@@ -707,7 +707,7 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
     if (ctx->unknown_extensions & 4) return XDP_PASS;
     if (pdr->gtp_extension_header_deletion & 1) {
         if (delete_gtp_container(ctx)) return XDP_DROP;
-    } else if (!ctx->qfi_present) {
+    } else if (far->insert_handover_container && !ctx->qfi_present) {
         for (int i=0;i<4;i++) {
             if (i>=pdr->qer_count) break;
             __u32 id=pdr->qer_id[i];
@@ -961,7 +961,7 @@ static __always_inline enum xdp_action finish_gtp_forwarding(struct packet_conte
         // mapping to G-PDUs and End Markers on forwarding tunnels.
         if (((removal>>16)&0xff) & 1) {
             if (delete_gtp_container(ctx)) return XDP_DROP;
-        } else if (!ctx->qfi_present && (marking & 0x80)) {
+        } else if (far->insert_handover_container && !ctx->qfi_present && (marking & 0x80)) {
             if (insert_gtp_container(ctx,marking & 0x7f)) return XDP_DROP;
         }
         __u32 local=global_config.n9_ipv4_address;

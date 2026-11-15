@@ -175,6 +175,7 @@ type PortRange struct {
 
 type FarInfo struct {
 	EndMarkerSuppressed         bool   `json:"end_marker_suppressed"`
+	InsertHandoverContainer     bool   `json:"insert_handover_container"`
 	Action                      uint8  `json:"action"`
 	OuterHeaderCreation         uint8  `json:"outer_header_creation"`
 	Teid                        uint32 `json:"teid"`

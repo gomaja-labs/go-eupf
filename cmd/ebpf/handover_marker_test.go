@@ -14,7 +14,7 @@ import (
 // intact packet on the same slow path used for G-PDUs until it can be removed.
 func TestHandoverMarkerDoesNotRelayDiscardRequiredExtension(t *testing.T) {
 	b := loadDatapath(t)
-	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1})
 	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0x41, 1, 0xab, 0xcd, 0}
 	packet := outerDatapath(t, g, false)
@@ -31,7 +31,7 @@ func TestHandoverMarkerDoesNotRelayDiscardRequiredExtension(t *testing.T) {
 // recipient must understand 11 extensions; markers do not solicit SEHN.
 func TestHandoverMarkerDropsComprehensionRequiredExtension(t *testing.T) {
 	b := loadDatapath(t)
-	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0xc5, 1, 0xab, 0xcd, 0}
 	before := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfExtStat()
 	action, _ := runDatapath(t, b, outerDatapath(t, g, false))
@@ -47,7 +47,7 @@ func TestHandoverMarkerDropsComprehensionRequiredExtension(t *testing.T) {
 // TS 29.244 V20.1.0 clause 5.17.3; TS 38.415 V19.1.0 clause 5.5.2.1.
 func TestHandoverMarkerInsertsMappedQFIWithoutChargingData(t *testing.T) {
 	b := loadDatapath(t)
-	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1, DlGateStatus: 1, UlGateStatus: 1, Rqi: 1})
 	g := []byte{0x30, 254, 0, 0, 0, 0, 0, 10}
 	action, out := runDatapath(t, b, outerDatapath(t, g, false))
@@ -75,7 +75,7 @@ func TestHandoverMarkerInsertsMappedQFIWithoutChargingData(t *testing.T) {
 func TestHandoverMarkerSelectsMappedPDR(t *testing.T) {
 	b := loadDatapath(t)
 	for id := uint32(1); id <= 2; id++ {
-		putDatapath(t, b.FarMap.Put, id, &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: id * 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+		putDatapath(t, b.FarMap.Put, id, &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: id * 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	}
 	for id, qfi := range []uint8{7, 9} {
 		if err := b.PutPdrUplink(10, PdrInfo{PdrID: uint32(id + 1), Precedence: uint32(id), FarId: uint32(id + 1), QFIs: []uint8{qfi}, OuterHeaderRemovalPresent: true}); err != nil {
@@ -113,7 +113,7 @@ func TestHandoverMarkerDeletesOnlyTheContainer(t *testing.T) {
 		for _, sequence := range []bool{false, true} {
 			t.Run(map[bool]string{false: "base", true: "IP_options"}[options]+map[bool]string{false: "_no_sequence", true: "_sequence"}[sequence], func(t *testing.T) {
 				b := loadDatapath(t)
-				putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+				putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 				if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, GtpExtensionHeaderDeletion: 1, QFIs: []uint8{9}, UrrIDs: []uint32{1}}); err != nil {
 					t.Fatal(err)
 				}
@@ -143,7 +143,7 @@ func TestHandoverMarkerDeletesOnlyTheContainer(t *testing.T) {
 
 func TestHandoverMarkerDropsTheEmptyOptionalWord(t *testing.T) {
 	b := loadDatapath(t)
-	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	if err := b.PutPdrUplink(10, PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, GtpExtensionHeaderDeletion: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestHandoverDataUsesTheSameContainerMapping(t *testing.T) {
 	for _, remove := range []bool{false, true} {
 		t.Run(map[bool]string{false: "EPS_to_5GS", true: "5GS_to_EPS"}[remove], func(t *testing.T) {
 			b := loadDatapath(t)
-			putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+			putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 			putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1})
 			pdr := PdrInfo{PdrID: 1, FarId: 1, OuterHeaderRemovalPresent: true, QerIDs: []uint32{1}, NRFlag: true}
 			var optional []byte

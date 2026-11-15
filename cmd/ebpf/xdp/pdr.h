@@ -169,6 +169,7 @@ struct far_info {
     __u8 action;
     __u8 outer_header_creation;
     __u8 end_marker_suppressed;
+    __u8 insert_handover_container;
     __u32 teid;
     __u32 remoteip;
     /* first octet DSCP value in the Type-of-Service, second octet shall contain the ToS/Traffic Class mask field, which shall be set to "0xFC". */

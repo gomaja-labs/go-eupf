@@ -155,6 +155,7 @@ type IpEntrypointFarInfo struct {
 	Action                      uint8
 	OuterHeaderCreation         uint8
 	EndMarkerSuppressed         uint8
+	InsertHandoverContainer     uint8
 	Teid                        uint32
 	Remoteip                    uint32
 	TransportLevelMarking       uint16

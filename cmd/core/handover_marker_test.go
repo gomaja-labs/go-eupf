@@ -228,3 +228,25 @@ func TestHandoverMarkerUsesNewMappingOnlyWhenOldQFIIsAbsent(t *testing.T) {
 		})
 	}
 }
+
+func TestForwardingLabelControlsContainerInsertion(t *testing.T) {
+	far := SFarInfo{}
+	for _, tc := range []struct {
+		value *ie.IE
+		want  bool
+	}{
+		{ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN3ForDataForwarding), true},
+		{ie.NewTGPPInterfaceType(63), true},
+		{nil, true},
+		{ie.New(ie.TGPPInterfaceType, nil), false},
+		{ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN9DataForwarding), true},
+		{ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN9), false},
+	} {
+		if err := retainFarInterfaceType(tc.value, &far); err != nil {
+			t.Fatal(err)
+		}
+		if far.FarInfo.InsertHandoverContainer != tc.want {
+			t.Fatalf("insertion=%t want=%t", far.FarInfo.InsertHandoverContainer, tc.want)
+		}
+	}
+}

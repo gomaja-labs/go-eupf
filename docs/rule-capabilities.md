@@ -372,3 +372,9 @@ retained before that request, then applies its FAR changes. If BUFF|NOCP remains
 in force, the next downlink packet starts a new notification period (TS 29.244
 V20.1.0 clauses 5.2.4.3 and 8.2.31). Packets already handed over remain outside
 the retained queue.
+
+PDU Session Container insertion on relayed G-PDUs and End Markers requires the
+FAR's 3GPP Interface Type to be N3 or N9 for data forwarding (TS 29.244 V20.1.0
+clause 5.17.3). The UPF cannot otherwise identify an EPS-to-5GS forwarding tunnel.
+Ordinary N9 and N4-u relays preserve received extension headers; their QER QFI
+alone does not request insertion of a downlink container.

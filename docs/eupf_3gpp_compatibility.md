@@ -38,3 +38,9 @@ Unknown-tunnel Error Indications are suppressed during `restoration_period`
 after startup, using the same period as automatic UE IPv4 restoration
 (TS 23.527 V20.0.0 clause 4.3.2; TS 23.007 V19.2.0 clauses 16.1A.4 and
 17.1b.1). See the [configuration reference](Configuration.md) for its bounds.
+
+PDU Session Container insertion on relayed G-PDUs and End Markers requires the
+FAR's 3GPP Interface Type to be N3 or N9 for data forwarding (TS 29.244 V20.1.0
+clause 5.17.3). The UPF cannot otherwise identify an EPS-to-5GS forwarding tunnel.
+Ordinary N9 and N4-u relays preserve received extension headers; their QER QFI
+alone does not request insertion of a downlink container.
