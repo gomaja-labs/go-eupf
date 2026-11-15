@@ -33,14 +33,14 @@ smoke)
 	mkdir -p ci-results
 	app_pid= capture_pid=
 	stop_background() {
-		local name=$1 pid=$2 deadline status=0
+		local name=$1 pid=$2 grace=$3 deadline status=0
 		# setsid isolates the command and sudo's child. TERM is not inherited
 		# as ignored by a background job, unlike INT in non-interactive bash.
 		sudo kill -TERM -- "-$pid" "$pid" 2>/dev/null || true
-		deadline=$((SECONDS + 5))
+		deadline=$((SECONDS + grace))
 		while kill -0 "$pid" 2>/dev/null && ((SECONDS < deadline)); do sleep .1; done
 		if kill -0 "$pid" 2>/dev/null; then
-			echo "$name did not stop within 5 seconds; sending SIGKILL" >&2
+			echo "$name did not stop within $grace seconds; sending SIGKILL" >&2
 			status=1
 			sudo kill -KILL -- "-$pid" "$pid" 2>/dev/null || true
 			deadline=$((SECONDS + 2))
@@ -57,11 +57,12 @@ smoke)
 	cleanup() {
 		local status=0
 		if [[ -n "$app_pid" ]]; then
-			stop_background eUPF "$app_pid" || status=1
+			# The default PFCP delivery and graceful-release window is 32 s.
+			stop_background eUPF "$app_pid" 40 || status=1
 			app_pid=
 		fi
 		if [[ -n "$capture_pid" ]]; then
-			stop_background tcpdump "$capture_pid" || status=1
+			stop_background tcpdump "$capture_pid" 5 || status=1
 			capture_pid=
 		fi
 		return "$status"

@@ -58,13 +58,13 @@ while :; do sleep 1; done
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
     )
     try:
-        output, _ = process.communicate(timeout=10)
+        output, _ = process.communicate(timeout=50)
         assert process.returncode != 0, output.decode()
         if boundary == "app":
-            assert b"eUPF did not stop within 5 seconds; sending SIGKILL" in output
+            assert b"eUPF did not stop within 40 seconds; sending SIGKILL" in output
         else:
             assert b"did not stop" not in output
-        assert time.monotonic() - started < 9, output.decode()
+        assert time.monotonic() - started < 49, output.decode()
         if pids.exists():
             for value in pids.read_text().split():
                 with pytest.raises(ProcessLookupError):
