@@ -25,17 +25,24 @@ type sessionActivity struct {
 
 // TS 29.244 V20.1.0 clauses 5.11.2 and 8.2.83: a zero or null timer
 // disables reporting; an updated nonzero timer rearms it without resetting age.
-func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE) error {
+func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE, timerOptional bool) error {
 	if timer != nil {
 		value := time.Duration(0)
+		var err error
 		if !isNullIE(timer) {
-			var err error
 			value, err = timer.UserPlaneInactivityTimer()
-			if err != nil {
+		}
+		if err != nil {
+			// Table 7.5.2.1-1 marks this IE optional in Establishment;
+			// table 7.5.4.1-1 makes an update conditional. Clause 7.6.8
+			// discards only the incorrect optional IE, not the request.
+			if !timerOptional {
 				return &requestIEError{ie.CauseMandatoryIEIncorrect, ie.UserPlaneInactivityTimer, err}
 			}
+			log.Debug().Err(err).Uint64("seid", session.LocalSEID).Msg("Discard incorrect optional inactivity timer")
+		} else {
+			session.inactivityTimer, session.inactivityArmed = value, value > 0
 		}
-		session.inactivityTimer, session.inactivityArmed = value, value > 0
 	}
 	if session.activity != nil || conn.inactivityReleaseTimeout == 0 && !session.inactivityArmed {
 		return nil
