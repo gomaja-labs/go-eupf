@@ -74,7 +74,7 @@ func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransactio
 			return err
 		}
 		plan.owner, plan.created = owner, true
-		for _, cycle := range owner.cycles {
+		for _, cycle := range after.buffers.cycles {
 			if cycle != nil {
 				plan.fresh = append(plan.fresh, cycle)
 			}

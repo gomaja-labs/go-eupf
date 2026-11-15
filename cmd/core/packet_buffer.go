@@ -238,37 +238,74 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 		buffering.mu.Unlock()
 		return nil, fmt.Errorf("packet buffering reservation: %w", ebpf.ErrRuleCapacity)
 	}
-	if buffering.owners[session.LocalSEID] != nil {
+	owner := buffering.owners[session.LocalSEID]
+	resuming := owner != nil
+	if resuming && (!owner.canceled || owner.released || owner.conn != conn || owner.association != association || owner.retirement != nil) {
 		buffering.mu.Unlock()
 		return nil, errors.New("buffering session identity already reserved")
 	}
-	owner := &bufferOwner{conn: conn, association: association, session: session, noticeReady: true, cycles: make(map[uint32]*bufferCycle)}
+	if !resuming {
+		owner = &bufferOwner{conn: conn, association: association, session: session, noticeReady: true, cycles: make(map[uint32]*bufferCycle)}
+		buffering.reserved++
+		buffering.owners[session.LocalSEID] = owner
+	}
+	buffering.mu.Unlock()
 	state := &packetBufferSession{owner: owner, cycles: make(map[uint32]*bufferCycle), revision: 1}
 	var lanes []ebpf.BufferLane
+	rollbackReservation := func() {
+		if !resuming {
+			buffering.mu.Lock()
+			delete(buffering.owners, session.LocalSEID)
+			buffering.reserved--
+			buffering.mu.Unlock()
+			return
+		}
+		// Fresh lanes are still unpublished; no packet can hold their cookie.
+		for _, cycle := range state.cycles {
+			_, discardErr := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 1, Mode: ebpf.BufferDiscard})
+			_, releaseErr := buffering.plane.BufferControl(ebpf.BufferCommand{SessionID: session.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 6})
+			if err := errors.Join(discardErr, releaseErr); err != nil {
+				buffering.fail(err)
+			} else {
+				delete(owner.cycles, cycle.lane)
+			}
+		}
+	}
 	for farID, far := range session.FARs {
 		if far.FarInfo.Action&4 == 0 {
 			continue
 		}
-		lane := uint32(len(lanes))
-		owner.nextCookie++
-		cycle := &bufferCycle{farID: farID, lane: lane, cookie: owner.nextCookie, head: noBufferedPacket}
-		owner.cycles[lane] = cycle
+		var cycle *bufferCycle
+		if resuming {
+			var err error
+			cycle, err = buffering.reserveCycle(owner, farID)
+			if err != nil {
+				rollbackReservation()
+				return nil, err
+			}
+		} else {
+			lane := uint32(len(lanes))
+			owner.nextCookie++
+			cycle = &bufferCycle{farID: farID, lane: lane, cookie: owner.nextCookie, head: noBufferedPacket}
+			owner.cycles[lane] = cycle
+			lanes = append(lanes, ebpf.BufferLane{Index: lane, Cookie: cycle.cookie, Mode: ebpf.BufferHold, UsesBAR: downlinkBARAssociated(session, far)})
+		}
 		state.cycles[farID] = cycle
-		far.FarInfo.BufferSessionID = session.LocalSEID
-		far.FarInfo.BufferCookie = cycle.cookie
-		far.FarInfo.BufferLane = lane
+		far.FarInfo.BufferSessionID, far.FarInfo.BufferCookie, far.FarInfo.BufferLane = session.LocalSEID, cycle.cookie, cycle.lane
 		session.FARs[farID] = far
-		lanes = append(lanes, ebpf.BufferLane{Index: lane, Cookie: cycle.cookie, Mode: ebpf.BufferHold, UsesBAR: downlinkBARAssociated(session, far)})
 	}
-	buffering.reserved++
-	buffering.owners[session.LocalSEID] = owner
-	buffering.mu.Unlock()
-	if err := buffering.plane.CreateBufferAnchor(session.LocalSEID, buffering.options.PerSession, lanes); err != nil {
-		buffering.mu.Lock()
-		delete(buffering.owners, session.LocalSEID)
-		buffering.reserved--
-		buffering.mu.Unlock()
-		return nil, err
+	if !resuming {
+		if err := buffering.plane.CreateBufferAnchor(session.LocalSEID, buffering.options.PerSession, lanes); err != nil {
+			rollbackReservation()
+			return nil, err
+		}
+	} else {
+		// TS 29.244 V20.1.0 clause 5.2.4.2 permits BUFF at any time.
+		// Keep old canceled lanes and their credits until normal reclamation;
+		// resume the same anchor rather than reserving another session slot.
+		owner.canceled, owner.terminal, owner.graced = false, false, false
+		owner.grace = nil
+		owner.noticeReady = true
 	}
 	session.buffers = state
 	session.downlink = newDownlinkNotifications(0)
