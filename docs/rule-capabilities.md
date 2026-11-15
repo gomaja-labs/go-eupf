@@ -110,7 +110,7 @@ with every SMF feature.
 | N6 Routing Information | Rejected | HR-SBO N6 tunnel selection is not implemented. | 7.5.2.3-2 |
 | Header Handling Control Rule | Rejected | Payload header handling is not advertised. | 7.5.2.3-2, 7.5.4.3-2 |
 | On-path N6 Connection Information | Rejected | Media-information proxy connections are not advertised. | 7.5.2.3-2 |
-| PFCPSMReq-Flags | Implemented | SNDEM inside Update Forwarding Parameters for ordinary and mapped N3/N9 data-forwarding path switches. | 7.5.4.3-2 |
+| PFCPSMReq-Flags | Implemented | DROBU at session level discards retained packets before the FAR changes and re-arms first-packet notification. SNDEM inside Update Forwarding Parameters controls ordinary and mapped N3/N9 path switches. Other session-level flags remain unsupported. | 7.5.4.1-1, 7.5.4.3-2, 8.2.31 |
 
 ## QER
 
@@ -364,3 +364,9 @@ cancel packets not yet handed over. A packet already handed to the kernel is
 outside the UPF's control, just as on the ordinary fast path. Buffering does not
 charge the original QER/URR processing a second time (TS 29.244 V20.1.0 clause
 5.2.4.2).
+
+A Session Modification Request with PFCPSMReq-Flags DROBU discards all packets
+retained before that request, then applies its FAR changes. If BUFF|NOCP remains
+in force, the next downlink packet starts a new notification period (TS 29.244
+V20.1.0 clauses 5.2.4.3 and 8.2.31). Packets already handed over remain outside
+the retained queue.

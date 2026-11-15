@@ -390,7 +390,20 @@ func validateSessionCapability(request interface{}) error {
 			}
 		}
 	case *message.SessionModificationRequest:
-		return rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "UpdatePDR", "RemovePDR", "CreateFAR", "UpdateFAR", "RemoveFAR", "CreateQER", "UpdateQER", "RemoveQER", "CreateURR", "UpdateURR", "RemoveURR", "CreateBAR", "UpdateBAR", "RemoveBAR", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType")
+		if err := rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "UpdatePDR", "RemovePDR", "CreateFAR", "UpdateFAR", "RemoveFAR", "CreateQER", "UpdateQER", "RemoveQER", "CreateURR", "UpdateURR", "RemoveURR", "CreateBAR", "UpdateBAR", "RemoveBAR", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType", "PFCPSMReqFlags"); err != nil {
+			return err
+		}
+		if r.PFCPSMReqFlags != nil {
+			flags, err := r.PFCPSMReqFlags.PFCPSMReqFlags()
+			if err != nil {
+				return err
+			}
+			// TS 29.244 V20.1.0 clause 8.2.31: only session-level
+			// DROBU is supported. SNDEM is valid inside forwarding parameters.
+			if flags&0x7e != 0 {
+				return unsupportedRuleIE(ie.PFCPSMReqFlags)
+			}
+		}
 	}
 	return nil
 }

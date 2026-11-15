@@ -300,3 +300,8 @@ removal and deletion cancel only packets not yet handed over. Once the kernel ha
 accepted a packet, its later transmission or drop is outside the UPF's control.
 The resumed first leg retains its prior policing and accounting, as required by
 TS 29.244 V20.1.0 clause 5.2.4.2.
+
+Session-level PFCPSMReq-Flags DROBU is accepted in Session Modification Requests:
+it discards every packet still retained for the session before applying the
+request's FAR changes. BUFF|NOCP afterwards starts a fresh first-packet report
+period (TS 29.244 V20.1.0 clauses 5.2.4.3 and 8.2.31).

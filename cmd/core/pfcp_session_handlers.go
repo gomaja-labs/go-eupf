@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"syscall"
 	"time"
@@ -381,7 +382,20 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 			}
 		}
 	}
-	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, false, notifyFARs...)
+	dropBuffered := false
+	if req.PFCPSMReqFlags != nil {
+		flags, err := req.PFCPSMReqFlags.PFCPSMReqFlags()
+		if err != nil {
+			return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
+		}
+		dropBuffered = flags&1 != 0
+	}
+	if dropBuffered && session.downlink != nil && session.downlink.generation == math.MaxUint64 {
+		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
+	}
+	// TS 29.244 V20.1.0 clauses 5.2.4.3 and 8.2.31: discard the
+	// previous queue before applying the FARs selected by this request.
+	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, dropBuffered, notifyFARs...)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
@@ -393,6 +407,12 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
 	}
 
+	if dropBuffered && session.downlink != nil {
+		conn.advanceDownlinkGenerationLocked(session.downlink)
+		clear(session.downlink.fars)
+		clear(session.downlink.pending)
+		session.downlink.pending = session.downlink.pending[:0]
+	}
 	conn.commitEndMarkers(markers)
 	markers = nil
 
