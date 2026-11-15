@@ -27,6 +27,23 @@ func TestHandoverMarkerDoesNotRelayDiscardRequiredExtension(t *testing.T) {
 	}
 }
 
+// TS 29.281 V19.2.0 figure 5.2.1-2 and clause 5.2.1: every
+// recipient must understand 11 extensions; markers do not solicit SEHN.
+func TestHandoverMarkerDropsComprehensionRequiredExtension(t *testing.T) {
+	b := loadDatapath(t)
+	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
+	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0xc5, 1, 0xab, 0xcd, 0}
+	before := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfExtStat()
+	action, _ := runDatapath(t, b, outerDatapath(t, g, false))
+	after := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfExtStat()
+	if action != 1 {
+		t.Fatalf("comprehension-required marker action=%d want drop", action)
+	}
+	if after.RxGtpUnexp != before.RxGtpUnexp+1 {
+		t.Fatal("discarded marker was not counted")
+	}
+}
+
 // TS 29.244 V20.1.0 clause 5.17.3; TS 38.415 V19.1.0 clause 5.5.2.1.
 func TestHandoverMarkerInsertsMappedQFIWithoutChargingData(t *testing.T) {
 	b := loadDatapath(t)

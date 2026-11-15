@@ -694,6 +694,13 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
     if (!pdr || !pdr->far_id) return XDP_DROP;
     struct far_info *far=bpf_map_lookup_elem(&far_map,&pdr->far_id);
     if (!far || far->end_marker_suppressed || !(far->action & FAR_FORW) || !(far->outer_header_creation & OHC_GTP_U_UDP_IPv4)) return XDP_DROP;
+    // TS 29.281 V19.2.0 figure 5.2.1-2: every recipient must
+    // comprehend 11 extensions. Clause 5.2.1 limits SEHN to requests
+    // and G-PDUs, so an End Marker is counted and discarded directly.
+    if (ctx->unknown_extensions & 2) {
+        increment_counter(ctx->counters,rx_gtp_unexp);
+        return XDP_DROP;
+    }
     // TS 29.281 V19.2.0 figure 5.2.1-2: unknown 01 extensions must
     // not reach the receiver. As for G-PDUs, retain the intact slow path
     // until this extension-content removal is supported.
