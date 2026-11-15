@@ -338,8 +338,10 @@ V20.1.0 clause 5.17.3 and table 8.2.64-2; TS 38.415 V19.1.0 clause 5.5.2.1).
 Generated markers on labeled N3/N9 data-forwarding tunnels include one QFI
 selected in PDR-ID and QER-binding order from the old rules. A deletion
 instruction selects an EPS output without a container. A labeled
-forwarding tunnel missing its required mapped QFI rejects SNDEM with Cause 67
-and Offending IE QFI, including when the FAR has no PDR yet.
+forwarding tunnel uses each referencing PDR’s first QFI-bearing QER from the old
+rules, or from the rules installed by the same request if the old rules have no
+QFI. A referencing PDR with no QFI in either set rejects SNDEM with Cause 67 and
+Offending IE QFI. A FAR with no referencing PDR sends no marker and succeeds.
 Ordinary old tunnels, including Dual Connectivity path
 switches, use no container. N19 and N19mb suppress both received and generated
 End Markers. REEMR reporting remains rejected (TS 29.281 V19.2.0 clause 7.3.2.3).

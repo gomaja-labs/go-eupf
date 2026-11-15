@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -120,7 +121,7 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 		{name: "absent QFI", label: ie.TGPPInterfaceTypeN9DataForwarding, wantError: true},
 		{name: "EPS output", label: ie.TGPPInterfaceTypeN3ForDataForwarding, deletion: true},
 		{name: "ordinary old tunnel", label: ie.TGPPInterfaceTypeN33GPPAccess, present: true},
-		{name: "inactive forwarding tunnel", label: ie.TGPPInterfaceTypeN9DataForwarding, inactive: true, wantError: true},
+		{name: "inactive forwarding tunnel", label: ie.TGPPInterfaceTypeN9DataForwarding, inactive: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewSession(1, 2, "", "", false)
@@ -134,7 +135,7 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 				s.PutPDR(1, p)
 			}
 			s.NewQer(1, 1, ebpf.QerInfo{QFIPresent: tc.present, Qfi: 0})
-			mappings, err := handoverMarkerQFIs(s, fid, f)
+			mappings, err := handoverMarkerQFIs(s, s, fid, f)
 			var mapping handoverMarkerMapping
 			if len(mappings) > 0 {
 				mapping = mappings[0]
@@ -172,7 +173,7 @@ func TestUnknownOuterRemovalUsesMandatoryIEIncorrect(t *testing.T) {
 	}
 }
 
-func TestInactiveHandoverMarkerRequiresMappedQFI(t *testing.T) {
+func TestInactiveHandoverMarkerSendsNothing(t *testing.T) {
 	conn := newProtocolConnection(t)
 	old, next := NewSession(1, 2, "", "", false), NewSession(1, 2, "", "", false)
 	old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
@@ -186,12 +187,44 @@ func TestInactiveHandoverMarkerRequiresMappedQFI(t *testing.T) {
 		batch.release()
 		t.Fatal("marker created without a mapped QFI")
 	}
-	if err == nil {
-		t.Fatal("SNDEM accepted without a mapped QFI or a marker")
+	if err != nil {
+		t.Fatalf("inactive forwarding FAR rejected: %v", err)
 	}
-	fields := ruleFailureIEs(err)
-	cause, _ := fields[0].Cause()
-	if cause != ie.CauseConditionalIEMissing {
-		t.Fatal(cause)
+}
+
+func TestHandoverMarkerUsesNewMappingOnlyWhenOldQFIIsAbsent(t *testing.T) {
+	for _, oldPresent := range []bool{false, true} {
+		t.Run(fmt.Sprint(oldPresent), func(t *testing.T) {
+			conn := newProtocolConnection(t)
+			old := NewSession(1, 2, "", "", false)
+			fid := uint32(1)
+			old.NewFar(fid, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
+			far := old.FARs[fid]
+			far.InterfaceType, far.InterfaceTypePresent = ie.TGPPInterfaceTypeN3ForDataForwarding, true
+			old.FARs[fid] = far
+			old.PutPDR(1, SPDRInfo{PdrID: 1, FARID: &fid, QERIDs: []uint32{1}})
+			old.NewQer(1, 1, ebpf.QerInfo{Qfi: 5, QFIPresent: oldPresent})
+			next := cloneSession(old)
+			far = next.FARs[fid]
+			far.FarInfo.Teid = 201
+			next.FARs[fid] = far
+			next.NewQer(1, 2, ebpf.QerInfo{Qfi: 9, QFIPresent: true})
+			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
+			batch, err := conn.prepareEndMarkers(request, old, next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if batch == nil {
+				t.Fatal("missing marker")
+			}
+			defer batch.release()
+			want := uint8(9)
+			if oldPresent {
+				want = 5
+			}
+			if len(batch.packets) != 1 || !batch.packets[0].withQFI || batch.packets[0].qfi != want {
+				t.Fatalf("markers=%+v want QFI %d", batch.packets, want)
+			}
+		})
 	}
 }

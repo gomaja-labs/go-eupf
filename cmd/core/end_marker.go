@@ -194,7 +194,7 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 		if a.Teid == b.Teid && a.RemoteIP == b.RemoteIP {
 			continue
 		}
-		mappings, err := handoverMarkerQFIs(old, id, before)
+		mappings, err := handoverMarkerQFIs(old, next, id, before)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +335,7 @@ type handoverMarkerMapping struct {
 // TS 29.244 V20.1.0 clause 5.17.3 and TS 29.281 V19.2.0 clause
 // 7.3.2.3: each E-RAB/PDR on a labelled forwarding FAR sends its own
 // mapped marker. The first QFI-bearing QER follows G-PDU binding order.
-func handoverMarkerQFIs(session *Session, farID uint32, far SFarInfo) ([]handoverMarkerMapping, error) {
+func handoverMarkerQFIs(session, next *Session, farID uint32, far SFarInfo) ([]handoverMarkerMapping, error) {
 	if !far.InterfaceTypePresent || (far.InterfaceType != ie.TGPPInterfaceTypeN3ForDataForwarding && far.InterfaceType != ie.TGPPInterfaceTypeN9DataForwarding) {
 		return []handoverMarkerMapping{{}}, nil
 	}
@@ -358,14 +358,21 @@ func handoverMarkerQFIs(session *Session, farID uint32, far SFarInfo) ([]handove
 					break
 				}
 			}
+			// TS 29.244 V20.1.0 clauses 7.2.3.2 and 7.6.6: the
+			// same request may supply the previously absent conditional QFI.
+			if !mapping.withQFI && next != nil {
+				for _, qid := range next.PDRs[id].QERIDs {
+					if qer, ok := next.QERs[qid]; ok && qer.QerInfo.QFIPresent {
+						mapping.qfi, mapping.withQFI = qer.QerInfo.Qfi&0x3f, true
+						break
+					}
+				}
+			}
 			if !mapping.withQFI {
 				return nil, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
 			}
 		}
 		mappings = append(mappings, mapping)
-	}
-	if len(mappings) == 0 {
-		return nil, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
 	}
 	return mappings, nil
 }
