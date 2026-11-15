@@ -82,7 +82,7 @@ func TestRebufferAfterDrainRetirementNotifies(t *testing.T) {
 	}
 	buffering.sender = bufferSenderFunc(func(ebpf.RenderedBuffer) error { return nil })
 	firstBufferReport(t, plane, conn, assoc, peer, 100)
-	forward := switchBufferedFARToForward(t, conn, assoc, session)
+	switchBufferedFARToForward(t, conn, assoc, session)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		buffering.mu.Lock()
@@ -97,7 +97,7 @@ func TestRebufferAfterDrainRetirementNotifies(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	conn.stateMu.Lock()
-	forward = assoc.Sessions[11]
+	forward := assoc.Sessions[11]
 	_, err := setBufferAction(conn, assoc, forward, 12)
 	conn.stateMu.Unlock()
 	if err != nil {
