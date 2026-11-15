@@ -477,7 +477,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 	}
 	pfcpConn.ResourceManager = resourceManager
 
-	fteid1 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.1"), nil, 1) // TS 29.244 V20.1.0 clause 8.2.3: CH and IPv4.
+	fteid1 := ie.NewFTEID(0x05, 0, nil, nil, 0) // TS 29.244 V20.1.0 clause 8.2.3: CH and IPv4.
 	createPDR1 := ie.NewCreatePDR(
 		ie.NewPDRID(1),
 		ie.NewPDI(
@@ -486,7 +486,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 		),
 	)
 
-	fteid2 := ie.NewFTEID(0x05, 0, net.ParseIP("127.0.0.2"), nil, 1)
+	fteid2 := ie.NewFTEID(0x05, 0, nil, nil, 0)
 	createPDR2 := ie.NewCreatePDR(
 		ie.NewPDRID(2),
 		ie.NewPDI(
@@ -495,7 +495,7 @@ func TestTEIDAllocationInSessionEstablishmentResponse(t *testing.T) {
 		),
 	)
 
-	fteid3 := ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 1)
+	fteid3 := ie.NewFTEID(1, 10, pfcpConn.n9Address, nil, 0)
 	createPDR3 := ie.NewCreatePDR(
 		ie.NewPDRID(3),
 		ie.NewPDI(
