@@ -82,14 +82,9 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 	}
 	if err := conn.ResourceManager.AdmitSession(localSEID); err != nil {
-		cause := ie.CauseNoResourcesAvailable
-		// Preserve the requested-restoration resource cause even when the
-		// context bound is full. TS 23.527 V20.0.0 clause 4.3.2;
-		// TS 29.244 V20.1.0 table 8.2.1-1 (Causes 75 and 86).
-		if restorationTEIDCollision(req, conn.ResourceManager) {
-			cause = ie.CauseSessionRestorationResourceUnavailable
-		}
-		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(cause)), isTraced, nil
+		// Capacity takes precedence for every establishment, including RESTI.
+		// TS 29.244 V20.1.0 table 8.2.1-1 (Cause 75).
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 	}
 	session := NewSession(localSEID, remoteSEID.SEID, imsi, msisdn, isTraced)
 	session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(remoteSEID.IPv4Address), slices.Clone(remoteSEID.IPv6Address)
@@ -135,9 +130,6 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Establishment Request: (error in applying IEs): %s", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
-		if pdrContext.Restoration && (errors.Is(err, service.ErrResourceCollision) || errors.Is(err, ebpf.ErrKeyOwned)) {
-			err = &requestIEError{ie.CauseSessionRestorationResourceUnavailable, 0, err}
-		}
 		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), append([]*ie.IE{conn.profile.NodeID(conn.nodeId)}, ruleFailureIEs(err)...)...), isTraced, nil
 	}
 
@@ -147,9 +139,6 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Session Establishment Request from %s failed, rolling back", addr)
 		logger.Debug().Msgf("session rules after failed commit: \n\tQER%+v, \n\tFAR%+v, \n\tURR%+v, \n\tPDR%+v", session.QERs, session.FARs, session.URRs, session.PDRs)
-		if pdrContext.Restoration && (errors.Is(err, service.ErrResourceCollision) || errors.Is(err, ebpf.ErrKeyOwned)) {
-			err = &requestIEError{ie.CauseSessionRestorationResourceUnavailable, 0, err}
-		}
 		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), append([]*ie.IE{conn.profile.NodeID(conn.nodeId)}, ruleFailureIEs(err)...)...), isTraced, nil
 	}
 
@@ -187,27 +176,6 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	logger.Debug().Msgf("Session Establishment Request from %s accepted.", addr)
 
 	return estResp, isTraced, nil
-}
-
-func restorationTEIDCollision(request *message.SessionEstablishmentRequest, resources *service.ResourceManager) bool {
-	if !request.PFCPSEReqFlags.HasRESTI() || resources == nil || resources.FTEIDM == nil {
-		return false
-	}
-	for _, pdr := range request.CreatePDR {
-		fields, err := pdr.CreatePDR()
-		if err != nil {
-			continue
-		}
-		detection, err := fields.PDI.PDI()
-		if err != nil {
-			continue
-		}
-		tunnel, err := detection.LocalFTEID.FTEID()
-		if err == nil && !tunnel.HasCh() && resources.FTEIDM.HasTEID(tunnel.TEID) {
-			return true
-		}
-	}
-	return false
 }
 
 func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message, addr string) (result message.Message, tracedResult bool, handlerErr error) {

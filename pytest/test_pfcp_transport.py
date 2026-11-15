@@ -195,7 +195,7 @@ def test_startup_choose_and_explicit_restoration(server):
         assert restoration[pfcp.IE_Cause].cause == 1
         occupied = remote.establish([uplink_far(), uplink_pdr(teid=17),
             pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
-        assert occupied[pfcp.IE_Cause].cause == 86
+        assert occupied[pfcp.IE_Cause].cause == 73
     finally:
         remote.close()
 
@@ -251,7 +251,7 @@ def test_restart_allocates_new_teid_generation_and_restores_predecessor(server, 
             assert restored[pfcp.IE_Cause].cause == 1
             collision = restarted.establish([uplink_far(), uplink_pdr(teid=predecessor),
                 pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
-            assert collision[pfcp.IE_Cause].cause == 86
+            assert collision[pfcp.IE_Cause].cause == 73
             (evidence / "restart-generations.json").write_text(json.dumps({
                 "pool": 32, "before_timestamp": setup_stamp, "after_timestamp": next_stamp,
                 "before_teid": predecessor, "after_teid": current,
@@ -300,7 +300,7 @@ def test_session_capacity_counts_empty_contexts_until_reclamation(server):
         assert second[pfcp.IE_Cause].cause == 1
         collision = remote.establish([uplink_far(), uplink_pdr(teid=first[pfcp.IE_FTEID].TEID),
             pfcp.IE_NotImplemented(ietype=186, data=b"\x01")])
-        assert collision[pfcp.IE_Cause].cause == 86
+        assert collision[pfcp.IE_Cause].cause == 75
         assert remote.establish([uplink_far(), uplink_pdr()])[pfcp.IE_Cause].cause == 75
         removed = remote.request(pfcp.PFCPSessionModificationRequest(IE_list=[
             pfcp.IE_RemovePDR(IE_list=[pfcp.IE_PDR_Id(id=1)]),

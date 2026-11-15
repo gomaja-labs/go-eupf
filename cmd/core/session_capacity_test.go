@@ -82,7 +82,7 @@ func TestSessionLimitIsSharedAcrossEndpointsAndFreesOnlyKnownSessions(t *testing
 	}
 }
 
-func TestRestorationCollisionKeepsItsCauseAtSessionCapacity(t *testing.T) {
+func TestSessionCapacityTakesPrecedenceOverRestorationCollision(t *testing.T) {
 	pipelineQuiet(t)
 	conn := sessionLimitConnection(t, 1, nil, nil)
 	peer := identityPeer(t, "127.0.0.25", 0)
@@ -93,7 +93,7 @@ func TestRestorationCollisionKeepsItsCauseAtSessionCapacity(t *testing.T) {
 	request := sessionLimitRequest("limit.example", 3, 1)
 	request.PFCPSEReqFlags = ie.NewPFCPSEReqFlags(1)
 	request.CreatePDR = []*ie.IE{ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, tunnel.TEID, conn.n3Address, nil, 0)), ie.NewFARID(1))}
-	if cause := pipelineCause(t, sessionLimitExchange(t, conn, peer, request)); cause != ie.CauseSessionRestorationResourceUnavailable {
+	if cause := pipelineCause(t, sessionLimitExchange(t, conn, peer, request)); cause != ie.CauseNoResourcesAvailable {
 		t.Fatalf("collision cause at capacity %d", cause)
 	}
 }

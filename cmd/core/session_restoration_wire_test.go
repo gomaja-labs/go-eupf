@@ -64,14 +64,14 @@ func TestSessionRestorationWireInputs(t *testing.T) {
 	fields, _ := first.CreatedPDR[0].CreatedPDR()
 	chosen, _ := fields.UEIPAddress[0].UEIPAddress()
 	collision := exchangeProtocolDatagram(t, conn, protocolWire(t, request(20, 10, chosen.IPv4Address.String(), true))).(*message.SessionEstablishmentResponse)
-	if cause, _ := collision.Cause.Cause(); cause != ie.CauseSessionRestorationResourceUnavailable {
+	if cause, _ := collision.Cause.Cause(); cause != ie.CauseRuleCreationModificationFailure {
 		t.Fatalf("occupied restoration cause=%d", cause)
 	}
 	if reply := exchangeProtocolDatagram(t, conn, protocolWire(t, request(30, 9, "", false))); reply != nil {
 		t.Fatal("stale timestamp was not discarded")
 	}
 	pending := exchangeProtocolDatagram(t, conn, protocolWire(t, request(40, 11, chosen.IPv4Address.String(), true))).(*message.SessionEstablishmentResponse)
-	if cause, _ := pending.Cause.Cause(); cause != ie.CauseSessionRestorationResourceUnavailable {
+	if cause, _ := pending.Cause.Cause(); cause != ie.CauseRuleCreationModificationFailure {
 		t.Fatalf("resource still awaiting restart cleanup cause=%d", cause)
 	}
 	conn.serviceHeartbeats(time.Now())

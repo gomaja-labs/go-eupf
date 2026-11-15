@@ -9,7 +9,7 @@ import (
 	"github.com/gomaja-labs/go-pfcp/message"
 )
 
-func FuzzRestorationCollisionLookup(f *testing.F) {
+func FuzzRestorationCollisionPreservesLeases(f *testing.F) {
 	for _, restoration := range []uint8{0, 1} {
 		request := message.NewSessionEstablishmentRequest(0, 1, ie.NewNodeIDFQDN("synthetic.example"), ie.NewFSEID(1, net.ParseIP("192.0.2.1"), nil), ie.NewPFCPSEReqFlags(restoration),
 			ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, 1, net.ParseIP("192.0.2.2"), nil, 0))))
@@ -35,7 +35,16 @@ func FuzzRestorationCollisionLookup(f *testing.F) {
 		if err := resources.FTEIDM.ReserveTEID(2, 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		_ = restorationTEIDCollision(request, resources)
+		journal := resources.BeginReservation(3)
+		context := NewPDRCreationContext(NewSession(3, 1, "", "", false), journal.View())
+		context.Restoration = request.PFCPSEReqFlags.HasRESTI()
+		context.N3Address, context.N9Address = net.ParseIP("192.0.2.2"), net.ParseIP("192.0.2.2")
+		for _, field := range request.CreatePDR {
+			_ = context.extractPDR(field, &SPDRInfo{PdrID: 1})
+		}
+		if err := reclaimReservations(journal.Rollback()); err != nil {
+			t.Fatal(err)
+		}
 		if !resources.FTEIDM.HasTEID(1) {
 			t.Fatal("collision lookup changed the explicit lease")
 		}
