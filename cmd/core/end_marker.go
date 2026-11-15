@@ -194,23 +194,32 @@ func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificati
 		if a.Teid == b.Teid && a.RemoteIP == b.RemoteIP {
 			continue
 		}
-		qfi, withQFI, err := handoverMarkerQFI(old, id, before)
+		mappings, err := handoverMarkerQFIs(old, id, before)
 		if err != nil {
 			return nil, err
 		}
 		destination := make(net.IP, 4)
 		binary.LittleEndian.PutUint32(destination, a.RemoteIP)
-		sources, err := conn.oldTunnelSources(old, id, before)
-		if err != nil {
-			return nil, err
-		}
-		for _, source := range sources {
-			key := fmt.Sprintf("%s/%s/%d", source, destination, a.Teid)
-			if seen[key] {
-				continue
+		for _, mapping := range mappings {
+			readers := old
+			if mapping.pdrPresent {
+				one := *old
+				one.PDRs = map[uint32]SPDRInfo{mapping.pdrID: old.PDRs[mapping.pdrID]}
+				readers = &one
 			}
-			seen[key] = true
-			packets = append(packets, endMarker{source: source, destination: destination, teid: a.Teid, qfi: qfi, withQFI: withQFI})
+			sources, err := conn.oldTunnelSources(readers, id, before)
+			if err != nil {
+				return nil, err
+			}
+			for _, source := range sources {
+				// Each E-RAB/PDR owns its marker, even on one shared FAR.
+				key := fmt.Sprintf("%s/%s/%d/%t/%d/%t/%d", source, destination, a.Teid, mapping.withQFI, mapping.qfi, mapping.pdrPresent, mapping.pdrID)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				packets = append(packets, endMarker{source: source, destination: destination, teid: a.Teid, qfi: mapping.qfi, withQFI: mapping.withQFI})
+			}
 		}
 	}
 	if len(packets) == 0 {
@@ -317,32 +326,46 @@ func (conn *PfcpConnection) oldTunnelSources(session *Session, id uint32, far SF
 // per-tunnel source port is used by XDP forwarding and End Markers.
 func gtpTunnelSourcePort(teid uint32) uint16 { return 49152 | uint16(teid&0x3fff) }
 
+type handoverMarkerMapping struct {
+	pdrID               uint32
+	qfi                 uint8
+	withQFI, pdrPresent bool
+}
+
 // TS 29.244 V20.1.0 clause 5.17.3 and TS 29.281 V19.2.0 clause
-// 7.3.2.3: a 5GS data-forwarding tunnel carries one mapped flow. Ordinary
-// old tunnels (including Dual Connectivity transfers) have no container.
-func handoverMarkerQFI(session *Session, farID uint32, far SFarInfo) (uint8, bool, error) {
+// 7.3.2.3: each E-RAB/PDR on a labelled forwarding FAR sends its own
+// mapped marker. The first QFI-bearing QER follows G-PDU binding order.
+func handoverMarkerQFIs(session *Session, farID uint32, far SFarInfo) ([]handoverMarkerMapping, error) {
 	if !far.InterfaceTypePresent || (far.InterfaceType != ie.TGPPInterfaceTypeN3ForDataForwarding && far.InterfaceType != ie.TGPPInterfaceTypeN9DataForwarding) {
-		return 0, false, nil
+		return []handoverMarkerMapping{{}}, nil
 	}
 	ids := make([]uint32, 0, len(session.PDRs))
 	for id := range session.PDRs {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
+	var mappings []handoverMarkerMapping
 	for _, id := range ids {
 		pdr := session.PDRs[id]
 		if pdr.FARID == nil || *pdr.FARID != farID {
 			continue
 		}
-		if pdr.PdrInfo.GtpExtensionHeaderDeletion&1 != 0 {
-			return 0, false, nil
-		}
-		for _, qid := range pdr.QERIDs {
-			qer, ok := session.QERs[qid]
-			if ok && qer.QerInfo.QFIPresent {
-				return qer.QerInfo.Qfi & 0x3f, true, nil
+		mapping := handoverMarkerMapping{pdrID: id, pdrPresent: true}
+		if pdr.PdrInfo.GtpExtensionHeaderDeletion&1 == 0 {
+			for _, qid := range pdr.QERIDs {
+				if qer, ok := session.QERs[qid]; ok && qer.QerInfo.QFIPresent {
+					mapping.qfi, mapping.withQFI = qer.QerInfo.Qfi&0x3f, true
+					break
+				}
+			}
+			if !mapping.withQFI {
+				return nil, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
 			}
 		}
+		mappings = append(mappings, mapping)
 	}
-	return 0, false, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
+	if len(mappings) == 0 {
+		return nil, &ruleFailure{ie.RuleIDTypeFAR, farID, &requestIEError{ie.CauseConditionalIEMissing, ie.QFI, ie.ErrIENotFound}}
+	}
+	return mappings, nil
 }

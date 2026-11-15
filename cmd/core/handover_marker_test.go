@@ -134,9 +134,13 @@ func TestHandoverMarkerMappingDistinguishesZeroAndAbsentQFI(t *testing.T) {
 				s.PutPDR(1, p)
 			}
 			s.NewQer(1, 1, ebpf.QerInfo{QFIPresent: tc.present, Qfi: 0})
-			qfi, present, err := handoverMarkerQFI(s, fid, f)
-			if (err != nil) != tc.wantError || qfi != 0 || present != tc.wantQFI {
-				t.Fatalf("qfi=%d present=%t err=%v", qfi, present, err)
+			mappings, err := handoverMarkerQFIs(s, fid, f)
+			var mapping handoverMarkerMapping
+			if len(mappings) > 0 {
+				mapping = mappings[0]
+			}
+			if (err != nil) != tc.wantError || mapping.qfi != 0 || mapping.withQFI != tc.wantQFI {
+				t.Fatalf("mappings=%+v err=%v", mappings, err)
 			}
 			if tc.wantError {
 				fields := ruleFailureIEs(err)
