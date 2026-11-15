@@ -48,7 +48,7 @@ func TestCgroupMemoryLimits(t *testing.T) {
 func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
 	for _, sessions := range []uint32{1, 1024, 65535, 1 << 20} {
 		c := UpfConfig{MaxSessions: sessions}
-		needed := 400*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve() + c.BufferKernelMemoryReserve()
+		needed := 448*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve() + c.BufferKernelMemoryReserve()
 		if _, err := c.PFCPMemoryPlan(needed-1, 0); err == nil {
 			t.Fatalf("sessions %d: omitted per-session memory", sessions)
 		}

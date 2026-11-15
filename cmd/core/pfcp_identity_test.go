@@ -97,9 +97,7 @@ func TestSessionIdentityIndependentOfSourceAddress(t *testing.T) {
 	entity := identityPeer(t, "127.0.0.6", 8805)
 	identitySetup(t, conn, source, "cp.example")
 	seid := identityEstablish(t, conn, second, "cp.example", "127.0.0.6")
-	if !conn.ReleaseSessionByID(seid) {
-		t.Fatal("session missing")
-	}
+	SendSessionReportUsage(conn, seid, 0, "cp.example", 9, 0, 1, 0, time.Now(), false)
 	if got := identityRead(t, entity); got.MessageType() != message.MsgTypeSessionReportRequest || got.SEID() != 77 {
 		t.Fatalf("report %T SEID %d", got, got.SEID())
 	}

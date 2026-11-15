@@ -23,9 +23,7 @@ func TestReportUsesUniqueLocalSessionIdentity(t *testing.T) {
 	seidB := pipelineEstablish(t, conn, cp, "cp.example", 77, "127.0.0.7", 18, 3)
 	misrouted, delivered := 0, 0
 	for i := 0; i < 16; i++ {
-		if !conn.ReleaseSessionByID(seidB) {
-			t.Fatal("session B missing")
-		}
+		SendSessionReportUsage(conn, seidB, 0, "cp.example", 9, 0, 1, 0, time.Now(), false)
 		if m := pipelineRead(t, entityB, 100*time.Millisecond); m != nil {
 			delivered++
 		}
@@ -243,7 +241,7 @@ func TestHeartbeatPolicyChangeCompletesPendingProbe(t *testing.T) {
 }
 
 func TestEverySessionOriginatorUsesLocalIdentity(t *testing.T) {
-	for _, originator := range []string{"release_id", "release_user", "release", "usage", "adc", "dldr", "queued"} {
+	for _, originator := range []string{"release_id", "release_user", "usage", "adc", "dldr", "queued"} {
 		t.Run(originator, func(t *testing.T) {
 			pipelineQuiet(t)
 			conn := identityConnection(t)
@@ -257,15 +255,13 @@ func TestEverySessionOriginatorUsesLocalIdentity(t *testing.T) {
 			assoc.Sessions[seid].IMSI = "001010000000017"
 			switch originator {
 			case "release_id":
-				if !conn.ReleaseSessionByID(seid) {
+				if _, err := conn.ReleaseSessionByID(seid); err != nil {
 					t.Fatal("session missing")
 				}
 			case "release_user":
-				if !conn.ReleaseSessionByUserID("001010000000017", "") {
+				if _, err := conn.ReleaseSessionByUserID("001010000000017", ""); err != nil {
 					t.Fatal("subscriber missing")
 				}
-			case "release":
-				SendSessionReportSessionRelease(conn, seid, 0, assoc.ID, false, []uint16{1})
 			case "usage":
 				SendSessionReportUsage(conn, seid, 0, assoc.ID, 9, 0, 40, 20, time.Now(), false)
 			case "adc":

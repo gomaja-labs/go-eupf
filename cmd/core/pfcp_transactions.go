@@ -42,6 +42,9 @@ type requestKey struct {
 	digest   [32]byte
 }
 type pendingRequest struct {
+	localRelease           *localSessionRelease
+	localReleaseReport     bool
+	localReleaseLast       bool
 	wire                   []byte
 	peer                   *net.UDPAddr
 	typ                    uint8
@@ -65,6 +68,7 @@ type pendingRequest struct {
 	bufferUpdate           *bufferReportUpdate
 	onComplete             func(requestResult)
 	completed              bool
+	completedOutcome       requestOutcome
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -255,6 +259,7 @@ func (conn *PfcpConnection) completeRequestLocked(req *pendingRequest, result re
 		return
 	}
 	req.completed = true
+	req.completedOutcome = result.outcome
 	if req.onComplete != nil {
 		req.onComplete(result)
 	}
@@ -283,6 +288,10 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 		failedReport := req.typ == message.MsgTypeSessionReportRequest && result.outcome != requestAccepted
 		if failedReport {
 			PfcpReportFailures.WithLabelValues(string(result.outcome)).Inc()
+		}
+		if req.localRelease != nil {
+			conn.completeLocalReleaseRequestLocked(req, result)
+			return
 		}
 		assoc := conn.associationByID(req.associationID())
 		if assoc == nil || assoc != req.association {

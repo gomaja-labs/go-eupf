@@ -97,38 +97,6 @@ func TestBuildSessionReportADCIEs(t *testing.T) {
 	}
 }
 
-func TestBuildSessionReportReleaseIEs(t *testing.T) {
-	pdrList := []uint16{4, 5}
-	tests := []struct {
-		name         string
-		profile      PfcpProfile
-		wantLen      int
-		wantVendorIE bool
-	}{
-		{"Default", DefaultProfile{}, 1, false},
-		{"Huawei", testHuaweiProfile, 2, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ies := buildSessionReportReleaseIEs(tt.profile, pdrList)
-			if len(ies) != tt.wantLen {
-				t.Fatalf("expected %d IEs, got %d", tt.wantLen, len(ies))
-			}
-			if ies[0].Type != ie.ReportType {
-				t.Errorf("expected ReportType, got %d", ies[0].Type)
-			}
-			if tt.wantVendorIE {
-				if ies[1].Type != 32799 {
-					t.Errorf("expected vendor IE type 32799, got %d", ies[1].Type)
-				}
-				if ies[1].EnterpriseID != 2011 {
-					t.Errorf("expected enterprise-id 2011, got %d", ies[1].EnterpriseID)
-				}
-			}
-		})
-	}
-}
-
 func TestBuildDefaultSetupRequestIEs(t *testing.T) {
 	tests := []struct {
 		name    string

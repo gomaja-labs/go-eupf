@@ -68,6 +68,11 @@ func (release *AssociationRelease) Done() bool {
 		if release.conn.associationByID(assoc.ID) == assoc {
 			return false
 		}
+		for _, session := range release.conn.localReleases {
+			if session.association == assoc {
+				return false
+			}
+		}
 	}
 	return true
 }

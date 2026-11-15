@@ -46,12 +46,14 @@ var pfcpHandlers = PfcpHandlerMap{
 }
 
 type PfcpConnection struct {
-	packetBuffers    *PacketBuffering
-	downlinkSessions map[uint64]*NodeAssociation
-	bufferUpdates    []*bufferReportUpdate
-	socketMu         sync.RWMutex
-	closeOnce        sync.Once
-	done             chan struct{}
+	packetBuffers     *PacketBuffering
+	downlinkSessions  map[uint64]*NodeAssociation
+	localReleases     map[uint64]*localSessionRelease
+	localReleaseBytes int
+	bufferUpdates     []*bufferReportUpdate
+	socketMu          sync.RWMutex
+	closeOnce         sync.Once
+	done              chan struct{}
 
 	stateMu               sync.RWMutex // Owns all associations, sessions and their indexes.
 	nextSessionID         uint64       // UPF-wide SEID allocator, also owned by stateMu.
@@ -502,6 +504,7 @@ func (connection *PfcpConnection) Run() {
 		default:
 		}
 		connection.serviceTransactions(time.Now())
+		connection.serviceLocalSessionReleases()
 		now := time.Now()
 		if !now.Before(nextDownlinkService) {
 			connection.serviceDownlinkNotifications(now)
@@ -564,6 +567,7 @@ func (connection *PfcpConnection) Close() {
 		connection.transport.mu.Unlock()
 		markerSender := connection.endMarkers
 		connection.stateMu.Unlock()
+		connection.closeLocalSessionReleases()
 		if markerSender != nil {
 			markerSender.close()
 		}
@@ -738,26 +742,37 @@ func (connection *PfcpConnection) deleteAssociation(addr string) {
 // PFCP deletion. The caller holds stateMu and retains ownership on failure.
 // TS 29.244 V20.1.0 clauses 6.2.8.3 and 6.3.4.
 func (connection *PfcpConnection) DeleteSession(session *Session) (err error) {
+	_, err = connection.deleteSessionWithUsage(session)
+	return err
+}
+
+type deletedSessionUsage struct {
+	reports []*ie.IE
+	ready   <-chan error
+}
+
+func (connection *PfcpConnection) deleteSessionWithUsage(session *Session) (_ *deletedSessionUsage, err error) {
 	draft := cloneSession(session)
 	start, finish := connection.prepareSessionMutation(draft, deleteSessionMutation)
 	defer func() { err = errors.Join(err, finish(false)) }()
 	pool := NewOperationPool()
 	pool.Before = start
-	var reports []*ie.IE
+	usage := &deletedSessionUsage{}
 	context := NewPDRCreationContext(draft, connection.ResourceManager)
-	if err = processDeletionRequestRules(connection, log.Logger, pool, context, draft, &reports); err != nil {
-		return err
+	if err = processDeletionRequestRules(connection, log.Logger, pool, context, draft, &usage.reports); err != nil {
+		return nil, err
 	}
 	if draft.buffers != nil {
 		connection.stagePacketBuffering(draft.buffers.owner.association, session, draft, deleteSessionMutation, false)
 	}
 	if err = pool.Commit(); err != nil {
-		return err
+		return nil, err
 	}
 	connection.ReleaseResources(session.LocalSEID)
 	err = finish(true)
+	usage.ready = connection.responseWait
 	connection.responseWait = nil
-	return err
+	return usage, err
 }
 
 func (connection *PfcpConnection) GetSessionCount() int {
@@ -874,25 +889,24 @@ func (connection *PfcpConnection) handleSDFNotification(notification ebpf.SdfFlo
 	}
 }
 
-func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) bool {
-	connection.stateMu.RLock()
+func (connection *PfcpConnection) ReleaseSessionByID(seid uint64) (SessionReleaseResult, error) {
+	connection.stateMu.Lock()
+	if connection.isClosed() {
+		connection.stateMu.Unlock()
+		return SessionReleaseResult{}, net.ErrClosed
+	}
 	assoc := connection.sessionAssociation(seid)
-	if assoc == nil {
-		connection.stateMu.RUnlock()
-		return false
+	if activeAssociation(assoc) == nil {
+		connection.stateMu.Unlock()
+		return SessionReleaseResult{}, ErrSessionNotFound
 	}
-	session := assoc.Sessions[seid]
-	ids := make([]uint16, 0, len(session.PDRs))
-	for id := range session.PDRs {
-		ids = append(ids, uint16(id))
-	}
-	association, traced := assoc.ID, session.IsSessionTraced()
-	connection.stateMu.RUnlock()
-	SendSessionReportSessionRelease(connection, seid, 0, association, traced, ids)
-	return true
+	result, err := connection.beginLocalSessionReleaseLocked(assoc, assoc.Sessions[seid])
+	connection.stateMu.Unlock()
+	connection.serviceLocalSessionReleases()
+	return result, err
 }
 
-func (connection *PfcpConnection) ReleaseSessionByUserID(imsi, msisdn string) bool {
+func (connection *PfcpConnection) ReleaseSessionByUserID(imsi, msisdn string) (SessionReleaseResult, error) {
 	connection.stateMu.RLock()
 	var seid uint64
 	for _, assoc := range connection.NodeAssociations {
@@ -907,7 +921,10 @@ func (connection *PfcpConnection) ReleaseSessionByUserID(imsi, msisdn string) bo
 		}
 	}
 	connection.stateMu.RUnlock()
-	return seid != 0 && connection.ReleaseSessionByID(seid)
+	if seid == 0 {
+		return SessionReleaseResult{}, ErrSessionNotFound
+	}
+	return connection.ReleaseSessionByID(seid)
 }
 
 func (connection *PfcpConnection) GetConnAddr() string {
@@ -1061,17 +1078,6 @@ func SendDownlinkNotificationReport(
 
 	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
 	log.Debug().Msgf("Sent DLDR Session Report Request to: %s", associationAddr)
-	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, seid); err != nil {
-		log.Info().Err(err).Msg("Failed to send Session Report Request")
-	}
-
-}
-
-func SendSessionReportSessionRelease(conn *PfcpConnection, seid uint64, sequenceID uint32, associationAddr string, traced bool, pdrList []uint16) {
-	additionalIEs := buildSessionReportReleaseIEs(conn.profile, pdrList)
-
-	sessionReport := message.NewSessionReportRequest(seid, sequenceID, additionalIEs...)
-	log.Debug().Msgf("Sent Session Report Request to: %s", associationAddr)
 	if err := conn.sendAssociationRequest(sessionReport, associationAddr, traced, seid); err != nil {
 		log.Info().Err(err).Msg("Failed to send Session Report Request")
 	}

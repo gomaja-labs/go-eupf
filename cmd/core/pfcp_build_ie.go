@@ -39,18 +39,6 @@ func buildSessionReportADCIEs(profile PfcpProfile, urrid, reportSeq uint32, sdfF
 	}
 }
 
-// buildSessionReportReleaseIEs builds the IEs for SendSessionReportSessionRelease
-// without sending. Exposed for testability.
-func buildSessionReportReleaseIEs(profile PfcpProfile, pdrList []uint16) []*ie.IE {
-	ies := []*ie.IE{
-		ie.NewReportType(0, 0, 0, 0),
-	}
-	if vendorIE := profile.SessionReportReleaseVendorIE(pdrList); vendorIE != nil {
-		ies = append(ies, vendorIE)
-	}
-	return ies
-}
-
 // buildDefaultSetupRequestIEs builds the IEs for a Default Association Setup
 // Request without sending. Exposed for testability.
 func buildDefaultSetupRequestIEs(profile PfcpProfile, nodeId string, recoveryTS time.Time, featuresOctets []uint8) []*ie.IE {

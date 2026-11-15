@@ -22,7 +22,9 @@ func (c *UpfConfig) PFCPMemoryPlan(limit, baseline int64) (softLimit int64, err 
 		budget = 128
 	}
 	baseline = max(baseline, 64*mib)
-	const originated = 3 * 16 * mib
+	// Each endpoint bounds reliable-request payloads and detached local-release
+	// usage contexts independently at 16 MiB. They can coexist until outcomes.
+	const originated = 3 * 32 * mib
 	const transient = 32 * mib
 	sessions := c.MaxSessions
 	if sessions == 0 {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
@@ -122,7 +123,12 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 			conn.reportCleanup = append(conn.reportCleanup, work)
 			continue
 		}
-		if err := conn.DeleteSession(session); err != nil {
+		if _, err := conn.beginLocalSessionReleaseLocked(assoc, session); err != nil {
+			if errors.Is(err, errTransactionCapacity) {
+				work.next = time.Now().Add(100 * time.Millisecond)
+				conn.reportCleanup = append(conn.reportCleanup, work)
+				continue
+			}
 			if work.failedAt.IsZero() {
 				work.failedAt = time.Now()
 			}
@@ -135,7 +141,7 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 			}
 			log.Error().Err(err).Uint64("session", session.LocalSEID).Msg("Retry local deletion after CP context-not-found")
 		} else {
-			conn.forgetSession(assoc, session.LocalSEID)
+			conn.localReleases[session.LocalSEID].retainFailedUsage(req, req.completedOutcome)
 		}
 	}
 }

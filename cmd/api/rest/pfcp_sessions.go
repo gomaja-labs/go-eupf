@@ -5,6 +5,7 @@
 package rest
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,7 +25,7 @@ import (
 //	@Param		imsi	query		string	false	"IMSI of the session to delete"
 //	@Param		msisdn	query		string	false	"MSISDN of the session to delete"
 //	@Param		id		query		string	false	"ID of the session to delete"
-//	@Success	200		{object}	map[string]string
+//	@Success	200		{object}	core.SessionReleaseResult
 //	@Failure	400		{object}	map[string]string
 //	@Failure	404		{object}	map[string]string
 //	@Router		/pfcp_sessions [delete]
@@ -36,10 +37,15 @@ func (h *ApiHandler) deletePfcpSessions(c *gin.Context) {
 		return
 	}
 
-	if id, err := strconv.ParseUint(c.Query("id"), 10, 32); err == nil {
+	if id, err := strconv.ParseUint(c.Query("id"), 10, 64); err == nil {
 		for _, con := range h.GetPFCPSrv() {
-			if con.ReleaseSessionByID(id) {
-				c.IndentedJSON(http.StatusOK, gin.H{"message": "OK"})
+			result, releaseErr := con.ReleaseSessionByID(id)
+			if releaseErr == nil {
+				c.IndentedJSON(http.StatusOK, result)
+				return
+			}
+			if !errors.Is(releaseErr, core.ErrSessionNotFound) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": releaseErr.Error()})
 				return
 			}
 		}
@@ -53,8 +59,13 @@ func (h *ApiHandler) deletePfcpSessions(c *gin.Context) {
 	msisdn := c.Query("msisdn")
 	if imsi != "" || msisdn != "" {
 		for _, con := range h.GetPFCPSrv() {
-			if con.ReleaseSessionByUserID(imsi, msisdn) {
-				c.IndentedJSON(http.StatusOK, gin.H{"message": "OK"})
+			result, err := con.ReleaseSessionByUserID(imsi, msisdn)
+			if err == nil {
+				c.IndentedJSON(http.StatusOK, result)
+				return
+			}
+			if !errors.Is(err, core.ErrSessionNotFound) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 				return
 			}
 		}

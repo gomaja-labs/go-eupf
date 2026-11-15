@@ -14,7 +14,7 @@ import (
 // TS 29.244 V20.1.0 table 7.5.4.1-1 and clause 6.3.5.3: failure
 // at a superseded CP F-SEID says nothing about the current session context.
 func TestFailedReportFollowsCurrentCPFSEID(t *testing.T) {
-	for _, origin := range []string{"release_id", "release_user", "release", "usage", "adc", "dldr", "queued", "threshold"} {
+	for _, origin := range []string{"usage", "adc", "dldr", "queued", "threshold"} {
 		for _, order := range []string{"change_first", "answer_first"} {
 			for _, failure := range []string{"context_not_found", "rejected", "timeout"} {
 				for _, changeMode := range []string{"seid", "address", "both"} {
@@ -32,16 +32,6 @@ func TestFailedReportFollowsCurrentCPFSEID(t *testing.T) {
 						assoc.Sessions[11] = s
 						conn.requestTimeout = time.Millisecond
 						switch origin {
-						case "release_id":
-							if !conn.ReleaseSessionByID(11) {
-								t.Fatal("missing session")
-							}
-						case "release_user":
-							if !conn.ReleaseSessionByUserID(s.IMSI, "") {
-								t.Fatal("missing subscriber")
-							}
-						case "release":
-							SendSessionReportSessionRelease(conn, 11, 0, assoc.ID, false, []uint16{1})
 						case "usage":
 							SendSessionReportUsage(conn, 11, 0, assoc.ID, 9, 0, 20, 0, time.Now(), false)
 						case "adc":
