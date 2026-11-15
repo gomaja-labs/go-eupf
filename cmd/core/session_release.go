@@ -23,6 +23,7 @@ type localSessionRelease struct {
 	association *NodeAssociation
 	session     *Session
 	entity      string
+	canceled    bool
 	usage       *deletedSessionUsage
 	ready       bool
 	failure     error
@@ -52,7 +53,11 @@ func (conn *PfcpConnection) beginLocalSessionReleaseLocked(assoc *NodeAssociatio
 		return SessionReleaseResult{}, err
 	}
 	metadata := &Session{LocalSEID: session.LocalSEID, RemoteSEID: session.RemoteSEID, CPFSEIDIPv4: cloneIP(session.CPFSEIDIPv4), CPFSEIDIPv6: cloneIP(session.CPFSEIDIPv6), Traced: session.Traced}
-	release := &localSessionRelease{association: assoc, session: metadata, entity: assoc.sessionEntities[session.LocalSEID], usage: usage, ready: usage.ready == nil, charge: charge, generations: make(map[uint32]uint64, len(session.URRs))}
+	entity := assoc.sessionEntities[session.LocalSEID]
+	if entity == "" {
+		entity = entityAddresses(session.CPFSEIDIPv4, session.CPFSEIDIPv6, assoc.Addr)
+	}
+	release := &localSessionRelease{association: assoc, session: metadata, entity: entity, usage: usage, ready: usage.ready == nil, charge: charge, generations: make(map[uint32]uint64, len(session.URRs))}
 	for id, urr := range session.URRs {
 		release.generations[id] = urr.generation
 	}
@@ -92,6 +97,7 @@ func (conn *PfcpConnection) beginLocalSessionReleaseLocked(assoc *NodeAssociatio
 	clear(conn.reportCleanup[len(cleanup):])
 	conn.reportCleanup = cleanup
 	conn.forgetSession(assoc, session.LocalSEID)
+	conn.indexLocalRelease(release, 1)
 	delete(conn.downlinkSessions, session.LocalSEID)
 	return SessionReleaseResult{SEID: session.LocalSEID, EPFAR: associationEPFAR(assoc)}, nil
 }
@@ -137,6 +143,7 @@ func (conn *PfcpConnection) finishLocalReleaseLocked(release *localSessionReleas
 	if conn.localReleases[id] != release {
 		return
 	}
+	conn.indexLocalRelease(release, -1)
 	delete(conn.localReleases, id)
 	conn.localReleaseBytes -= release.charge
 }
@@ -284,7 +291,7 @@ func (conn *PfcpConnection) serviceLocalSessionReleases() {
 				continue
 			}
 		}
-		if conn.associationByID(release.association.ID) != release.association || release.association.cleaning || conn.isClosed() {
+		if release.canceled || conn.associationByID(release.association.ID) != release.association || release.association.cleaning || conn.isClosed() {
 			for _, report := range release.reports[release.next:] {
 				fields, _ := report.UsageReportWithinSessionReportRequest()
 				volume, _ := fields.VolumeMeasurement.VolumeMeasurement()
@@ -354,4 +361,13 @@ func (conn *PfcpConnection) failLocalReleaseLocked(release *localSessionRelease,
 	case conn.failures <- conn.terminalError:
 	default:
 	}
+}
+
+// A detached session is no longer a live context, but its CP entity still owns
+// pending report delivery. Keep that address attributable until completion so
+// restart observations invalidate even reports waiting for final counter grace.
+// TS 29.244 V20.1.0 clause 5.8.1; TS 23.007 V19.2.0 clause 19A.
+func (conn *PfcpConnection) indexLocalRelease(release *localSessionRelease, delta int) {
+	conn.addressReference(release.association, release.session.CPFSEIDIPv4.String(), delta)
+	conn.addressReference(release.association, release.session.CPFSEIDIPv6.String(), delta)
 }

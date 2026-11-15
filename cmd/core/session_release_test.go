@@ -300,3 +300,105 @@ func TestLocalReleaseWaitsForEarlierUsageOutcome(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalReleaseCPContextCrossingsDuringFinalGrace(t *testing.T) {
+	for _, crossing := range []string{"entity-restart", "setup-replacement", "association-release"} {
+		t.Run(crossing, func(t *testing.T) {
+			conn, assoc, _, peer := downlinkFixture(t, true)
+			plane := &delayedUsagePlane{}
+			conn.mapOperations = plane
+			session := NewSession(11, 77, "", "", false)
+			session.CPFSEIDIPv4 = peer.LocalAddr().(*net.UDPAddr).IP
+			session.NewUrr(9, 1, ebpf.UrrInfo{})
+			assoc.Sessions[11] = session
+			if crossing != "entity-restart" {
+				assoc.sessionEntities[11] = session.CPFSEIDIPv4.String()
+			}
+			conn.indexSession(assoc, session, 1)
+			stamp := time.Unix(1700000000, 0)
+			assoc.recoveries[session.CPFSEIDIPv4.String()] = stamp
+			before := counterValue(t, PfcpUndeliveredUsage)
+			if _, err := conn.ReleaseSessionByID(11); err != nil {
+				t.Fatal(err)
+			}
+			switch crossing {
+			case "entity-restart":
+				// The former F-SEID address must still resolve to the delivery context.
+				conn.Handle(protocolWire(t, message.NewHeartbeatRequest(5, ie.NewRecoveryTimeStamp(stamp.Add(time.Second)))), peer.LocalAddr().(*net.UDPAddr))
+				_ = identityRead(t, peer)
+			case "setup-replacement":
+				conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(5, ie.NewNodeIDFQDN(assoc.ID), ie.NewRecoveryTimeStamp(stamp))), peer.LocalAddr().(*net.UDPAddr))
+				_ = identityRead(t, peer)
+			case "association-release":
+				conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(5, ie.NewNodeIDFQDN(assoc.ID))), peer.LocalAddr().(*net.UDPAddr))
+				_ = identityRead(t, peer)
+			}
+			plane.transaction.finish(t)
+			conn.serviceLocalSessionReleases()
+			if pipelineRead(t, peer, 10*time.Millisecond) != nil || len(conn.localReleases) != 0 || counterValue(t, PfcpUndeliveredUsage)-before != 60 {
+				t.Fatal("old CP context received final report or unsent usage was not accounted")
+			}
+		})
+	}
+}
+
+func TestLocalReleaseCPContextCrossingsAfterReportTransmission(t *testing.T) {
+	for _, crossing := range []string{"entity-restart", "setup-replacement", "association-release"} {
+		t.Run(crossing, func(t *testing.T) {
+			conn, assoc, _, peer := downlinkFixture(t, true)
+			conn.mapOperations = &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 12, DownlinkVolume: 8}}
+			session := NewSession(11, 77, "", "", false)
+			session.CPFSEIDIPv4 = peer.LocalAddr().(*net.UDPAddr).IP
+			session.NewUrr(9, 1, ebpf.UrrInfo{})
+			assoc.Sessions[11] = session
+			assoc.sessionEntities[11] = session.CPFSEIDIPv4.String()
+			conn.indexSession(assoc, session, 1)
+			stamp := time.Unix(1700000000, 0)
+			assoc.recoveries[session.CPFSEIDIPv4.String()] = stamp
+			before := counterValue(t, PfcpUndeliveredUsage)
+			if _, err := conn.ReleaseSessionByID(11); err != nil {
+				t.Fatal(err)
+			}
+			report := identityRead(t, peer).(*message.SessionReportRequest)
+			switch crossing {
+			case "entity-restart":
+				conn.Handle(protocolWire(t, message.NewHeartbeatRequest(5, ie.NewRecoveryTimeStamp(stamp.Add(time.Second)))), peer.LocalAddr().(*net.UDPAddr))
+			case "setup-replacement":
+				conn.Handle(protocolWire(t, message.NewAssociationSetupRequest(5, ie.NewNodeIDFQDN(assoc.ID), ie.NewRecoveryTimeStamp(stamp))), peer.LocalAddr().(*net.UDPAddr))
+			case "association-release":
+				conn.Handle(protocolWire(t, message.NewAssociationReleaseRequest(5, ie.NewNodeIDFQDN(assoc.ID))), peer.LocalAddr().(*net.UDPAddr))
+			}
+			_ = identityRead(t, peer)
+			for range 2 {
+				conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))), peer.LocalAddr().(*net.UDPAddr))
+			}
+			conn.serviceLocalSessionReleases()
+			if len(conn.localReleases) != 0 || len(conn.transport.pending) != 0 || counterValue(t, PfcpUndeliveredUsage)-before != 20 {
+				t.Fatal("terminal context crossing lost or counted usage twice")
+			}
+		})
+	}
+}
+
+func TestLocalReleaseCrossingRequestsFromAdditionalCPAddress(t *testing.T) {
+	conn, assoc, _, peer := downlinkFixture(t, true)
+	session := NewSession(11, 77, "", "", false)
+	session.CPFSEIDIPv4 = peer.LocalAddr().(*net.UDPAddr).IP
+	assoc.Sessions[11] = session
+	if _, err := conn.ReleaseSessionByID(11); err != nil {
+		t.Fatal(err)
+	}
+	report := identityRead(t, peer).(*message.SessionReportRequest)
+	additional := identityPeer(t, "127.0.0.94", 0)
+	for _, request := range []message.Message{message.NewSessionModificationRequest(11, 5), message.NewSessionDeletionRequest(11, 6)} {
+		conn.Handle(protocolWire(t, request), additional.LocalAddr().(*net.UDPAddr))
+		response := identityRead(t, additional)
+		if pipelineCause(t, response) != ie.CauseSessionContextNotFound || response.SEID() != 0 {
+			t.Fatal("crossing request did not identify deleted context")
+		}
+	}
+	conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))), peer.LocalAddr().(*net.UDPAddr))
+	if conn.addressIndex[session.CPFSEIDIPv4.String()][assoc] != 0 {
+		t.Fatal("completed delivery retained entity address reference")
+	}
+}

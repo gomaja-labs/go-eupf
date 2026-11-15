@@ -242,6 +242,13 @@ func (conn *PfcpConnection) forgetPeerExceptSetup(addr string, replacement *Node
 	conn.forgetPeerTransactions(addr, true, "", replacement)
 }
 func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, entity string, replacement *NodeAssociation) {
+	// Cancellation also covers final reports not admitted yet because their
+	// deletion transaction is still collecting the grace-period snapshot.
+	for _, release := range conn.localReleases {
+		if release.association.ID == id && (entity == "" || entityContains(release.entity, entity)) {
+			release.canceled = true
+		}
+	}
 	state := &conn.transport
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -494,6 +501,10 @@ func (conn *PfcpConnection) associationForMessage(msg message.Message, peer stri
 			if assoc := conn.sessionAssociation(msg.SEID()); assoc != nil {
 				return activeAssociation(assoc)
 			}
+			if release := conn.localReleases[msg.SEID()]; release != nil && conn.associationByID(release.association.ID) == release.association {
+				return activeAssociation(release.association)
+			}
+
 			// An invalidated CP context remains attributable until reclamation.
 			// The active registry has no such session, so its handler answers
 			// Cause 65, including requests from a former CP entity address.
