@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -24,6 +25,10 @@ func packetBufferFixture(t *testing.T) (*ebpf.BpfObjects, *PacketBuffering, *Pfc
 	return packetBufferFixtureOptions(t, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 }
 func packetBufferFixtureOptions(t *testing.T, options BufferingOptions, configure ...func(*ebpf.BpfObjects)) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
+	t.Helper()
+	return packetBufferFixtureStartOptions(t, true, options, configure...)
+}
+func packetBufferFixtureStartOptions(t *testing.T, start bool, options BufferingOptions, configure ...func(*ebpf.BpfObjects)) (*ebpf.BpfObjects, *PacketBuffering, *PfcpConnection, *NodeAssociation, *Session, *net.UDPConn) {
 	t.Helper()
 	if err := ebpf.IncreaseResourceLimits(); err != nil {
 		t.Fatal(err)
@@ -53,6 +58,9 @@ func packetBufferFixtureOptions(t *testing.T, options BufferingOptions, configur
 	})
 	if err := conn.SetPacketBuffering(buffering); err != nil {
 		t.Fatal(err)
+	}
+	if start {
+		<-buffering.Start(context.Background())
 	}
 	session.FARs = map[uint32]SFarInfo{1: {FarInfo: ebpf.FarInfo{Action: 12}}}
 	session.downlink = nil

@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,17 +25,26 @@ func newBufferPacketSender(plane *ebpf.BpfObjects) (packetBufferSender, error) {
 	return &bufferPacketSender{plane: plane, fd: -1}, nil
 }
 
-// Prepare loads output only when a BUFF lifetime is first admitted. Failures
-// occur before rule publication, so no retained packet depends on a failed load.
+// Prepare only observes the completed background result. No PFCP caller loads
+// a program, creates a link, or retries a failed initialization here.
 func (sender *bufferPacketSender) Prepare() error {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.closed {
 		return errors.New("buffer output is closed")
 	}
-	if sender.fd >= 0 {
-		return nil
+	if sender.fd < 0 {
+		return errors.New("buffer output is not initialized")
 	}
+	return nil
+}
+
+func (sender *bufferPacketSender) initialize(ctx context.Context) error {
+	program, err := sender.plane.BufferKernelIngressProgram()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = program.Close() }()
 	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("open buffered packet output: %w", err)
@@ -42,17 +52,19 @@ func (sender *bufferPacketSender) Prepare() error {
 	if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1); err != nil {
 		return errors.Join(err, unix.Close(fd))
 	}
-	program, err := sender.plane.BufferKernelIngressProgram()
+	kernel, err := newBufferKernelLink(program.FD())
 	if err != nil {
 		return errors.Join(err, unix.Close(fd))
 	}
-	kernel, err := newBufferKernelLink(program.FD())
-	if err != nil {
-		return errors.Join(err, kernel.Close(), unix.Close(fd))
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if sender.closed || ctx.Err() != nil {
+		return errors.Join(errors.New("buffer output initialization canceled"), kernel.Close(), unix.Close(fd))
 	}
 	sender.fd, sender.kernel = fd, kernel
 	return nil
 }
+
 func (sender *bufferPacketSender) Send(packet ebpf.RenderedBuffer) error {
 	if len(packet.Frame) < 14 || packet.Action < 2 || packet.Action > 4 {
 		return errors.New("buffered packet has no resolved route")

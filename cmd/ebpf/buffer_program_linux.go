@@ -86,19 +86,18 @@ func (b *BpfObjects) loadBufferRendererLocked() (*cilium.Collection, error) {
 	return collection, nil
 }
 
-// BufferKernelIngressProgram loads buffered forwarding on first BUFF admission
-// and returns the TC program owned by these BpfObjects.
+// BufferKernelIngressProgram waits for background initialization and returns
+// an owned duplicate. Shutdown cannot close this descriptor during TC setup.
 func (b *BpfObjects) BufferKernelIngressProgram() (*cilium.Program, error) {
+	if err := b.waitBufferPreparation(); err != nil {
+		return nil, err
+	}
 	b.renderMutex.Lock()
 	defer b.renderMutex.Unlock()
-	if err := b.loadBufferAdmissionLocked(); err != nil {
-		return nil, err
+	if b.renderClosed || b.renderCollection == nil {
+		return nil, errors.New("buffer output is closed")
 	}
-	collection, err := b.loadBufferRendererLocked()
-	if err != nil {
-		return nil, err
-	}
-	return collection.Programs["upf_buffer_kernel_func"], nil
+	return b.renderCollection.Programs["upf_buffer_kernel_func"].Clone()
 }
 
 func (b *BpfObjects) discardBufferRender(command BufferCommand) error {
@@ -129,6 +128,10 @@ func (b *BpfObjects) loadBufferAdmissionLocked() error {
 	if err != nil {
 		return fmt.Errorf("load buffer admission: %w", err)
 	}
+	return b.publishBufferAdmissionLocked(collection)
+}
+
+func (b *BpfObjects) publishBufferAdmissionLocked(collection *cilium.Collection) error {
 	if err := b.JmpTable.Put(uint32(4), collection.Programs["upf_buffer_downlink_func"]); err != nil {
 		collection.Close()
 		return err
@@ -179,7 +182,19 @@ func (b *BpfObjects) loadBufferControllerLocked() error {
 
 func (b *BpfObjects) bufferControlProgram() (*cilium.Program, error) {
 	b.renderMutex.Lock()
+	started := b.prepareDone != nil
+	b.renderMutex.Unlock()
+	if started {
+		_ = b.waitBufferPreparation()
+	}
+	b.renderMutex.Lock()
 	defer b.renderMutex.Unlock()
+	if b.renderClosed {
+		return nil, errors.New("buffer control is closed")
+	}
+	if b.controllerCollection == nil && started {
+		return nil, b.prepareError
+	}
 	if err := b.loadBufferControllerLocked(); err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"net"
 	"runtime"
@@ -65,6 +66,7 @@ func TestForwardingEstablishmentsFromCommonSMFShapes(t *testing.T) {
 					}
 				})
 				conn.mapOperations = plane
+				<-buffering.Start(context.Background())
 				if err := conn.SetPacketBuffering(buffering); err != nil {
 					t.Fatal(err)
 				}

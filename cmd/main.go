@@ -332,7 +332,11 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	defer func() { pfcpConn.Close(); runErr = errors.Join(runErr, pfcpConn.FatalError()) }()
+	defer func() {
+		packetBuffers.CancelPreparation()
+		pfcpConn.Close()
+		runErr = errors.Join(runErr, pfcpConn.FatalError())
+	}()
 
 	// Create Sxa connection (optional — only when sxa_address is configured).
 	// Without an Sxa peer the S1U/S5S8 interfaces are unused, so we skip the
@@ -352,7 +356,11 @@ func run(ctx context.Context) (runErr error) {
 		if err != nil {
 			return err
 		}
-		defer func() { sxaConn.Close(); runErr = errors.Join(runErr, sxaConn.FatalError()) }()
+		defer func() {
+			packetBuffers.CancelPreparation()
+			sxaConn.Close()
+			runErr = errors.Join(runErr, sxaConn.FatalError())
+		}()
 	} else {
 		log.Info().Msg("Sxa connection skipped (sxa_address not configured)")
 	}
@@ -373,7 +381,11 @@ func run(ctx context.Context) (runErr error) {
 		if err != nil {
 			return err
 		}
-		defer func() { sxbConn.Close(); runErr = errors.Join(runErr, sxbConn.FatalError()) }()
+		defer func() {
+			packetBuffers.CancelPreparation()
+			sxbConn.Close()
+			runErr = errors.Join(runErr, sxbConn.FatalError())
+		}()
 	} else {
 		log.Info().Msg("Sxb connection skipped (sxb_address not configured)")
 	}
@@ -433,6 +445,7 @@ func run(ctx context.Context) (runErr error) {
 
 	serverErrors := make(chan error, 2)
 	go func() { serverErrors <- apiSrv.Run() }()
+	go startBufferingAfterAPI(ctx, config.Conf.ApiAddress, packetBuffers)
 	go func() { serverErrors <- metricsSrv.Run() }()
 	defer func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -446,6 +459,13 @@ func run(ctx context.Context) (runErr error) {
 	runDone := make(chan struct{})
 	defer close(runDone)
 	defer beginShutdown(pfcpConn, sxaConn, sxbConn)
+	go func() {
+		select {
+		case <-ctx.Done():
+			packetBuffers.CancelPreparation()
+		case <-runDone:
+		}
+	}()
 	go watchShutdown(ctx, runDone, pfcpConn, sxaConn, sxbConn)
 
 	assocReleaseFunc := func() error {
@@ -545,4 +565,35 @@ func growingMapMemory(infos ...*kernel.MapInfo) (int64, error) {
 		total += int64(info.MaxEntries) * perEntry
 	}
 	return total, nil
+}
+
+// Start only once the API listener accepts connections. This also works with
+// wildcard and TLS listeners; no HTTP request or authentication is required.
+func startBufferingAfterAPI(ctx context.Context, address string, buffering *core.PacketBuffering) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip != nil && ip.To4() == nil {
+			host = "::1"
+		}
+	}
+	dialer := net.Dialer{Timeout: 100 * time.Millisecond}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+		if err == nil {
+			_ = connection.Close()
+			buffering.Start(ctx)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }

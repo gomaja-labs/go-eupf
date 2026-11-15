@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -79,27 +80,31 @@ type bufferOwner struct {
 // shared by N4/Sxa/Sxb. Session queues and their records are owned by stateMu;
 // mu protects only shared registry, admission reservations and free slot IDs.
 type PacketBuffering struct {
-	plane      *ebpf.BpfObjects
-	sender     packetBufferSender
-	complete   func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
-	reader     *ebpf.BufferReader
-	options    BufferingOptions
-	mu         sync.Mutex
-	owners     map[uint64]*bufferOwner
-	work       map[uint64]*bufferOwner
-	reserved   uint32
-	storage    []byte
-	entries    []bufferedPacket
-	free       []uint32
-	closed     bool
-	stop       chan struct{}
-	progress   chan struct{}
-	failures   chan error
-	wg         sync.WaitGroup
-	closeOnce  sync.Once
-	closeError error
-	baseTime   time.Time
-	baseNS     uint64
+	prepareOnce              sync.Once
+	prepareCancelOnce        sync.Once
+	prepareDone, prepareStop chan struct{}
+	prepareError             error
+	plane                    *ebpf.BpfObjects
+	sender                   packetBufferSender
+	complete                 func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
+	reader                   *ebpf.BufferReader
+	options                  BufferingOptions
+	mu                       sync.Mutex
+	owners                   map[uint64]*bufferOwner
+	work                     map[uint64]*bufferOwner
+	reserved                 uint32
+	storage                  []byte
+	entries                  []bufferedPacket
+	free                     []uint32
+	closed                   bool
+	stop                     chan struct{}
+	progress                 chan struct{}
+	failures                 chan error
+	wg                       sync.WaitGroup
+	closeOnce                sync.Once
+	closeError               error
+	baseTime                 time.Time
+	baseNS                   uint64
 }
 
 // NewPacketBuffering preallocates payloads and starts the sole ring consumer.
@@ -127,7 +132,7 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 	if err != nil {
 		return nil, errors.Join(err, sender.Close())
 	}
-	buffering := &PacketBuffering{plane: plane, sender: sender, complete: plane.BufferControl, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), work: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
+	buffering := &PacketBuffering{prepareDone: make(chan struct{}), prepareStop: make(chan struct{}), plane: plane, sender: sender, complete: plane.BufferControl, reader: reader, options: options, owners: make(map[uint64]*bufferOwner), work: make(map[uint64]*bufferOwner), storage: make([]byte, int(bytes)), entries: make([]bufferedPacket, options.Packets), free: make([]uint32, options.Packets), stop: make(chan struct{}), progress: make(chan struct{}, 1), failures: make(chan error, 1), baseTime: baseTime, baseNS: baseNS}
 	for i := range buffering.free {
 		buffering.free[i] = uint32(len(buffering.free) - 1 - i)
 	}
@@ -135,6 +140,48 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 	go buffering.readPackets()
 	go buffering.servicePackets()
 	return buffering, nil
+}
+
+// Start initializes output after the API listener is ready, without extending
+// readiness. Close cancels admission waits and never joins this verifier.
+func (buffering *PacketBuffering) Start(ctx context.Context) <-chan struct{} {
+	buffering.prepareOnce.Do(func() {
+		buffering.plane.StartBufferPrograms(ctx)
+		go func() {
+			if sender, ok := buffering.sender.(interface{ initialize(context.Context) error }); ok {
+				buffering.prepareError = sender.initialize(ctx)
+			} else {
+				buffering.prepareError = buffering.sender.Prepare()
+			}
+			if buffering.prepareError != nil {
+				log.Error().Err(buffering.prepareError).Msg("Buffered forwarding initialization failed for this process")
+			}
+			close(buffering.prepareDone)
+		}()
+	})
+	return buffering.prepareDone
+}
+
+// CancelPreparation interrupts admission waits immediately during shutdown.
+// Verification owns its inputs and can finish later without being joined.
+func (buffering *PacketBuffering) CancelPreparation() {
+	buffering.prepareCancelOnce.Do(func() {
+		if buffering.prepareStop != nil {
+			close(buffering.prepareStop)
+		}
+	})
+}
+
+func (buffering *PacketBuffering) awaitPreparation() error {
+	if buffering.prepareDone == nil {
+		return nil
+	}
+	select {
+	case <-buffering.prepareDone:
+		return nil
+	case <-buffering.prepareStop:
+		return errors.New("packet buffering is closing")
+	}
 }
 
 // Failures exposes a terminal reader/accounting error to process supervision.
@@ -182,6 +229,9 @@ func (conn *PfcpConnection) reservePacketBuffers(association *NodeAssociation, s
 			}
 			break
 		}
+	}
+	if err := buffering.awaitPreparation(); err != nil {
+		return nil, err
 	}
 	buffering.mu.Lock()
 	if buffering.closed {
@@ -541,6 +591,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 // before returning payload reservations. Reader closure unblocks its goroutine.
 func (buffering *PacketBuffering) Close() error {
 	buffering.closeOnce.Do(func() {
+		buffering.CancelPreparation()
 		buffering.mu.Lock()
 		buffering.closed = true
 		buffering.mu.Unlock()
@@ -767,7 +818,20 @@ func (buffering *PacketBuffering) schedule(owner *bufferOwner) {
 // failure: no such lifetime has been published and no packet can be retained.
 // TS 29.244 V20.1.0 clause 7.5.3, table 8.2.1-1: System failure (77).
 func (buffering *PacketBuffering) prepareOutput(seid uint64) error {
-	if err := buffering.sender.Prepare(); err != nil {
+	started := time.Now()
+	select {
+	case <-buffering.prepareDone:
+	default:
+		if err := buffering.awaitPreparation(); err != nil {
+			return &requestIEError{ie.CauseSystemFailure, ie.ApplyAction, err}
+		}
+		log.Info().Uint64("seid", seid).Dur("duration", time.Since(started)).Msg("BUFF admission waited for background initialization")
+	}
+	err := buffering.prepareError
+	if err == nil {
+		err = buffering.sender.Prepare()
+	}
+	if err != nil {
 		log.Error().Err(err).Uint64("seid", seid).Msg("Cannot initialize buffered forwarding; rejecting BUFF before publication")
 		return &requestIEError{ie.CauseSystemFailure, ie.ApplyAction, fmt.Errorf("initialize buffered forwarding: %w", err)}
 	}

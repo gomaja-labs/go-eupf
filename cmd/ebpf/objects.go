@@ -32,6 +32,8 @@ import (
 
 type BpfObjects struct {
 	renderMutex                      sync.Mutex
+	prepareDone, prepareStop         chan struct{}
+	prepareError                     error
 	renderCollection                 *ebpf.Collection
 	admissionCollection              *ebpf.Collection
 	controllerCollection             *ebpf.Collection
@@ -230,6 +232,10 @@ func (bpfObjects *BpfObjects) Close() error {
 	}
 	bpfObjects.renderMutex.Lock()
 	bpfObjects.renderClosed = true
+	if bpfObjects.prepareStop != nil {
+		close(bpfObjects.prepareStop)
+		bpfObjects.prepareStop = nil
+	}
 	for _, program := range []*ebpf.Program{bpfObjects.initialEntrypoint, bpfObjects.initialRouter} {
 		if program != nil {
 			err = errors.Join(err, program.Close())

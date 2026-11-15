@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"net"
 	"testing"
@@ -175,7 +176,12 @@ func TestBufferContinuationsShareLiveConfiguration(t *testing.T) {
 	if err := b.UpdateFar(3, far); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.BufferKernelIngressProgram(); err != nil {
+	<-b.StartBufferPrograms(context.Background())
+	program, err := b.BufferKernelIngressProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := program.Close(); err != nil {
 		t.Fatal(err)
 	}
 	var cfg IpEntrypointDataplaneConfig

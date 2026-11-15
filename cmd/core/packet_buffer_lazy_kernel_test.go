@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"testing"
@@ -15,8 +16,8 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 
-func TestPacketBufferingDefersOutputUntilBUFF(t *testing.T) {
-	plane, buffering, conn, assoc, session, _ := packetBufferFixture(t)
+func TestPacketBufferingPreparesOutputBeforeBUFF(t *testing.T) {
+	plane, buffering, conn, assoc, session, _ := packetBufferFixtureStartOptions(t, false, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 	if plane.UpfBufferControlFunc != nil || plane.UpfBufferAdmissionFunc != nil {
 		t.Fatal("readiness loaded buffering control/admission before any rule needed it")
 	}
@@ -24,6 +25,7 @@ func TestPacketBufferingDefersOutputUntilBUFF(t *testing.T) {
 	if sender.fd >= 0 || sender.kernel != nil {
 		t.Fatal("readiness created buffered output before any BUFF admission")
 	}
+	<-buffering.Start(context.Background())
 	conn.stateMu.Lock()
 	_, err := conn.reservePacketBuffers(assoc, session)
 	conn.stateMu.Unlock()
@@ -61,6 +63,7 @@ func TestPacketBufferInitializationFailureRejectsBUFFBeforePublication(t *testin
 			t.Error(err)
 		}
 	})
+	<-buffering.Start(context.Background())
 	conn, assoc, session, _ := downlinkFixture(t, true)
 	conn.mapOperations = plane
 	t.Cleanup(func() {
@@ -110,7 +113,7 @@ func TestPacketBufferInitializationFailureRejectsBUFFBeforePublication(t *testin
 }
 
 func TestPacketBufferInitializationRestoresLinksBeforeRejectingBUFF(t *testing.T) {
-	plane, buffering, conn, assoc, session, _ := packetBufferFixture(t)
+	plane, buffering, conn, assoc, session, _ := packetBufferFixtureStartOptions(t, false, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 	if out, err := exec.Command("ip", "link", "add", "buffer-init0", "type", "dummy").CombinedOutput(); err != nil {
 		t.Fatalf("create second interface: %v %s", err, out)
 	}
@@ -138,6 +141,7 @@ func TestPacketBufferInitializationRestoresLinksBeforeRejectingBUFF(t *testing.T
 	if err := links[1].Close(); err != nil {
 		t.Fatal(err)
 	}
+	<-buffering.Start(context.Background())
 	conn.stateMu.Lock()
 	_, err = conn.reservePacketBuffers(assoc, session)
 	conn.stateMu.Unlock()
@@ -156,16 +160,12 @@ func TestPacketBufferInitializationRestoresLinksBeforeRejectingBUFF(t *testing.T
 	if err := plane.JmpTable.Lookup(uint32(0), &main); err != nil || main != uint32(before.Program) {
 		t.Fatalf("partial installation did not restore local recursion: %d %v", main, err)
 	}
-	// Removing the failed interface permits a later request to prepare normally.
+	// Failure is final, even if the interface that caused it is removed.
 	links = links[:1]
 	conn.stateMu.Lock()
 	_, err = conn.reservePacketBuffers(assoc, session)
 	conn.stateMu.Unlock()
-	if err != nil {
-		t.Fatalf("retry after failed installation: %v", err)
-	}
-	after, err = links[0].Info()
-	if err != nil || after.Program == before.Program {
-		t.Fatalf("first BUFF did not install its attached program: %+v %v", after, err)
+	if err == nil {
+		t.Fatal("failed background initialization was retried")
 	}
 }

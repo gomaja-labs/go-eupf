@@ -3,6 +3,7 @@
 package ebpf
 
 import (
+	"context"
 	"errors"
 
 	cilium "github.com/cilium/ebpf"
@@ -20,4 +21,11 @@ func (b *BpfObjects) prepareBufferAdmission() error {
 
 func (b *BpfObjects) bufferControlProgram() (*cilium.Program, error) {
 	return nil, errors.New("buffer control requires Linux")
+}
+
+// StartBufferPrograms completes immediately on unsupported operating systems.
+func (b *BpfObjects) StartBufferPrograms(_ context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
 }
