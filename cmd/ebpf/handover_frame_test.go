@@ -4,10 +4,11 @@ package ebpf
 
 import (
 	"encoding/binary"
-	"github.com/gopacket/gopacket"
-	"github.com/gopacket/gopacket/layers"
 	"net"
 	"testing"
+
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 )
 
 // decodeHandoverFrame decodes the returned frame and checks every outer length and

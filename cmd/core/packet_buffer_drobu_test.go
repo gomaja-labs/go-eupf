@@ -2,9 +2,10 @@ package core
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
-	"testing"
 )
 
 // TS 29.244 V20.1.0 table 7.5.4.1-1 and clause 5.2.4.3.

@@ -2,12 +2,13 @@ package core
 
 import (
 	"encoding/binary"
-	"github.com/gomaja-labs/go-eupf/cmd/core/service"
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // TS 29.244 V20.1.0 clause 5.17.3 (EPS to 5GS): one PDR and one QER per

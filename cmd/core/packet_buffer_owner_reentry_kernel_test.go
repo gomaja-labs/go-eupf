@@ -3,10 +3,11 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 
 // BUFF requested again right after the drain guard was detached, before the

@@ -1,12 +1,13 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/core/service"
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // One CP PFCP entity with a dual-stack CP F-SEID (TS 29.244 V20.1.0 clause
