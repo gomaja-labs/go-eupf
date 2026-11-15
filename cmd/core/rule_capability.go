@@ -377,8 +377,8 @@ func validateURRSubset(method, triggers, volume *ie.IE, create bool) error {
 func validateSessionCapability(request interface{}) error {
 	switch r := request.(type) {
 	case *message.SessionEstablishmentRequest:
- // TS 29.244 V20.1.0 clauses 5.11.2 and 8.2.83: this is the
- // session timer. URR/per-PDR timers remain rejected above.
+		// TS 29.244 V20.1.0 clauses 5.11.2 and 8.2.83: this is the
+		// session timer. URR/per-PDR timers remain rejected above.
 		if err := rejectUnsupportedFields(r, "NodeID", "CPFSEID", "CreatePDR", "CreateFAR", "CreateQER", "CreateURR", "CreateBAR", "PDNType", "FQCSID", "UserID", "TraceInformation", "APNDNN", "SNSSAI", "HPLMNSNSSAI", "RATType", "RecoveryTimeStamp", "PFCPSEReqFlags", "UserPlaneInactivityTimer"); err != nil {
 			return err
 		}

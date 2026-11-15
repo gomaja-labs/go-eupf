@@ -28,7 +28,7 @@ def evidence():
     with (directory / "tcpdump.log").open("w") as output:
         capture = subprocess.Popen(
             ["tcpdump", "-U", "--immediate-mode", "-i", "lo", "-w", str(directory / "synthetic.pcap"),
-             "udp port 8805 or udp port 2152 or udp port 4321"], stdout=output, stderr=output,
+             "udp port 8805 or udp port 2152 or udp port 4321 or tcp port 18080"], stdout=output, stderr=output,
         )
         try:
             deadline = time.monotonic() + 5

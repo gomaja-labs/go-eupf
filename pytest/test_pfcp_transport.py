@@ -139,42 +139,34 @@ def test_originated_report_retries_and_matches_response(server):
 
 
 @pytest.mark.parametrize("failure", ["context_not_found", "rejected", "timeout"])
-def test_failed_report_follows_changed_cp_fseid(server, failure):
-    # TS 29.244 V20.1.0 table 7.5.4.1-1, clauses 6.3.5.3 and 6.4.
+def test_released_session_rejects_cp_fseid_replacement(server, failure):
+    # TS 29.244 V20.1.0 clauses 5.18.2, 6.3.5.3 and 6.4: a local
+    # release retains delivery metadata, not a modifiable live session.
     remote = Peer(server(("--pfcp-request-timeout", "1", "--pfcp-request-retries", "0")))
     old_entity = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     new_entity = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     old_entity.bind(("127.0.0.6", 8805))
     new_entity.bind(("127.0.0.7", 8805))
     old_entity.settimeout(3)
-    new_entity.settimeout(3)
+    new_entity.settimeout(1.3)
     remote.entity_address = "127.0.0.6"
     try:
         remote.associate()
         seid = remote.session()
-        request = urllib.request.Request(
-            f"http://127.0.0.1:18080/api/v1/pfcp_sessions?id={seid}", method="DELETE",
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=2) as response:
-            assert response.status == 200
+        assert management_request(f"pfcp_sessions?id={seid}", "DELETE") == 200
         first = pfcp.PFCP(old_entity.recvfrom(65535)[0])
         assert first.message_type == 56
-        new_cp_seid = first.seid + 100
         changed = remote.request(pfcp.PFCPSessionModificationRequest(IE_list=[
-            pfcp.IE_FSEID(v4=1, seid=new_cp_seid, ipv4="127.0.0.7")]), seid)
-        assert changed[pfcp.IE_Cause].cause == 1
+            pfcp.IE_FSEID(v4=1, seid=first.seid + 100, ipv4="127.0.0.7")]), seid)
+        assert changed[pfcp.IE_Cause].cause == 65
         if failure != "timeout":
             cause = 65 if failure == "context_not_found" else 77
             old_entity.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=first.seq) /
                 pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=cause)])), DESTINATION)
-        second = pfcp.PFCP(new_entity.recvfrom(65535)[0])
-        assert second.message_type == 56 and second.seid == new_cp_seid
-        assert second.seq != first.seq
-        assert bytes(second.payload) == bytes(first.payload)
-        new_entity.sendto(bytes(pfcp.PFCP(version=1, S=1, seid=seid, seq=second.seq) /
-            pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=1)])), DESTINATION)
-        assert len(get_json("/api/v1/pfcp_sessions")) == 1
-        assert remote.request(pfcp.PFCPSessionModificationRequest(), seid)[pfcp.IE_Cause].cause == 1
+        with pytest.raises(socket.timeout):
+            new_entity.recvfrom(65535)
+        assert not get_json("/api/v1/pfcp_sessions")
+        assert remote.request(pfcp.PFCPSessionDeletionRequest(), seid)[pfcp.IE_Cause].cause == 65
     finally:
         old_entity.close()
         new_entity.close()

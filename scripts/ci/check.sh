@@ -118,7 +118,7 @@ PY
 		# allow a 100% margin for shared GitHub runners.
 		timeout --kill-after=10 600 sudo env EUPF_REGRESSION_BINARY="/src/bin/$binary" \
 			EUPF_REGRESSION_EVIDENCE="/src/ci-results/$binary-regressions" \
-			/opt/py/bin/pytest -v ./pytest/test_pfcp_regressions.py ./pytest/test_pfcp_transport.py
+			/opt/py/bin/pytest -v ./pytest/test_pfcp_regressions.py ./pytest/test_pfcp_transport.py ./pytest/test_pfcp_release.py
 	done
 	;;
 *)
