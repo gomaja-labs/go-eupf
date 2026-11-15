@@ -205,6 +205,9 @@ func (plane *sessionFailurePlane) BeginRuleTransaction(uint64) (ebpf.RuleTransac
 func (tx *sessionFailureTransaction) RetireResources(reclaim func() error) { tx.reclaim = reclaim }
 func (tx *sessionFailureTransaction) UsageCompletion() <-chan error        { return nil }
 func (tx *sessionFailureTransaction) Commit() error {
+	if tx.plane.commitError != nil {
+		return tx.plane.commitError
+	}
 	// Complete before the terminal result to exercise both latch orderings.
 	if tx.reclaim != nil {
 		if err := tx.reclaim(); err != nil {
@@ -214,6 +217,10 @@ func (tx *sessionFailureTransaction) Commit() error {
 	return tx.plane.commitError
 }
 func (tx *sessionFailureTransaction) Rollback() error {
+	// Production queues reclamation behind the repaired undo.
+	if tx.plane.rollbackError != nil {
+		return tx.plane.rollbackError
+	}
 	if tx.reclaim != nil && !tx.plane.holdRollback {
 		if err := tx.reclaim(); err != nil {
 			return err

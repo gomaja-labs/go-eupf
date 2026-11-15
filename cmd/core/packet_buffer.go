@@ -74,6 +74,7 @@ type bufferOwner struct {
 	terminal                           bool
 	grace                              <-chan struct{}
 	retirement                         *sessionRetirement
+	resourcesDone                      <-chan struct{}
 }
 
 // PacketBuffering owns one application ring reader and one bounded payload pool
@@ -515,6 +516,17 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 		owner.conn.applyDownlinkDurationLocked(owner.session, now)
 	}
 	buffering.noteQueued(owner)
+	if owner.canceled && owner.retirement != nil && bufferGraceDone(owner.resourcesDone) {
+		// Successful resource reclamation proves that a failed creation's
+		// deferred undo was repaired. Producer grace and packet ACKs still
+		// gate the final owner/admission release below.
+		owner.terminal = true
+		for _, cycle := range owner.cycles {
+			if cycle != nil && cycle.canceled {
+				cycle.terminal = true
+			}
+		}
+	}
 	if owner.terminal && bufferGraceDone(owner.grace) {
 		owner.graced = true
 	}

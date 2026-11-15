@@ -74,10 +74,19 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 				packetOwner = session.buffers.owner
 				packetOwner.retirement = completion
 			}
+			resourcesDone := make(chan struct{})
+			var resourceCompletion sync.Once
+			if packetOwner != nil {
+				packetOwner.resourcesDone = resourcesDone
+			}
 			return func() error {
 				err := reclaimReservations(reclaim)
-				if err == nil && packetOwner == nil {
-					completion.retired()
+				if err == nil {
+					if packetOwner == nil {
+						completion.retired()
+					} else {
+						resourceCompletion.Do(func() { close(resourcesDone) })
+					}
 				}
 				return err
 			}, completion.allow
@@ -103,7 +112,10 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 			if !deferred && err == nil {
 				err = reclaimReservations(reclaim)
 			}
-			if err == nil {
+			// The deferred callback runs only after a successful undo and
+			// reclamation, including when the grace worker repairs the undo.
+			// A creation that never became live needs no later deletion.
+			if deferred || err == nil {
 				allow()
 			}
 			if session.bufferPlan != nil {
