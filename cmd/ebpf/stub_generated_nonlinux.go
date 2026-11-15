@@ -9,6 +9,7 @@ import (
 )
 
 type IpEntrypointObjects struct {
+	SessionActivity           *ebpf.Map
 	BufferToken               *ebpf.Map
 	BufferContinuationStat    *ebpf.Map
 	BufferBindings            *ebpf.Map
@@ -79,6 +80,7 @@ type IpEntrypointPdrEntry struct {
 	_                      [3]byte
 	PdrId                  uint32
 	Precedence             uint32
+	ActivityId             uint32
 	Notify                 uint64
 	UeIp4                  uint32
 	UeMask4                uint32

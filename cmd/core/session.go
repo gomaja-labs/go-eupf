@@ -18,6 +18,10 @@ var (
 )
 
 type Session struct {
+	activity              *sessionActivity
+	activityReserved      bool
+	inactivityTimer       time.Duration
+	inactivityArmed       bool
 	bufferControlRevision uint64
 	bufferPlan            *packetBufferPlan
 	buffers               *packetBufferSession

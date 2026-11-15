@@ -116,6 +116,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		}
 	}
 
+	conn.serviceInactivity(time.Now())
 	return errors.Join(results...)
 }
 

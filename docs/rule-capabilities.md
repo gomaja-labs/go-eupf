@@ -378,3 +378,13 @@ FAR's 3GPP Interface Type to be N3 or N9 for data forwarding (TS 29.244 V20.1.0
 clause 5.17.3). The UPF cannot otherwise identify an EPS-to-5GS forwarding tunnel.
 Ordinary N9 and N4-u relays preserve received extension headers; their QER QFI
 alone does not request insertion of a downlink container.
+
+## Session and association procedures
+
+| IE / procedure | Treatment | Behavior | TS 29.244 V20.1.0 source |
+|---|---|---|---|
+| Session-level User Plane Inactivity Timer | Implemented | Establishment and Modification; zero/null disables, updates preserve inactivity age, UPIR disarms reporting until updated. | 5.11.2, 8.2.83, 7.5.2.1-1, 7.5.4.1-1 |
+| UP-initiated session release | Implemented | Local deletion precedes final USAR/TEBUR or UISR; PSDBU in the last report for every CP; terminal failure is counted. REST returns the CP's EPFAR negotiation state. | 5.18.2, 6.3.5.2–3, 7.5.8.1-1, 8.2.119 |
+| Enhanced association release | Implemented | Advertised EPFAR; negotiated PARPS from either initiator, final session reports before URSS, bounded final CP Release wait and shutdown. | 5.18.1, 6.2.7.3.1, 8.2.25, 8.2.58, 8.2.120 |
+| Per-PDR inactivity / UPINT | Rejected | Session activity does not provide independent PDR monitoring; UPIDP remains clear. | 5.11.3 |
+| Downlink Data Service Information PPI | Implemented | All six DSCP bits of the triggering IPv4/IPv6 packet, including zero; independently optional QFI. The QER PPI feature above remains rejected. | 7.5.8.2-1 |

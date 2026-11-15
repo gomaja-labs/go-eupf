@@ -86,6 +86,8 @@ defaultEnv:
   # Session restoration period; only automatic UE IPv4 allocation waits.
   # Zero permits immediate reuse of unrestored predecessor UE IPv4 addresses.
   UPF_RESTORATION_PERIOD: "60"
+  # Local inactivity release in seconds (independent of the CP timer); zero disables.
+  UPF_INACTIVITY_RELEASE_TIMEOUT: "0"
   UPF_API_ADDRESS: ":8080"
   UPF_PFCP_ADDRESS: ":8805"
   UPF_METRICS_ADDRESS: ":9090"
@@ -118,6 +120,7 @@ config:
     #   buffer_retention_seconds: 30
     #   # Holds automatic UE IPv4 allocation and suppresses unknown-tunnel Error Indications.
     #   restoration_period: 60
+    #   inactivity_release_timeout: 0
     #   api_address: :8080
     #   pfcp_address: :8805
     #   metrics_address: :9090

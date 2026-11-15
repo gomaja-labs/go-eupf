@@ -31,6 +31,9 @@ import (
 //go:generate go tool bpf2go -tags linux -target bpf N6Entrypoint 	xdp/n6_entrypoint.c -- -I. -O2 -Wall
 
 type BpfObjects struct {
+	activityMutex                    sync.RWMutex
+	activityMemory                   *ebpf.Memory
+	activityIDs                      *IdTracker
 	renderMutex                      sync.Mutex
 	prepareDone, prepareStop         chan struct{}
 	prepareError                     error
@@ -139,6 +142,7 @@ func (bpfObjects *BpfObjects) Load() error {
 		"pdr_buckets":          4*bpfObjects.pdrMapSize + 1,
 		"urr_map":              bpfObjects.urrMapSize,
 		"buffer_anchors":       bpfObjects.bufferSessions,
+		"session_activity":     bpfObjects.bufferSessions + 1,
 		"buffer_bindings":      bpfObjects.farMapSize,
 		"buffer_states":        2 * bpfObjects.farMapSize,
 		"buffer_notice_ready":  bpfObjects.bufferSessions,
@@ -208,6 +212,9 @@ func (bpfObjects *BpfObjects) Load() error {
 		return err
 	}
 	bpfObjects.renderClosed = false
+	if err := bpfObjects.initSessionActivity(); err != nil {
+		return err
+	}
 	loaded = true
 	return nil
 }
@@ -265,6 +272,10 @@ func (bpfObjects *BpfObjects) Close() error {
 		bpfObjects.sharedConfiguration = nil
 	}
 	bpfObjects.renderMutex.Unlock()
+	bpfObjects.activityMutex.Lock()
+	defer bpfObjects.activityMutex.Unlock()
+	bpfObjects.activityMemory = nil
+	bpfObjects.activityIDs = nil
 	return errors.Join(err, CloseAllObjects(
 		&bpfObjects.IpEntrypointObjects,
 	))

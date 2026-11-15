@@ -46,14 +46,17 @@ var pfcpHandlers = PfcpHandlerMap{
 }
 
 type PfcpConnection struct {
-	packetBuffers     *PacketBuffering
-	downlinkSessions  map[uint64]*NodeAssociation
-	localReleases     map[uint64]*localSessionRelease
-	localReleaseBytes int
-	bufferUpdates     []*bufferReportUpdate
-	socketMu          sync.RWMutex
-	closeOnce         sync.Once
-	done              chan struct{}
+	activitySessions, activityDirty map[uint64]*NodeAssociation
+	nextActivityPoll                time.Time
+	inactivityReleaseTimeout        time.Duration
+	packetBuffers                   *PacketBuffering
+	downlinkSessions                map[uint64]*NodeAssociation
+	localReleases                   map[uint64]*localSessionRelease
+	localReleaseBytes               int
+	bufferUpdates                   []*bufferReportUpdate
+	socketMu                        sync.RWMutex
+	closeOnce                       sync.Once
+	done                            chan struct{}
 
 	stateMu               sync.RWMutex // Owns all associations, sessions and their indexes.
 	nextSessionID         uint64       // UPF-wide SEID allocator, also owned by stateMu.
@@ -182,28 +185,29 @@ func NewPfcpConnection(
 	pccRule, pccRulesNameLinkURRID := buildPCCRuleMap()
 
 	return &PfcpConnection{
-		udpConn:               udpConn,
-		done:                  make(chan struct{}),
-		failures:              make(chan error, 1),
-		pfcpHandlerMap:        pfcpHandlers,
-		NodeAssociations:      map[string]*NodeAssociation{},
-		nodeId:                nodeId,
-		nodeAddrV4:            udpConn.LocalAddr().(*net.UDPAddr).AddrPort(),
-		n3Address:             n3Addr,
-		n9Address:             n9Addr,
-		mapOperations:         mapOperations,
-		RecoveryTimestamp:     resourceManager.RecoveryTimestamp,
-		featuresOctets:        featuresOctets,
-		ResourceManager:       resourceManager,
-		sdfNotifyC:            sdfNotifyC,
-		nodes:                 []AssociationConnector{},
-		neValidator:           validator,
-		tracingStorage:        tracing.NewSimpleTraceRecordStorage(),
-		dumper:                dumper,
-		PCCRules:              pccRule,
-		PCCRulesNameLinkURRID: pccRulesNameLinkURRID,
-		profile:               profile,
-		requestTimeout:        defaultDuration(config.Conf.PfcpRequestTimeout, 5), requestRetries: config.Conf.PfcpRequestRetries,
+		udpConn:                  udpConn,
+		done:                     make(chan struct{}),
+		failures:                 make(chan error, 1),
+		pfcpHandlerMap:           pfcpHandlers,
+		NodeAssociations:         map[string]*NodeAssociation{},
+		nodeId:                   nodeId,
+		nodeAddrV4:               udpConn.LocalAddr().(*net.UDPAddr).AddrPort(),
+		n3Address:                n3Addr,
+		n9Address:                n9Addr,
+		mapOperations:            mapOperations,
+		RecoveryTimestamp:        resourceManager.RecoveryTimestamp,
+		featuresOctets:           featuresOctets,
+		ResourceManager:          resourceManager,
+		sdfNotifyC:               sdfNotifyC,
+		nodes:                    []AssociationConnector{},
+		neValidator:              validator,
+		tracingStorage:           tracing.NewSimpleTraceRecordStorage(),
+		dumper:                   dumper,
+		PCCRules:                 pccRule,
+		PCCRulesNameLinkURRID:    pccRulesNameLinkURRID,
+		profile:                  profile,
+		inactivityReleaseTimeout: time.Duration(config.Conf.InactivityReleaseTimeout) * time.Second,
+		requestTimeout:           defaultDuration(config.Conf.PfcpRequestTimeout, 5), requestRetries: config.Conf.PfcpRequestRetries,
 		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxReplayEntries: config.Conf.PfcpMaxReplayEntries, maxOriginatedRequests: config.Conf.PfcpMaxOriginatedRequests, replayMemoryMiB: config.Conf.PfcpReplayMemoryMiB, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,
 		heartbeatEvery: time.Duration(config.Conf.HeartbeatInterval) * time.Second,
@@ -507,6 +511,7 @@ func (connection *PfcpConnection) Run() {
 		}
 		connection.serviceTransactions(time.Now())
 		connection.serviceLocalSessionReleases()
+		connection.serviceInactivity(time.Now())
 		now := time.Now()
 		if !now.Before(nextDownlinkService) {
 			connection.serviceDownlinkNotifications(now)

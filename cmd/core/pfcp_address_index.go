@@ -24,6 +24,7 @@ func (conn *PfcpConnection) addressReference(assoc *NodeAssociation, address str
 	}
 }
 func (conn *PfcpConnection) indexSession(assoc *NodeAssociation, session *Session, delta int) {
+	conn.watchSessionActivity(assoc, session, delta)
 	conn.addressReference(assoc, session.CPFSEIDIPv4.String(), delta)
 	conn.addressReference(assoc, session.CPFSEIDIPv6.String(), delta)
 }
@@ -41,6 +42,8 @@ func (conn *PfcpConnection) forgetSession(assoc *NodeAssociation, seid uint64) {
 	if session := assoc.Sessions[seid]; session != nil && !assoc.retired {
 		conn.indexSession(assoc, session, -1)
 	}
+	delete(conn.activitySessions, seid)
+	delete(conn.activityDirty, seid)
 	delete(assoc.Sessions, seid)
 	delete(assoc.sessionEntities, seid)
 	delete(assoc.cleanupFailures, seid)

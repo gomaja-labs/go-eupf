@@ -47,6 +47,7 @@ func (c *UpfConfig) ValidatePFCP() error {
 		"pfcp_max_originated_requests": {c.PfcpMaxOriginatedRequests, 65536},
 		"pfcp_replay_memory_mib":       {c.PfcpReplayMemoryMiB, 1024},
 		"pfcp_max_associations":        {c.PfcpMaxAssociations, 65536},
+		"inactivity_release_timeout":   {c.InactivityReleaseTimeout, 86400},
 		"restoration_period":           {c.RestorationPeriod, 86400},
 	} {
 		if bound.value > bound.max {

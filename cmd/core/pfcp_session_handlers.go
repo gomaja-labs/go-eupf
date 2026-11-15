@@ -793,6 +793,9 @@ func processEstablishmentRequestRules(
 	if err := stageSessionBAR(session, req); err != nil {
 		return err
 	}
+	if err := conn.stageSessionActivity(session, req.UserPlaneInactivityTimer); err != nil {
+		return err
+	}
 	mapOperations := conn.mapOperations
 
 	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
@@ -917,6 +920,9 @@ func processModificationRequestRules(
 		return err
 	}
 	if err := stageSessionBAR(session, req); err != nil {
+		return err
+	}
+	if err := conn.stageSessionActivity(session, req.UserPlaneInactivityTimer); err != nil {
 		return err
 	}
 	mapOperations := conn.mapOperations

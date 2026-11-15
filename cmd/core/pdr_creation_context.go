@@ -494,6 +494,9 @@ func isNullIE(value *ie.IE) bool {
 // resolvePDRSlots binds only rules from this session, after slot reservation.
 // The logical references remain in the draft for subsequent modifications.
 func resolvePDRSlots(info *SPDRInfo, session *Session) error {
+	if session.activity != nil {
+		info.PdrInfo.ActivitySlot = session.activity.slot
+	}
 	if info.FARID != nil {
 		rule, ok := session.FARs[*info.FARID]
 		if !ok || rule.GlobalId == 0 {
@@ -620,12 +623,13 @@ func (pdrContext *PDRCreationContext) deleteReplacedPDR(old, current SPDRInfo, m
 // TS 29.244 V20.1.0 clauses 5.2.3 and 6.3.3.3.
 func (conn *PfcpConnection) rebindSessionRules(session *Session) error {
 	for id, pdr := range session.PDRs {
+		oldActivity := pdr.PdrInfo.ActivitySlot
 		oldFar, oldQers, oldUrrs := pdr.PdrInfo.FarId, pdr.PdrInfo.QerIDs, pdr.PdrInfo.UrrIDs
 		directionChanged := orientPDRFilters(&pdr, session)
 		if err := resolvePDRSlots(&pdr, session); err != nil {
 			return &ruleFailure{ie.RuleIDTypePDR, id, err}
 		}
-		if !directionChanged && oldFar == pdr.PdrInfo.FarId && slices.Equal(oldQers, pdr.PdrInfo.QerIDs) && slices.Equal(oldUrrs, pdr.PdrInfo.UrrIDs) {
+		if !directionChanged && oldActivity == pdr.PdrInfo.ActivitySlot && oldFar == pdr.PdrInfo.FarId && slices.Equal(oldQers, pdr.PdrInfo.QerIDs) && slices.Equal(oldUrrs, pdr.PdrInfo.UrrIDs) {
 			continue
 		}
 		if err := applyPDR(pdr, conn.mapOperations); err != nil {

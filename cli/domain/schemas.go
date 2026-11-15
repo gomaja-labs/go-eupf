@@ -17,6 +17,7 @@ type BackupRecord struct {
 }
 
 type UpfConfig struct {
+	InactivityReleaseTimeout  uint32   `json:"inactivity_release_timeout" yaml:"inactivity_release_timeout"`
 	PfcpPeerAllowList         []string `json:"pfcp_peer_allow_list" yaml:"pfcp_peer_allow_list"`
 	PfcpRequestTimeout        uint32   `json:"pfcp_request_timeout" yaml:"pfcp_request_timeout"`
 	PfcpRequestRetries        uint32   `json:"pfcp_request_retries" yaml:"pfcp_request_retries"`

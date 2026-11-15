@@ -47,6 +47,7 @@ struct pdr_entry {
     __u8 return_nr_flag;
     __u32 pdr_id;
     __u32 precedence;
+    __u32 activity_id; // Immutable reference into the separately mutable activity map.
     __u64 notify;
     __u32 ue_ip4;
     __u32 ue_mask4;
@@ -186,3 +187,19 @@ struct
     __type(value, struct far_info);
     __uint(max_entries, FAR_MAP_SIZE);
 } far_map SEC(".maps");
+
+// TS 29.244 V20.1.0 clause 5.11.2: count received matching user packets,
+// including packets subsequently discarded by their FAR or QoS rules.
+// Slot zero disables monitoring. Packet writes never touch journal images.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 65536);
+} session_activity SEC(".maps");
+static __always_inline void note_session_activity(__u32 slot) {
+    if (!slot) return;
+    __u64 *count = bpf_map_lookup_elem(&session_activity, &slot);
+    if (count) __sync_fetch_and_add(count, 1);
+}

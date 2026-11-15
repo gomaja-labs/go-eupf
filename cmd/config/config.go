@@ -88,62 +88,63 @@ type UpfConfig struct {
 	PfcpMaxAssociations       uint32   `mapstructure:"pfcp_max_associations" json:"pfcp_max_associations"`
 	HeartbeatFailureGrace     uint32   `mapstructure:"heartbeat_failure_grace" json:"heartbeat_failure_grace"`
 
-	InterfaceName           []string       `mapstructure:"interface_name" json:"interface_name"`
-	XDPAttachMode           string         `mapstructure:"xdp_attach_mode" validate:"oneof=generic native offload" json:"xdp_attach_mode"`
-	ApiTLSCertFile          string         `mapstructure:"api_tls_cert_file" json:"api_tls_cert_file"`
-	ApiTLSKeyFile           string         `mapstructure:"api_tls_key_file" json:"api_tls_key_file"`
-	ApiToken                string         `mapstructure:"api_token" json:"-"`
-	ApiAllowedOrigins       []string       `mapstructure:"api_allowed_origins" json:"api_allowed_origins"`
-	ApiAddress              string         `mapstructure:"api_address" validate:"hostname_port" json:"api_address"`
-	PfcpAddress             string         `mapstructure:"pfcp_address" validate:"hostname_port" json:"pfcp_address"`
-	PfcpNodeId              string         `mapstructure:"pfcp_node_id" validate:"hostname|ip" json:"pfcp_node_id"`
-	PfcpRemoteNode          []string       `mapstructure:"pfcp_remote_node" validate:"omitempty,dive,hostname|ip" json:"pfcp_node"`
-	SxaRemoteNode           []string       `mapstructure:"sxa_remote_node" validate:"omitempty,dive,hostname|ip" json:"sxa_node"`
-	SxbRemoteNode           []string       `mapstructure:"sxb_remote_node" validate:"omitempty,dive,hostname|ip" json:"sxb_node"`
-	SxaLocalAddress         string         `mapstructure:"sxa_address" validate:"omitempty,hostname_port" json:"sxa_address"`
-	SxbLocalAddress         string         `mapstructure:"sxb_address" validate:"omitempty,hostname_port" json:"sxb_address"`
-	SxaLocalNodeId          string         `mapstructure:"sxa_node_id" validate:"omitempty,hostname|ip" json:"sxa_node_id"`
-	SxbLocalNodeId          string         `mapstructure:"sxb_node_id" validate:"omitempty,hostname|ip" json:"sxb_node_id"`
-	AssociationSetupTimeout uint32         `mapstructure:"association_setup_timeout" json:"association_setup_timeout"`
-	MetricsAddress          string         `mapstructure:"metrics_address" validate:"hostname_port" json:"metrics_address"`
-	N3Address               string         `mapstructure:"n3_address" validate:"ipv4" json:"n3_address"`
-	N9Address               string         `mapstructure:"n9_address" validate:"ipv4" json:"n9_address"`
-	N3AdvertisedAddress     string         `mapstructure:"n3_adv_address" validate:"ipv4" json:"n3_adv_address"`
-	N3AdvertisedAddress5G   string         `mapstructure:"n3_adv_address_5g" validate:"ipv4" json:"n3_adv_address_5g"`
-	N9AdvertisedAddress     string         `mapstructure:"n9_adv_address" validate:"ipv4" json:"n9_adv_address"`
-	S1UAddress              string         `mapstructure:"s1u_address" validate:"omitempty,ipv4" json:"s1u_address"`
-	S5S8Address             string         `mapstructure:"s5s8_address" validate:"omitempty,ipv4" json:"s5s8_address"`
-	PAAddress               string         `mapstructure:"pa_address" validate:"omitempty,ipv4" json:"pa_address"`
-	GtpPeer                 []string       `mapstructure:"gtp_peer" validate:"omitempty,dive,hostname_port" json:"gtp_peer"`
-	GtpEchoInterval         uint32         `mapstructure:"gtp_echo_interval" json:"gtp_echo_interval"`
-	QerMapSize              uint32         `mapstructure:"qer_map_size" json:"qer_map_size"`
-	FarMapSize              uint32         `mapstructure:"far_map_size" json:"far_map_size"`
-	UrrMapSize              uint32         `mapstructure:"urr_map_size" json:"urr_map_size"`
-	PdrMapSize              uint32         `mapstructure:"pdr_map_size" json:"pdr_map_size"`
-	MaxSessions             uint32         `mapstructure:"max_sessions" json:"max_sessions"`
-	HeartbeatRetries        uint32         `mapstructure:"heartbeat_retries" json:"heartbeat_retries"`
-	HeartbeatInterval       uint32         `mapstructure:"heartbeat_interval" json:"heartbeat_interval"`
-	HeartbeatTimeout        uint32         `mapstructure:"heartbeat_timeout" json:"heartbeat_timeout"`
-	LoggingLevel            string         `mapstructure:"logging_level" validate:"required" json:"logging_level"`
-	LoggingCaller           bool           `mapstructure:"logging_caller" json:"logging_caller"`
-	UEIPPool                string         `mapstructure:"ueip_pool" validate:"omitempty,cidr" json:"ueip_pool"`
-	FTEIDPool               uint32         `mapstructure:"teid_pool" json:"teid_pool"`
-	RestorationPeriod       uint32         `mapstructure:"restoration_period" json:"restoration_period"`
-	FeatureUEIP             bool           `mapstructure:"feature_ueip" json:"feature_ueip"`
-	Qci2DscpMapping         map[string]int `mapstructure:"qci_dscp_mapping" json:"qci_dscp_mapping"`
-	AllowedApns             string         `mapstructure:"allowed_apns" json:"allowed_apns"`
-	DeniedApns              string         `mapstructure:"denied_apns" json:"denied_apns"`
-	PfcpProfile             string         `mapstructure:"pfcp_profile" json:"pfcp_profile"`
-	TraceAssociation        bool           `mapstructure:"trace_association" json:"trace_association"`
-	TraceHeartbeat          bool           `mapstructure:"trace_heartbeat" json:"trace_heartbeat"`
-	TraceIn                 bool           `mapstructure:"trace_in" json:"trace_in"`
-	TraceOut                bool           `mapstructure:"trace_out" json:"trace_out"`
-	TraceBlocked            bool           `mapstructure:"trace_blocked" json:"trace_blocked"`
-	TraceMaxDumpFiles       int            `mapstructure:"trace_files" json:"trace_files"`
-	TraceMaxDumpSize        int            `mapstructure:"trace_max_size" json:"trace_max_size"`
-	TraceMaxDumpPackets     int            `mapstructure:"trace_max_packets" json:"trace_max_packets"`
-	IP6RaSupport            bool           `mapstructure:"ip6_ra_support" json:"ip6_ra_support"`
-	Ip6RaPrefix             string         `mapstructure:"ip6_ra_prefix" validate:"cidrv6" json:"ip6_ra_prefix"`
+	InterfaceName            []string       `mapstructure:"interface_name" json:"interface_name"`
+	XDPAttachMode            string         `mapstructure:"xdp_attach_mode" validate:"oneof=generic native offload" json:"xdp_attach_mode"`
+	ApiTLSCertFile           string         `mapstructure:"api_tls_cert_file" json:"api_tls_cert_file"`
+	ApiTLSKeyFile            string         `mapstructure:"api_tls_key_file" json:"api_tls_key_file"`
+	ApiToken                 string         `mapstructure:"api_token" json:"-"`
+	ApiAllowedOrigins        []string       `mapstructure:"api_allowed_origins" json:"api_allowed_origins"`
+	ApiAddress               string         `mapstructure:"api_address" validate:"hostname_port" json:"api_address"`
+	PfcpAddress              string         `mapstructure:"pfcp_address" validate:"hostname_port" json:"pfcp_address"`
+	PfcpNodeId               string         `mapstructure:"pfcp_node_id" validate:"hostname|ip" json:"pfcp_node_id"`
+	PfcpRemoteNode           []string       `mapstructure:"pfcp_remote_node" validate:"omitempty,dive,hostname|ip" json:"pfcp_node"`
+	SxaRemoteNode            []string       `mapstructure:"sxa_remote_node" validate:"omitempty,dive,hostname|ip" json:"sxa_node"`
+	SxbRemoteNode            []string       `mapstructure:"sxb_remote_node" validate:"omitempty,dive,hostname|ip" json:"sxb_node"`
+	SxaLocalAddress          string         `mapstructure:"sxa_address" validate:"omitempty,hostname_port" json:"sxa_address"`
+	SxbLocalAddress          string         `mapstructure:"sxb_address" validate:"omitempty,hostname_port" json:"sxb_address"`
+	SxaLocalNodeId           string         `mapstructure:"sxa_node_id" validate:"omitempty,hostname|ip" json:"sxa_node_id"`
+	SxbLocalNodeId           string         `mapstructure:"sxb_node_id" validate:"omitempty,hostname|ip" json:"sxb_node_id"`
+	AssociationSetupTimeout  uint32         `mapstructure:"association_setup_timeout" json:"association_setup_timeout"`
+	MetricsAddress           string         `mapstructure:"metrics_address" validate:"hostname_port" json:"metrics_address"`
+	N3Address                string         `mapstructure:"n3_address" validate:"ipv4" json:"n3_address"`
+	N9Address                string         `mapstructure:"n9_address" validate:"ipv4" json:"n9_address"`
+	N3AdvertisedAddress      string         `mapstructure:"n3_adv_address" validate:"ipv4" json:"n3_adv_address"`
+	N3AdvertisedAddress5G    string         `mapstructure:"n3_adv_address_5g" validate:"ipv4" json:"n3_adv_address_5g"`
+	N9AdvertisedAddress      string         `mapstructure:"n9_adv_address" validate:"ipv4" json:"n9_adv_address"`
+	S1UAddress               string         `mapstructure:"s1u_address" validate:"omitempty,ipv4" json:"s1u_address"`
+	S5S8Address              string         `mapstructure:"s5s8_address" validate:"omitempty,ipv4" json:"s5s8_address"`
+	PAAddress                string         `mapstructure:"pa_address" validate:"omitempty,ipv4" json:"pa_address"`
+	GtpPeer                  []string       `mapstructure:"gtp_peer" validate:"omitempty,dive,hostname_port" json:"gtp_peer"`
+	GtpEchoInterval          uint32         `mapstructure:"gtp_echo_interval" json:"gtp_echo_interval"`
+	QerMapSize               uint32         `mapstructure:"qer_map_size" json:"qer_map_size"`
+	FarMapSize               uint32         `mapstructure:"far_map_size" json:"far_map_size"`
+	UrrMapSize               uint32         `mapstructure:"urr_map_size" json:"urr_map_size"`
+	PdrMapSize               uint32         `mapstructure:"pdr_map_size" json:"pdr_map_size"`
+	MaxSessions              uint32         `mapstructure:"max_sessions" json:"max_sessions"`
+	HeartbeatRetries         uint32         `mapstructure:"heartbeat_retries" json:"heartbeat_retries"`
+	HeartbeatInterval        uint32         `mapstructure:"heartbeat_interval" json:"heartbeat_interval"`
+	HeartbeatTimeout         uint32         `mapstructure:"heartbeat_timeout" json:"heartbeat_timeout"`
+	LoggingLevel             string         `mapstructure:"logging_level" validate:"required" json:"logging_level"`
+	LoggingCaller            bool           `mapstructure:"logging_caller" json:"logging_caller"`
+	UEIPPool                 string         `mapstructure:"ueip_pool" validate:"omitempty,cidr" json:"ueip_pool"`
+	FTEIDPool                uint32         `mapstructure:"teid_pool" json:"teid_pool"`
+	InactivityReleaseTimeout uint32         `mapstructure:"inactivity_release_timeout" json:"inactivity_release_timeout"`
+	RestorationPeriod        uint32         `mapstructure:"restoration_period" json:"restoration_period"`
+	FeatureUEIP              bool           `mapstructure:"feature_ueip" json:"feature_ueip"`
+	Qci2DscpMapping          map[string]int `mapstructure:"qci_dscp_mapping" json:"qci_dscp_mapping"`
+	AllowedApns              string         `mapstructure:"allowed_apns" json:"allowed_apns"`
+	DeniedApns               string         `mapstructure:"denied_apns" json:"denied_apns"`
+	PfcpProfile              string         `mapstructure:"pfcp_profile" json:"pfcp_profile"`
+	TraceAssociation         bool           `mapstructure:"trace_association" json:"trace_association"`
+	TraceHeartbeat           bool           `mapstructure:"trace_heartbeat" json:"trace_heartbeat"`
+	TraceIn                  bool           `mapstructure:"trace_in" json:"trace_in"`
+	TraceOut                 bool           `mapstructure:"trace_out" json:"trace_out"`
+	TraceBlocked             bool           `mapstructure:"trace_blocked" json:"trace_blocked"`
+	TraceMaxDumpFiles        int            `mapstructure:"trace_files" json:"trace_files"`
+	TraceMaxDumpSize         int            `mapstructure:"trace_max_size" json:"trace_max_size"`
+	TraceMaxDumpPackets      int            `mapstructure:"trace_max_packets" json:"trace_max_packets"`
+	IP6RaSupport             bool           `mapstructure:"ip6_ra_support" json:"ip6_ra_support"`
+	Ip6RaPrefix              string         `mapstructure:"ip6_ra_prefix" validate:"cidrv6" json:"ip6_ra_prefix"`
 
 	n3AdvertisedAddress5G net.IP
 	// Set at startup from the effective file, flag and environment sources.
@@ -230,6 +231,7 @@ func defineFlags() {
 	pflag.Bool("ueip", false, "Enable or disable UEIP feature")
 	pflag.String("ueippool", "10.60.0.0/24", "IP pool for UEIP feature")
 	pflag.Uint32("teidpool", 65535, "TEID pool for FTUP feature")
+	pflag.Uint32("inactivity-release-timeout", 0, "Seconds without matching user packets before local session release; zero disables")
 	pflag.Uint32("restoration-period", 60, "Seconds after startup reserved for session restoration; holds automatic UE IPv4 allocation and suppresses unknown-tunnel Error Indications")
 	pflag.StringArray("pfcprnode", []string{}, "Address of remote PFCP node")
 	pflag.StringArray("sxanode", []string{}, "Address of remote Sxa node")
@@ -331,6 +333,7 @@ func initCommonConfig() error {
 	_ = commonConfigV.BindPFlag("buffer_packets", pflag.Lookup("buffer-packets"))
 	_ = commonConfigV.BindPFlag("buffer_per_session", pflag.Lookup("buffer-per-session"))
 	_ = commonConfigV.BindPFlag("buffer_retention_seconds", pflag.Lookup("buffer-retention-seconds"))
+	_ = commonConfigV.BindPFlag("inactivity_release_timeout", pflag.Lookup("inactivity-release-timeout"))
 	_ = commonConfigV.BindPFlag("restoration_period", pflag.Lookup("restoration-period"))
 	_ = commonConfigV.BindPFlag("pfcp_max_associations", pflag.Lookup("pfcp-max-associations"))
 	_ = commonConfigV.BindPFlag("heartbeat_failure_grace", pflag.Lookup("heartbeat-failure-grace"))

@@ -65,12 +65,21 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 		defer func() { conn.mapOperations, conn.ResourceManager = maps, resources }()
 		retirement := func(reclaim func() error, committing bool) (func() error, func()) {
 			release := kind == createSessionMutation && !committing || kind == deleteSessionMutation && committing
-			if !release {
+			activity := session.activity
+			releaseActivity := activity != nil && (kind == deleteSessionMutation && committing || !committing && session.activityReserved)
+			if !release && !releaseActivity {
 				return reclaim, func() {}
 			}
-			completion := &sessionRetirement{release: func() { resources.ReleaseSession(owner) }}
+			completion := &sessionRetirement{release: func() {
+				if releaseActivity {
+					activity.controller.ReleaseSessionActivity(activity.slot)
+				}
+				if release {
+					resources.ReleaseSession(owner)
+				}
+			}}
 			var packetOwner *bufferOwner
-			if session.buffers != nil && session.bufferPlan != nil && session.bufferPlan.owner != nil {
+			if release && session.buffers != nil && session.bufferPlan != nil && session.bufferPlan.owner != nil {
 				packetOwner = session.buffers.owner
 				packetOwner.retirement = completion
 			}
@@ -146,6 +155,7 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 		if session.bufferPlan != nil {
 			session.bufferPlan.finish(conn, true, true)
 		}
+		session.activityReserved = false
 		if deferred {
 			allow()
 			conn.responseWait = async.UsageCompletion()

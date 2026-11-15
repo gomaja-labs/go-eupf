@@ -42,6 +42,7 @@ type PdrInfo struct {
 	ReturnFarID                uint32      `json:"return_far_id"`
 	ReturnQerIDs               []uint32    `json:"return_qer_ids"`
 	ReturnNR                   bool        `json:"return_nr"`
+	ActivitySlot               uint32      `json:"-"`
 	SessionID                  uint64      `json:"session_id"`
 	PdrID                      uint32      `json:"pdr_id"`
 	Precedence                 uint32      `json:"precedence"`
@@ -485,6 +486,7 @@ func encodePDR(info PdrInfo) (IpEntrypointPdrEntry, error) {
 			entry.MatchMode = 0
 		}
 	}
+	entry.ActivityId = info.ActivitySlot
 	entry.ReturnPdr.FarId = info.ReturnFarID
 	entry.ReturnPdr.QerCount = uint8(len(info.ReturnQerIDs))
 	copy(entry.ReturnPdr.QerId[:], info.ReturnQerIDs)
@@ -594,7 +596,7 @@ func DecodePDRBucket(bucket IpEntrypointPdrInfo) []PdrInfo {
 	count := int(min(bucket.Count, uint32(MaxPDRsPerKey)))
 	result := make([]PdrInfo, 0, count)
 	for _, entry := range bucket.Entries[:count] {
-		info := PdrInfo{ReturnFarID: entry.ReturnPdr.FarId, ReturnQerIDs: append([]uint32(nil), entry.ReturnPdr.QerId[:min(int(entry.ReturnPdr.QerCount), MaxQERsPerPDR)]...), ReturnNR: entry.ReturnNrFlag != 0, SessionID: bucket.SessionId, PdrID: entry.PdrId, Precedence: entry.Precedence, FarId: entry.Pdr.FarId, QerIDs: append([]uint32(nil), entry.Pdr.QerId[:min(int(entry.Pdr.QerCount), MaxQERsPerPDR)]...), GtpExtensionHeaderDeletion: entry.Pdr.GtpExtensionHeaderDeletion, OuterHeaderRemoval: entry.Pdr.OuterHeaderRemoval, OuterHeaderRemovalPresent: entry.Pdr.OuterHeaderRemovalPresent != 0, TraceFlag: entry.TraceFlag != 0, NRFlag: entry.NrFlag != 0, NotifyFlag: entry.Notify != 0, SourceInterfacePresent: entry.SourceInterfacePresent != 0, SourceInterface: entry.SourceInterface, UEDestination: entry.UeDestination != 0}
+		info := PdrInfo{ActivitySlot: entry.ActivityId, ReturnFarID: entry.ReturnPdr.FarId, ReturnQerIDs: append([]uint32(nil), entry.ReturnPdr.QerId[:min(int(entry.ReturnPdr.QerCount), MaxQERsPerPDR)]...), ReturnNR: entry.ReturnNrFlag != 0, SessionID: bucket.SessionId, PdrID: entry.PdrId, Precedence: entry.Precedence, FarId: entry.Pdr.FarId, QerIDs: append([]uint32(nil), entry.Pdr.QerId[:min(int(entry.Pdr.QerCount), MaxQERsPerPDR)]...), GtpExtensionHeaderDeletion: entry.Pdr.GtpExtensionHeaderDeletion, OuterHeaderRemoval: entry.Pdr.OuterHeaderRemoval, OuterHeaderRemovalPresent: entry.Pdr.OuterHeaderRemovalPresent != 0, TraceFlag: entry.TraceFlag != 0, NRFlag: entry.NrFlag != 0, NotifyFlag: entry.Notify != 0, SourceInterfacePresent: entry.SourceInterfacePresent != 0, SourceInterface: entry.SourceInterface, UEDestination: entry.UeDestination != 0}
 		for _, id := range entry.Pdr.UrrId {
 			if id != 0 {
 				info.UrrIDs = append(info.UrrIDs, id)
