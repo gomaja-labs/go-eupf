@@ -48,12 +48,12 @@ type bufferKey struct {
 }
 type bufferPool struct {
 	Lock, Outstanding, Limit, Reserved uint32
-	Dropped                            uint64
+	Dropped, Canceled                  uint64
 }
 type bufferAnchor struct {
 	Lock, Outstanding, Limit, BAROutstanding         uint32
 	BARLimit, BARDLOutstanding, BARDLLimit, Reserved uint32
-	BARUntilNS                                       uint64
+	BARUntilNS, Overflow, Canceled                   uint64
 }
 
 // BufferLane identifies one FAR buffering lifetime independently of FAR slots.
@@ -371,17 +371,33 @@ func (b *BpfObjects) ConfigureBufferPool(limit uint32) error {
 	return nil
 }
 
-// BufferPoolUsage includes queued ring records, retained payloads, and all drops
-// caused by packet-storage limits. It never controls PFCP session admission.
+// BufferPoolUsage includes ring records and retained payloads. The drop total
+// includes storage failures and admissions canceled by a newer instruction.
 func (b *BpfObjects) BufferPoolUsage() (outstanding uint32, dropped uint64, err error) {
-	if b.BufferPool == nil || b.BufferPool.FD() < 0 {
-		return 0, 0, errors.New("buffer pool is not loaded")
-	}
+	pool, err := b.bufferPoolSnapshot()
+	return pool.Outstanding, pool.Dropped, err
+}
+
+func (b *BpfObjects) bufferPoolSnapshot() (bufferPool, error) {
 	var pool bufferPool
-	if err = b.BufferPool.Lookup(uint32(0), &pool); err != nil {
-		return 0, 0, err
+	if b.BufferPool == nil || b.BufferPool.FD() < 0 {
+		return pool, errors.New("buffer pool is not loaded")
 	}
-	return pool.Outstanding, pool.Dropped, nil
+	err := b.BufferPool.LookupWithFlags(uint32(0), &pool, cilium.LookupLock)
+	return pool, err
+}
+
+// BufferPoolMetrics returns storage occupancy and monotonic admission discards.
+func (b *BpfObjects) BufferPoolMetrics() (outstanding uint32, overflow, canceled uint64, err error) {
+	pool, err := b.bufferPoolSnapshot()
+	return pool.Outstanding, pool.Dropped - pool.Canceled, pool.Canceled, err
+}
+
+// BufferLifetimeDiscards reads admission failures before an anchor is reclaimed.
+func (b *BpfObjects) BufferLifetimeDiscards(session uint64) (overflow, canceled uint64, err error) {
+	var anchor bufferAnchor
+	err = b.BufferAnchors.Lookup(session, &anchor)
+	return anchor.Overflow, anchor.Canceled, err
 }
 
 // ReadBufferNotice consumes one durable first-packet observation. Its storage

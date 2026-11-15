@@ -69,6 +69,8 @@ struct buffer_anchor {
     __u32 bar_dl_limit;
     __u32 reserved;
     __u64 bar_until_ns;
+    __u64 overflow;
+    __u64 canceled;
 };
 struct buffer_key { __u64 session_id; __u32 lane; __u32 reserved; };
 struct {
@@ -94,6 +96,7 @@ struct buffer_pool {
     __u32 limit;
     __u32 reserved;
     __u64 dropped;
+    __u64 canceled;
 };
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -101,6 +104,16 @@ struct {
     __type(key, __u32);
     __type(value, struct buffer_pool);
 } buffer_pool SEC(".maps");
+// Storage failures are overflow; a superseded cookie/mode is cancellation.
+// Count an admission failure once, outside the anchor's critical section.
+static __always_inline void buffer_count_drop(struct buffer_pool *pool, struct buffer_anchor *anchor, int canceled) {
+    bpf_spin_lock(&pool->lock);
+    pool->dropped++;
+    if (canceled) pool->canceled++;
+    bpf_spin_unlock(&pool->lock);
+    if (canceled) __sync_fetch_and_add(&anchor->canceled,1);
+    else __sync_fetch_and_add(&anchor->overflow,1);
+}
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65535);
@@ -352,13 +365,14 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     if (!anchor || !state) return XDP_DROP;
     struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&key);
     if (!pool) return XDP_DROP;
-    int direct=0, eligible=0, notice_ready=0;
+    int direct=0, eligible=0, notice_ready=0, canceled=1;
     __u64 now=bpf_ktime_get_ns();
     bpf_spin_lock(&anchor->lock);
     if (state->cookie==cookie) {
         buffer_expire_bar(anchor,now);
         buffer_maybe_forward(state);
         direct=state->mode==BUFFER_FORWARD;
+        canceled=state->mode!=BUFFER_HOLD && state->mode!=BUFFER_DRAIN;
         // NOCP observes arrival independently of every packet-storage bound.
         // TS 29.244 V20.1.0 clause 5.2.3.1.
         if ((far->action&FAR_NOCP) && !uplink && pdr_id<=0xffff && state->mode==BUFFER_HOLD) {
@@ -380,12 +394,13 @@ static __noinline int buffer_admit(struct packet_context *ctx, const struct pdr 
     bpf_spin_unlock(&anchor->lock);
     if (notice_ready) { __u32 ready=1;bpf_map_update_elem(&buffer_notice_ready,&id,&ready,BPF_ANY); }
     if (direct) return BUFFER_DIRECT;
-    if (!eligible) { __sync_fetch_and_add(&pool->dropped,1); return XDP_DROP; }
+    if (!eligible) { buffer_count_drop(pool,anchor,canceled); return XDP_DROP; }
     struct buffer_pending *pending=bpf_map_lookup_elem(&buffer_pending_packet,&key);
     if (!pending) {
         bpf_spin_lock(&anchor->lock);
         if (state->cookie==cookie && state->preparing) { state->preparing--; buffer_maybe_forward(state); }
         bpf_spin_unlock(&anchor->lock);
+        buffer_count_drop(pool,anchor,0);
         return XDP_DROP;
     }
     pending->session_id=id;
@@ -450,20 +465,20 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     struct buffer_pool *pool=bpf_map_lookup_elem(&buffer_pool,&key);
     if (!anchor || !state || !pool) return XDP_DROP;
     __u64 raw_length=(__u64)ctx->data_end-ctx->data;
-    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) { __sync_fetch_and_add(&pool->dropped,1);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
+    if (raw_length<14 || raw_length>BUFFER_FRAME_SIZE) { buffer_count_drop(pool,anchor,0);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
     __u32 length=raw_length;
     asm volatile("" : "+r"(length));
     length &= 0xfff;
-    if (length<14 || length>BUFFER_FRAME_SIZE) { __sync_fetch_and_add(&pool->dropped,1);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
+    if (length<14 || length>BUFFER_FRAME_SIZE) { buffer_count_drop(pool,anchor,0);buffer_prepare_failed(anchor,state,cookie); return XDP_DROP; }
     int credit=0;
     bpf_spin_lock(&pool->lock);
     if (pool->outstanding<pool->limit) { pool->outstanding++;credit=1; }
-    else __sync_fetch_and_add(&pool->dropped,1);
     bpf_spin_unlock(&pool->lock);
-    if (!credit) { buffer_prepare_failed(anchor,state,cookie);return XDP_DROP; }
+    if (!credit) { buffer_count_drop(pool,anchor,0);buffer_prepare_failed(anchor,state,cookie);return XDP_DROP; }
     struct buffer_record *record=bpf_ringbuf_reserve(&buffer_events,sizeof(*record),0);
     if (!record) {
-        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        bpf_spin_lock(&pool->lock);pool->outstanding--;bpf_spin_unlock(&pool->lock);
+        buffer_count_drop(pool,anchor,0);
         buffer_prepare_failed(anchor,state,cookie); return XDP_DROP;
     }
     volatile __u64 *words=(void *)record->packet;
@@ -471,7 +486,8 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     for (int i=0;i<BUFFER_FRAME_SIZE/8;i++) words[i]=0;
     if (bpf_probe_read_kernel(record->packet,length,(void *)(long)ctx->data)) {
         bpf_ringbuf_discard(record,0);
-        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        bpf_spin_lock(&pool->lock);pool->outstanding--;bpf_spin_unlock(&pool->lock);
+        buffer_count_drop(pool,anchor,0);
         buffer_prepare_failed(anchor,state,cookie);
         return XDP_DROP;
     }
@@ -500,10 +516,11 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     }
     record->notify=pending->notify;
     record->reserved=pending->downlink;
-    int admitted=0;
+    int admitted=0,canceled=1;
     bpf_spin_lock(&anchor->lock);
     if (state->cookie==cookie && state->preparing) {
         state->preparing--;
+        canceled=state->mode!=BUFFER_HOLD && state->mode!=BUFFER_DRAIN;
         buffer_expire_bar(anchor,record->received_ns);
         if ((state->mode==BUFFER_HOLD || state->mode==BUFFER_DRAIN) &&
             state->produced!=~0ULL && anchor->outstanding<anchor->limit &&
@@ -519,7 +536,8 @@ int upf_buffer_admission_func(struct xdp_md *ctx) {
     bpf_spin_unlock(&anchor->lock);
     if (!admitted) {
         bpf_ringbuf_discard(record,0);
-        bpf_spin_lock(&pool->lock);pool->outstanding--;__sync_fetch_and_add(&pool->dropped,1);bpf_spin_unlock(&pool->lock);
+        bpf_spin_lock(&pool->lock);pool->outstanding--;bpf_spin_unlock(&pool->lock);
+        buffer_count_drop(pool,anchor,canceled);
         return XDP_DROP;
     }
     bpf_ringbuf_submit(record,0);

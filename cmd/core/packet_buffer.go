@@ -36,12 +36,13 @@ type packetBufferSender interface {
 }
 
 type bufferedPacket struct {
-	record  ebpf.BufferRecord
-	arrived time.Time
-	next    uint32
-	owner   *bufferOwner
-	cycle   *bufferCycle
-	sent    bool
+	record        ebpf.BufferRecord
+	arrived       time.Time
+	next          uint32
+	owner         *bufferOwner
+	cycle         *bufferCycle
+	sent          bool
+	discardReason string
 }
 type bufferCycle struct {
 	farID                                                   uint32
@@ -64,6 +65,7 @@ type packetBufferSession struct {
 	revision uint64
 }
 type bufferOwner struct {
+	discardExpiry, discardCancellation uint64
 	noticeReady                        bool
 	conn                               *PfcpConnection
 	association                        *NodeAssociation
@@ -81,31 +83,34 @@ type bufferOwner struct {
 // shared by N4/Sxa/Sxb. Session queues and their records are owned by stateMu;
 // mu protects only shared registry, admission reservations and free slot IDs.
 type PacketBuffering struct {
-	prepareOnce              sync.Once
-	prepareCancelOnce        sync.Once
-	prepareDone, prepareStop chan struct{}
-	prepareError             error
-	plane                    *ebpf.BpfObjects
-	sender                   packetBufferSender
-	complete                 func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
-	reader                   *ebpf.BufferReader
-	options                  BufferingOptions
-	mu                       sync.Mutex
-	owners                   map[uint64]*bufferOwner
-	work                     map[uint64]*bufferOwner
-	reserved                 uint32
-	storage                  []byte
-	entries                  []bufferedPacket
-	free                     []uint32
-	closed                   bool
-	stop                     chan struct{}
-	progress                 chan struct{}
-	failures                 chan error
-	wg                       sync.WaitGroup
-	closeOnce                sync.Once
-	closeError               error
-	baseTime                 time.Time
-	baseNS                   uint64
+	metricsMu                        sync.Mutex
+	metricsRetained                  uint32
+	metricsOverflow, metricsCanceled uint64
+	prepareOnce                      sync.Once
+	prepareCancelOnce                sync.Once
+	prepareDone, prepareStop         chan struct{}
+	prepareError                     error
+	plane                            *ebpf.BpfObjects
+	sender                           packetBufferSender
+	complete                         func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
+	reader                           *ebpf.BufferReader
+	options                          BufferingOptions
+	mu                               sync.Mutex
+	owners                           map[uint64]*bufferOwner
+	work                             map[uint64]*bufferOwner
+	reserved                         uint32
+	storage                          []byte
+	entries                          []bufferedPacket
+	free                             []uint32
+	closed                           bool
+	stop                             chan struct{}
+	progress                         chan struct{}
+	failures                         chan error
+	wg                               sync.WaitGroup
+	closeOnce                        sync.Once
+	closeError                       error
+	baseTime                         time.Time
+	baseNS                           uint64
 }
 
 // NewPacketBuffering preallocates payloads and starts the sole ring consumer.
@@ -474,6 +479,7 @@ func (buffering *PacketBuffering) servicePackets() {
 			return
 		case <-ticker.C:
 		}
+		buffering.sampleMetrics()
 		for range 512 {
 			var id uint64
 			if err := buffering.plane.BufferNoticeReady.NextKey(nil, &id); err != nil {
@@ -563,6 +569,23 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				buffering.ioFailure(cycle, now, fmt.Errorf("complete admitted buffer: %w", err))
 				break
 			}
+			// Only acknowledged removals contribute. A successful hand-over
+			// remains a send even when cancellation arrives before its ACK.
+			reason := packet.discardReason
+			if !packet.sent {
+				reason = "expiry"
+				if owner.canceled || cycle.canceled {
+					reason = "cancellation"
+				}
+			}
+			if reason != "" {
+				bufferDiscardedPackets.WithLabelValues(reason).Inc()
+				if reason == "expiry" {
+					owner.discardExpiry++
+				} else {
+					owner.discardCancellation++
+				}
+			}
 			cycle.failedAt = time.Time{}
 			index := cycle.head
 			cycle.head = packet.next
@@ -617,10 +640,18 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			buffering.fail(err)
 			return
 		}
+		overflow, canceled, err := buffering.plane.BufferLifetimeDiscards(owner.session.LocalSEID)
+		if err != nil {
+			buffering.fail(err)
+			return
+		}
 		if err := buffering.plane.BufferAnchors.Delete(owner.session.LocalSEID); err != nil {
 			buffering.fail(err)
 			return
 		}
+		log.Debug().Uint64("seid", owner.session.LocalSEID).Uint64("overflow", overflow).
+			Uint64("expiry", owner.discardExpiry).Uint64("cancellation", canceled+owner.discardCancellation).
+			Msg("Retire packet buffering lifetime")
 		buffering.mu.Lock()
 		if !owner.released {
 			owner.released = true
@@ -702,6 +733,7 @@ func (buffering *PacketBuffering) Close() error {
 		close(buffering.stop)
 		buffering.closeError = errors.Join(buffering.closeError, buffering.reader.Close())
 		buffering.wg.Wait()
+		buffering.sampleMetrics()
 		buffering.closeError = errors.Join(buffering.closeError, buffering.sender.Close())
 	})
 	return buffering.closeError
@@ -842,6 +874,9 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 		if packet.owner == owner && packet.cycle == chosen && packet.record.Sequence == record.Sequence {
 			if sent {
 				packet.sent = true
+				if rendered.Action <= 1 {
+					packet.discardReason = "cancellation"
+				}
 				chosen.failedAt = time.Time{}
 			} else if err != nil {
 				buffering.ioFailure(chosen, time.Now(), err)
