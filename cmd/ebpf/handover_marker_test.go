@@ -18,7 +18,7 @@ func TestHandoverMarkerDoesNotRelayDiscardRequiredExtension(t *testing.T) {
 	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1})
 	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0x41, 1, 0xab, 0xcd, 0}
 	packet := outerDatapath(t, g, false)
-	action, out := runDatapath(t, b, packet)
+	action, out := runHandoverDatapath(t, b, packet)
 	if action != 2 {
 		t.Fatalf("discard-required extension relayed: action=%d", action)
 	}
@@ -34,7 +34,7 @@ func TestHandoverMarkerDropsComprehensionRequiredExtension(t *testing.T) {
 	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0xc5, 1, 0xab, 0xcd, 0}
 	before := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfExtStat()
-	action, _ := runDatapath(t, b, outerDatapath(t, g, false))
+	action, _ := runHandoverDatapath(t, b, outerDatapath(t, g, false))
 	after := (&UpfXdpActionStatistic{BpfObjects: b}).GetUpfExtStat()
 	if action != 1 {
 		t.Fatalf("comprehension-required marker action=%d want drop", action)
@@ -50,7 +50,7 @@ func TestHandoverMarkerInsertsMappedQFIWithoutChargingData(t *testing.T) {
 	putDatapath(t, b.FarMap.Put, uint32(1), &IpEntrypointFarInfo{InsertHandoverContainer: 1, Action: 2, OuterHeaderCreation: 1, Teid: 20, Remoteip: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3})})
 	putDatapath(t, b.QerMap.Put, uint32(1), &IpEntrypointQerInfo{Qfi: 9, QfiPresent: 1, DlGateStatus: 1, UlGateStatus: 1, Rqi: 1})
 	g := []byte{0x30, 254, 0, 0, 0, 0, 0, 10}
-	action, out := runDatapath(t, b, outerDatapath(t, g, false))
+	action, out := runHandoverDatapath(t, b, outerDatapath(t, g, false))
 	if action != 4 || len(out) < 58 {
 		t.Fatalf("marker action=%d length=%d", action, len(out))
 	}
@@ -85,13 +85,13 @@ func TestHandoverMarkerSelectsMappedPDR(t *testing.T) {
 	// TS 29.281 V19.2.0 clauses 5.2.2.7 and 7.3.2.1: an ordinary
 	// marker has no QFI and follows the first ingress-matching PDR.
 	marker := []byte{0x30, 254, 0, 0, 0, 0, 0, 10}
-	action, out := runDatapath(t, b, outerDatapath(t, marker, false))
+	action, out := runHandoverDatapath(t, b, outerDatapath(t, marker, false))
 	if action != 4 || binary.BigEndian.Uint32(out[46:50]) != 20 {
 		t.Fatalf("container-less ordinary marker dropped or misrouted: action=%d", action)
 	}
 	for _, qfi := range []byte{7, 9, 11} {
 		g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0x85, 1, 0, qfi, 0}
-		action, out := runDatapath(t, b, outerDatapath(t, g, false))
+		action, out := runHandoverDatapath(t, b, outerDatapath(t, g, false))
 		if qfi == 11 {
 			if action != 1 {
 				t.Fatal("unmapped QFI forwarded")
@@ -124,7 +124,7 @@ func TestHandoverMarkerDeletesOnlyTheContainer(t *testing.T) {
 					g[0] |= 2
 				}
 				binary.BigEndian.PutUint16(g[2:4], uint16(len(g)-8))
-				action, out := runDatapath(t, b, outerDatapath(t, g, options))
+				action, out := runHandoverDatapath(t, b, outerDatapath(t, g, options))
 				offset := 42
 				if options {
 					offset += 4
@@ -152,7 +152,7 @@ func TestHandoverMarkerDropsTheEmptyOptionalWord(t *testing.T) {
 		if sequence {
 			g[0] |= 2
 		}
-		action, out := runDatapath(t, b, outerDatapath(t, g, false))
+		action, out := runHandoverDatapath(t, b, outerDatapath(t, g, false))
 		if action != 4 {
 			t.Fatal(action)
 		}
@@ -191,7 +191,7 @@ func TestHandoverDataUsesTheSameContainerMapping(t *testing.T) {
 			if err := b.PutPdrUplink(10, pdr); err != nil {
 				t.Fatal(err)
 			}
-			action, out := runDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), optional, flags, false))
+			action, out := runHandoverDatapath(t, b, gtpDatapath(t, udpDatapath(t, false), optional, flags, false))
 			if action != 4 || out[42] != want {
 				t.Fatalf("data container mapping action=%d flags=%x want=%x", action, out[42], want)
 			}
@@ -214,7 +214,7 @@ func TestHandoverMarkerNeverLeavesN19(t *testing.T) {
 	if err := b.UpdateFar(1, FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 20, RemoteIP: binary.LittleEndian.Uint32(net.IP{192, 0, 2, 3}), EndMarkerSuppressed: true}); err != nil {
 		t.Fatal(err)
 	}
-	action, _ := runDatapath(t, b, outerDatapath(t, []byte{0x30, 254, 0, 0, 0, 0, 0, 10}, false))
+	action, _ := runHandoverDatapath(t, b, outerDatapath(t, []byte{0x30, 254, 0, 0, 0, 0, 0, 10}, false))
 	if action != 1 {
 		t.Fatal("End Marker sent over N19")
 	}

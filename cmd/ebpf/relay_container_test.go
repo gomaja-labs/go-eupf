@@ -38,7 +38,7 @@ func TestOrdinaryRelayPreservesGTPOptions(t *testing.T) {
 						binary.BigEndian.PutUint16(g[2:4], uint16(len(g)-8))
 						input = outerDatapath(t, g, false)
 					}
-					action, output := runDatapath(t, b, input)
+					action, output := runHandoverDatapath(t, b, input)
 					if action != 4 {
 						t.Fatalf("action=%d", action)
 					}
