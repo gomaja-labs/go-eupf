@@ -678,7 +678,10 @@ static __noinline enum xdp_action handle_end_marker(struct packet_context *ctx) 
         if (i>=session->count) break;
         const struct pdr_entry *entry=&session->entries[i];
         if (entry->source_interface_present && entry->source_interface!=source) continue;
-        if (entry->qfi_count) {
+        // TS 29.281 V19.2.0 clauses 5.2.2.7 and 7.3.2.1: ordinary
+        // End Markers can omit the container; relay one through the first
+        // ingress-matching PDR. A present QFI still selects its E-RAB.
+        if (entry->qfi_count && ctx->qfi_present) {
             int matches=0;
             for (int j=0;j<QFI_LIST_SIZE;j++) {
                 if (j>=entry->qfi_count) break;

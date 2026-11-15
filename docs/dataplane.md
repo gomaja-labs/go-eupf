@@ -47,9 +47,13 @@ Extension Headers Notifications share a global 100 responses/second budget to
 bound reflection. Echo Responses are not policed by this budget.
 
 Received End Markers for unknown contexts are consumed. An intermediate UPF
-selects a known End Marker by ingress interface and QFI, then forwards it
+selects a known End Marker by ingress interface and, when present, QFI, then forwards it
 through that PDR's FAR without applying QER gates/rates or charging URRs; a terminal UPF consumes it (clause 7.3.2). Ordinary End Markers on control-plane tunnel switches are generated after the
 rule grace period; see [transmission limits](rule-capabilities.md#end-marker-transmission).
+A container-less ordinary marker uses the first PDR matching the ingress
+interface, even when the PDRs have QFI lists; a present unmatched QFI is dropped.
+Exactly one frame leaves per received marker (TS 29.281 V19.2.0 clauses 5.2.2.7
+and 7.3.2.1; TS 29.244 V20.1.0 clause 5.17.3).
 Inter-system forwarding adds the PDR QER's QFI or removes the PDU Session
 Container as the PDR requests (TS 29.244 V20.1.0 clause 5.17.3). N19 and N19mb
 suppress markers. Propagation of received Error Indications to the control

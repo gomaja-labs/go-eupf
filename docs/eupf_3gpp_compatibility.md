@@ -21,7 +21,11 @@ REST changes; advertised F-TEID, S1-U/S5S8 and PA addresses do not select it
 (TS 29.281 V19.2.0 clause 4.4.3.6).
 EMPU is advertised. Labeled N3/N9 data-forwarding tunnels use the old PDR
 container-deletion instruction or a mapped QER QFI for SNDEM. Received markers
-select the E-RAB by QFI and apply the same insertion/deletion as G-PDUs.
+select the E-RAB by QFI when it is present and apply the same insertion/deletion
+as G-PDUs. A container-less ordinary End Marker follows the first PDR matching
+the ingress interface, regardless of QFI lists; a present unmatched QFI is dropped.
+One frame leaves per received marker (TS 29.281 V19.2.0 clauses 5.2.2.7 and
+7.3.2.1; TS 29.244 V20.1.0 clause 5.17.3).
 N19 and N19mb do not emit or relay End Markers
 (TS 29.244 V20.1.0 clause 5.3.2; TS 29.281 V19.2.0 clause 7.3.2).
 

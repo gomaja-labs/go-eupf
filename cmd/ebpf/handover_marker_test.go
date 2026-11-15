@@ -65,6 +65,13 @@ func TestHandoverMarkerSelectsMappedPDR(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// TS 29.281 V19.2.0 clauses 5.2.2.7 and 7.3.2.1: an ordinary
+	// marker has no QFI and follows the first ingress-matching PDR.
+	marker := []byte{0x30, 254, 0, 0, 0, 0, 0, 10}
+	action, out := runDatapath(t, b, outerDatapath(t, marker, false))
+	if action != 4 || binary.BigEndian.Uint32(out[46:50]) != 20 {
+		t.Fatalf("container-less ordinary marker dropped or misrouted: action=%d", action)
+	}
 	for _, qfi := range []byte{7, 9, 11} {
 		g := []byte{0x34, 254, 0, 8, 0, 0, 0, 10, 0, 0, 0, 0x85, 1, 0, qfi, 0}
 		action, out := runDatapath(t, b, outerDatapath(t, g, false))
