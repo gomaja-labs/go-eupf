@@ -287,3 +287,10 @@ that timer sends one UPIR and preserves the session until the CP supplies furthe
 instructions (clause 5.11.2). Activity sampling targets 100 ms, with receive-loop
 and scheduler delay. See [PFCP transport](pfcp-transport.md) for update,
 reclamation and failure semantics. Per-PDR UPINT is rejected.
+
+Unsigned configuration values are decoded without narrowing, wrapping, fractional
+truncation or boolean-to-number conversion before their common range validation.
+This applies to UPF settings and PCC rule values. Decimal strings used by flags
+and environment variables and comma-separated interface lists retain their normal
+parsing. Invalid numeric input is rejected before it can enable a short inactivity
+release timeout or change a rule identifier.

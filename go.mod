@@ -8,6 +8,7 @@ require (
 	github.com/gin-contrib/cors v1.7.11
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-resty/resty/v2 v2.17.2
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gomaja-labs/go-pfcp v0.0.0-20261115165234-7abe21e4877c
 	github.com/gopacket/gopacket v1.7.7
 	github.com/jedib0t/go-pretty/v6 v6.8.3
@@ -46,7 +47,6 @@ require (
 	github.com/go-openapi/swag/stringutils v0.29.2 // indirect
 	github.com/go-openapi/swag/typeutils v0.29.2 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
-	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.16 // indirect

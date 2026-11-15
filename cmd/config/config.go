@@ -499,7 +499,7 @@ func (c *UpfConfig) Validate() error {
 func (c *UpfConfig) Unmarshal() error {
 	configMu.Lock()
 	defer configMu.Unlock()
-	if err := commonConfigV.UnmarshalExact(c); err != nil {
+	if err := unmarshalConfiguration(commonConfigV, c); err != nil {
 		return err
 	}
 	c.n3AdvertisedExplicit = explicitAddress("n3_adv_address", "n3advaddr", c.N3AdvertisedAddress)
@@ -544,7 +544,7 @@ func (pcr *PCCRulesConfig) Validate() error {
 
 // Unmarshal data from config file
 func (pcr *PCCRulesConfig) Unmarshal() error {
-	return pccConfigV.UnmarshalExact(pcr)
+	return unmarshalConfiguration(pccConfigV, pcr)
 }
 
 func (c *UpfConfig) UpdateFile(params map[string]interface{}) error {
