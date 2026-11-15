@@ -372,6 +372,12 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	}
 	// TS 29.244 V20.1.0 clauses 5.2.4.3 and 8.2.31: discard the
 	// previous queue before applying the FARs selected by this request.
+	if bufferingModificationChanged(previousSession, session, dropBuffered, notifyFARs) {
+		if session.bufferControlRevision == math.MaxUint64 {
+			return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
+		}
+		session.bufferControlRevision++
+	}
 	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, dropBuffered, notifyFARs...)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)

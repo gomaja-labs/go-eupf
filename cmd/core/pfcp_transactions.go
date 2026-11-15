@@ -140,9 +140,7 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 		if session := association.Sessions[localSEID]; session != nil {
 			request.reportBAR = session.bar
 			request.reportBufferState = session.downlink
-			if session.buffers != nil {
-				request.reportBufferRevision = session.buffers.revision
-			}
+			request.reportBufferRevision = session.bufferControlRevision
 			if session.downlink != nil {
 				request.reportBufferGeneration = session.downlink.generation
 			}

@@ -18,24 +18,25 @@ var (
 )
 
 type Session struct {
-	bufferPlan    *packetBufferPlan
-	buffers       *packetBufferSession
-	downlink      *downlinkNotifications
-	bar           *bufferingActionRule
-	barRevision   uint64
-	urrGeneration uint64
-	LocalSEID     uint64
-	RemoteSEID    uint64
-	CPFSEIDIPv4   net.IP // TS 29.244 V20.1.0 clause 4.3.2: session request destination.
-	CPFSEIDIPv6   net.IP
-	IMSI          string
-	MSISDN        string
-	PDRs          map[uint32]SPDRInfo
-	FARs          map[uint32]SFarInfo
-	QERs          map[uint32]SQerInfo
-	URRs          map[uint32]SUrrInfo
-	Traced        bool
-	Is5G          bool
+	bufferControlRevision uint64
+	bufferPlan            *packetBufferPlan
+	buffers               *packetBufferSession
+	downlink              *downlinkNotifications
+	bar                   *bufferingActionRule
+	barRevision           uint64
+	urrGeneration         uint64
+	LocalSEID             uint64
+	RemoteSEID            uint64
+	CPFSEIDIPv4           net.IP // TS 29.244 V20.1.0 clause 4.3.2: session request destination.
+	CPFSEIDIPv6           net.IP
+	IMSI                  string
+	MSISDN                string
+	PDRs                  map[uint32]SPDRInfo
+	FARs                  map[uint32]SFarInfo
+	QERs                  map[uint32]SQerInfo
+	URRs                  map[uint32]SUrrInfo
+	Traced                bool
+	Is5G                  bool
 }
 
 func NewSession(localSEID, remoteSEID uint64, IMSI, MSISDN string, traced bool) *Session {

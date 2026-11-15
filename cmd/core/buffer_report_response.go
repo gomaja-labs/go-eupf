@@ -4,8 +4,11 @@
 package core
 
 import (
+	"bytes"
 	"errors"
+	"github.com/rs/zerolog/log"
 	"math"
+	"reflect"
 	"time"
 
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -37,10 +40,8 @@ func (conn *PfcpConnection) validateBufferReportResponseLocked(request *pendingR
 		return errors.New("buffer response has no bound association")
 	}
 	session := request.association.Sessions[request.localSEID]
-	if session == nil {
-		return nil
-	}
-	if !conn.reportBufferContextCurrent(request, session) {
+	if reason := conn.reportBufferContextMismatch(request, session); reason != "" {
+		logDiscardedBufferControl(request, reason)
 		return nil
 	}
 	candidate := *session
@@ -56,14 +57,97 @@ func (conn *PfcpConnection) validateBufferReportResponseLocked(request *pendingR
 	request.bufferUpdate = &bufferReportUpdate{request: request, after: candidate.bar, drop: drop}
 	return nil
 }
-func (conn *PfcpConnection) reportBufferContextCurrent(request *pendingRequest, session *Session) bool {
-	if request.reportBAR != session.bar || request.reportBufferState != session.downlink || !conn.reportAddressCurrent(request, session) {
-		return false
+
+// Internal rule generations and drain retirement do not represent a new CP
+// instruction. TS 29.244 V20.1.0 clauses 7.5.9.1/.2 and 8.2.32.
+func (conn *PfcpConnection) reportBufferContextMismatch(request *pendingRequest, session *Session) string {
+	if session == nil {
+		return "session removed"
 	}
-	if session.buffers != nil && request.reportBufferRevision != session.buffers.revision {
-		return false
+	if request.reportBAR != session.bar {
+		return "BAR changed"
 	}
-	return session.downlink == nil || request.reportBufferGeneration == session.downlink.generation
+	if request.reportBufferState != session.downlink {
+		return "notification lifetime replaced"
+	}
+	if !conn.reportAddressCurrent(request, session) {
+		return "CP F-SEID changed"
+	}
+	if request.reportBufferRevision != session.bufferControlRevision {
+		return "CP buffering instruction changed"
+	}
+	if session.downlink != nil && request.reportBufferGeneration != session.downlink.generation {
+		return "notification generation changed"
+	}
+	return ""
+}
+
+func logDiscardedBufferControl(request *pendingRequest, reason string) {
+	log.Debug().Uint64("seid", request.localSEID).Str("reason", reason).Msg("Discard stale Report Response buffering controls")
+}
+
+// Compare CP rule content, excluding fresh map slots and usage-only changes.
+// A repeated BUFF|NOCP instruction still begins a new period (clause 5.2.3.1).
+func bufferingModificationChanged(before, after *Session, drop bool, notify []uint32) bool {
+	if drop || len(notify) > 0 || before.bar != after.bar {
+		return true
+	}
+	relevant := make(map[uint32]bool)
+	for _, session := range []*Session{before, after} {
+		for id, far := range session.FARs {
+			if far.FarInfo.Action&4 != 0 || session.buffers != nil && session.buffers.cycles[id] != nil {
+				relevant[id] = true
+			}
+		}
+	}
+	for id := range relevant {
+		old, oldExists := before.FARs[id]
+		next, nextExists := after.FARs[id]
+		old.GlobalId, next.GlobalId = 0, 0
+		old.FarInfo.BufferSessionID, old.FarInfo.BufferCookie, old.FarInfo.BufferLane = 0, 0, 0
+		next.FarInfo.BufferSessionID, next.FarInfo.BufferCookie, next.FarInfo.BufferLane = 0, 0, 0
+		if oldExists != nextExists || !reflect.DeepEqual(old, next) {
+			return true
+		}
+	}
+	ids := make(map[uint32]bool)
+	for _, session := range []*Session{before, after} {
+		for id, pdr := range session.PDRs {
+			if pdr.FARID != nil && relevant[*pdr.FARID] {
+				ids[id] = true
+			}
+		}
+	}
+	for id := range ids {
+		old, oldExists := before.PDRs[id]
+		next, nextExists := after.PDRs[id]
+		if !bytes.Equal(old.LocalFTEIDIPv4, next.LocalFTEIDIPv4) {
+			return true
+		}
+		for _, pdr := range []*SPDRInfo{&old, &next} {
+			pdr.LocalFTEIDIPv4 = nil
+			pdr.URRIDs = nil
+			pdr.PdrInfo.UrrIDs = nil
+			pdr.PdrInfo.FarId = 0
+			pdr.PdrInfo.QerIDs = nil
+			pdr.PdrInfo.ReturnFarID = 0
+			pdr.PdrInfo.ReturnQerIDs = nil
+			pdr.PdrInfo.TraceFlag = false
+		}
+		if oldExists != nextExists || !reflect.DeepEqual(old, next) {
+			return true
+		}
+		for _, qid := range next.QERIDs {
+			oldQ, oldExists := before.QERs[qid]
+			nextQ, nextExists := after.QERs[qid]
+			oldQ.GlobalId, nextQ.GlobalId = 0, 0
+			oldQ.QerInfo.PolicerID, nextQ.QerInfo.PolicerID = 0, 0
+			if oldExists != nextExists || oldQ != nextQ {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Buffer controls run after transport.mu is released. Re-check the same
@@ -78,10 +162,12 @@ func (conn *PfcpConnection) flushBufferReportUpdates() {
 		request := work.request
 		assoc := conn.associationByID(request.associationID())
 		if assoc != request.association || activeAssociation(assoc) == nil {
+			logDiscardedBufferControl(request, "association replaced or removed")
 			continue
 		}
 		session := assoc.Sessions[request.localSEID]
-		if session == nil || !conn.reportBufferContextCurrent(request, session) {
+		if reason := conn.reportBufferContextMismatch(request, session); reason != "" {
+			logDiscardedBufferControl(request, reason)
 			continue
 		}
 		if session.buffers != nil {
