@@ -4,12 +4,12 @@
 package core
 
 import (
-	"bytes"
 	"errors"
-	"github.com/rs/zerolog/log"
 	"math"
 	"reflect"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -115,7 +115,7 @@ func bufferingModificationChanged(before, after *Session, drop bool, notify []ui
 	for id := range ids {
 		old, oldExists := before.PDRs[id]
 		next, nextExists := after.PDRs[id]
-		if !bytes.Equal(old.LocalFTEIDIPv4, next.LocalFTEIDIPv4) {
+		if !old.LocalFTEIDIPv4.Equal(next.LocalFTEIDIPv4) {
 			return true
 		}
 		for _, pdr := range []*SPDRInfo{&old, &next} {

@@ -125,13 +125,14 @@ func TestBufferingRevisionIgnoresUsageAndInternalSlots(t *testing.T) {
 	base := NewSession(11, 77, "", "", false)
 	fid := uint32(1)
 	base.FARs[1] = SFarInfo{GlobalId: 1, FarInfo: ebpf.FarInfo{Action: 12}}
-	base.PDRs[1] = SPDRInfo{PdrID: 1, FARID: &fid, QERIDs: []uint32{1}, URRIDs: []uint32{1}}
+	base.PDRs[1] = SPDRInfo{LocalFTEIDIPv4: net.IP{192, 0, 2, 1}, PdrID: 1, FARID: &fid, QERIDs: []uint32{1}, URRIDs: []uint32{1}}
 	base.QERs[1] = SQerInfo{GlobalId: 1, QerInfo: ebpf.QerInfo{Qfi: 5, QFIPresent: true}}
 	for _, tc := range []struct {
 		name   string
 		change func(*Session)
 		want   bool
 	}{
+		{"mapped IPv4 representation", func(s *Session) { p := s.PDRs[1]; p.LocalFTEIDIPv4 = net.IPv4(192, 0, 2, 1); s.PDRs[1] = p }, false},
 		{"usage binding", func(s *Session) {
 			p := s.PDRs[1]
 			p.URRIDs = []uint32{2}
