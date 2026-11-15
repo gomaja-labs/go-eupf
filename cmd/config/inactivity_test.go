@@ -1,8 +1,9 @@
 package config
 
 import (
-	"github.com/spf13/pflag"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 func TestInactivityReleaseConfigurationSources(t *testing.T) {
