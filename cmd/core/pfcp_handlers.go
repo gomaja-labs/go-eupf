@@ -31,7 +31,9 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 	if parseErr != nil {
 		log.Warn().Err(parseErr).Str("peer", addr.String()).Msg("Invalid PFCP datagram")
 		results = append(results, parseErr)
-		for _, failure := range datagramFailures(parseErr) {
+		var failures message.DatagramErrors
+		_ = errors.As(parseErr, &failures)
+		for _, failure := range failures {
 			if bundled && !conn.bundleHeaderNegotiated(failure.Header, addr) {
 				continue
 			}
@@ -115,24 +117,6 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 	}
 
 	return errors.Join(results...)
-}
-
-func datagramFailures(err error) []*message.DatagramError {
-	if err == nil {
-		return nil
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		var failures []*message.DatagramError
-		for _, child := range joined.Unwrap() {
-			failures = append(failures, datagramFailures(child)...)
-		}
-		return failures
-	}
-	var failure *message.DatagramError
-	if errors.As(err, &failure) {
-		return []*message.DatagramError{failure}
-	}
-	return nil
 }
 
 func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr, local netip.AddrPort, contexts ...*NodeAssociation) error {

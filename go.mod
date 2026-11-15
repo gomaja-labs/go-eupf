@@ -8,7 +8,7 @@ require (
 	github.com/gin-contrib/cors v1.7.11
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-resty/resty/v2 v2.17.2
-	github.com/gomaja-labs/go-pfcp v0.0.0-20261112160056-1286f59a776d
+	github.com/gomaja-labs/go-pfcp v0.0.0-20261115165234-7abe21e4877c
 	github.com/gopacket/gopacket v1.7.7
 	github.com/jedib0t/go-pretty/v6 v6.8.3
 	github.com/korylprince/ipnetgen v1.0.1
