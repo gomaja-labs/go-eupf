@@ -107,7 +107,15 @@ func (b *BpfObjects) CreateBufferAnchor(session uint64, limit uint32, lanes []Bu
 
 // BufferCommand changes one lifetime or reads its admission/completion state.
 // Operation zero acknowledges exactly one sequence; retries are idempotent.
+type bufferNoticeSnapshot struct {
+	seen, pending             uint64
+	absentSeen, absentPending uint32
+	times                     [65]uint64
+	pdrs                      [65]uint16
+}
+
 type BufferCommand struct {
+	notices                                                           *bufferNoticeSnapshot
 	SessionID, Cookie, Sequence                                       uint64
 	Lane, Operation, Mode, Ready, Limit, Outstanding                  uint32
 	Produced, Completed                                               uint64
@@ -134,7 +142,11 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 			return BufferCommand{}, err
 		}
 	}
-	data := make([]byte, 96)
+	size := 96
+	if command.Operation == 10 || command.Operation == 11 {
+		size += 680
+	}
+	data := make([]byte, size)
 	binary.LittleEndian.PutUint64(data, command.SessionID)
 	binary.LittleEndian.PutUint64(data[8:], command.Cookie)
 	binary.LittleEndian.PutUint64(data[16:], command.Sequence)
@@ -151,7 +163,20 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 		binary.LittleEndian.PutUint32(data[84:], 1)
 	}
 	binary.LittleEndian.PutUint64(data[88:], command.BARUntilNS)
-	output := make([]byte, 96)
+	if command.Operation == 11 && command.notices != nil {
+		saved := command.notices
+		binary.LittleEndian.PutUint64(data[96:], saved.seen)
+		binary.LittleEndian.PutUint64(data[104:], saved.pending)
+		binary.LittleEndian.PutUint32(data[112:], saved.absentSeen)
+		binary.LittleEndian.PutUint32(data[116:], saved.absentPending)
+		for i := range saved.times {
+			binary.LittleEndian.PutUint64(data[120+8*i:], saved.times[i])
+		}
+		for i := range saved.pdrs {
+			binary.LittleEndian.PutUint16(data[640+2*i:], saved.pdrs[i])
+		}
+	}
+	output := make([]byte, size)
 	action, err := program.Run(&cilium.RunOptions{Data: data, DataOut: output})
 	if err != nil || action != 1 {
 		if command.Operation == 5 {
@@ -166,6 +191,16 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 		if err := b.BufferStates.Delete(key); err != nil {
 			return BufferCommand{}, err
 		}
+	}
+	if command.Operation == 10 {
+		saved := &bufferNoticeSnapshot{seen: binary.LittleEndian.Uint64(output[96:]), pending: binary.LittleEndian.Uint64(output[104:]), absentSeen: binary.LittleEndian.Uint32(output[112:]), absentPending: binary.LittleEndian.Uint32(output[116:])}
+		for i := range saved.times {
+			saved.times[i] = binary.LittleEndian.Uint64(output[120+8*i:])
+		}
+		for i := range saved.pdrs {
+			saved.pdrs[i] = binary.LittleEndian.Uint16(output[640+2*i:])
+		}
+		command.notices = saved
 	}
 	command.Mode = binary.LittleEndian.Uint32(output[32:])
 	command.Ready = binary.LittleEndian.Uint32(output[36:])
@@ -192,7 +227,7 @@ func (b *BpfObjects) BufferControl(command BufferCommand) (BufferCommand, error)
 // JournalBufferControl stages admission mode or capacity with rule publication.
 // Rollback preserves counters changed by packet producers and the ring reader.
 func (tx *ruleTransaction) JournalBufferControl(command BufferCommand) error {
-	if tx.finished || command.SessionID != tx.sessionID || (command.Operation != 1 && command.Operation != 2 && command.Operation != 7) {
+	if tx.finished || command.SessionID != tx.sessionID || (command.Operation != 1 && command.Operation != 2 && command.Operation != 7 && command.Operation != 10) {
 		return errors.New("invalid journal buffering control")
 	}
 	query := command
@@ -206,14 +241,21 @@ func (tx *ruleTransaction) JournalBufferControl(command BufferCommand) error {
 			return err
 		}
 	}
-	if _, err := tx.objects.BufferControl(command); err != nil {
+	changed, err := tx.objects.BufferControl(command)
+	if err != nil {
 		return err
+	}
+	if command.Operation == 10 {
+		previous = changed
 	}
 	tx.dirty = true
 	tx.undo = append(tx.undo, func() error {
 		previous.Operation = 4
 		if command.Operation == 2 || command.Operation == 7 {
 			previous.Operation = command.Operation
+		}
+		if command.Operation == 10 {
+			previous.Operation = 11
 		}
 		_, err := tx.objects.BufferControl(previous)
 		return err

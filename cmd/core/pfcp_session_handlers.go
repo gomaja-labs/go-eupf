@@ -365,7 +365,23 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		}
 	}()
 
-	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, false)
+	var notifyFARs []uint32
+	for _, update := range req.UpdateFAR {
+		fields, err := update.UpdateFAR()
+		if err != nil {
+			return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
+		}
+		if fields.ApplyAction != nil {
+			id, err := fields.FARID.FARID()
+			if err != nil {
+				return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
+			}
+			if session.FARs[id].FarInfo.Action&12 == 12 {
+				notifyFARs = append(notifyFARs, id)
+			}
+		}
+	}
+	conn.stagePacketBuffering(association, previousSession, session, updateSessionMutation, false, notifyFARs...)
 	if err := operationPool.Commit(); err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()

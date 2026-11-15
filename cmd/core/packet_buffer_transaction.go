@@ -28,11 +28,12 @@ type packetBufferPlan struct {
 	grace                      <-chan struct{}
 	started, finished          bool
 	activated                  time.Time
+	notify                     map[uint32]bool
 }
 
 // Stage only private model values. The common session transaction calls begin
 // after obtaining the rule journal, before publishing any FAR or PDR.
-func (conn *PfcpConnection) stagePacketBuffering(association *NodeAssociation, before, after *Session, kind sessionMutationKind, drop bool) {
+func (conn *PfcpConnection) stagePacketBuffering(association *NodeAssociation, before, after *Session, kind sessionMutationKind, drop bool, notifyFARs ...uint32) {
 	needed := after.buffers != nil || after.bar != nil
 	for _, far := range after.FARs {
 		needed = needed || far.FarInfo.Action&4 != 0
@@ -40,7 +41,16 @@ func (conn *PfcpConnection) stagePacketBuffering(association *NodeAssociation, b
 	if !needed {
 		return
 	}
-	after.bufferPlan = &packetBufferPlan{association: association, before: before, after: after, kind: kind, drop: drop}
+	notify := make(map[uint32]bool)
+	for _, id := range notifyFARs {
+		notify[id] = true
+	}
+	for id, far := range after.FARs {
+		if far.FarInfo.Action&12 == 12 && (before == nil || before.FARs[id].FarInfo.Action&12 != 12) {
+			notify[id] = true
+		}
+	}
+	after.bufferPlan = &packetBufferPlan{association: association, before: before, after: after, kind: kind, drop: drop, notify: notify}
 }
 
 func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransaction) error {
@@ -108,6 +118,13 @@ func (plan *packetBufferPlan) begin(conn *PfcpConnection, tx ebpf.RuleTransactio
 		far.FarInfo.BufferSessionID, far.FarInfo.BufferCookie, far.FarInfo.BufferLane = after.LocalSEID, cycle.cookie, cycle.lane
 		after.FARs[farID] = far
 		if far.FarInfo.Action&4 != 0 {
+			// Every BUFF|NOCP instruction starts a notification period, even
+			// while the preceding drain still owns this lane (clause 5.2.3.1).
+			if plan.notify[farID] {
+				if err := journal.JournalBufferControl(ebpf.BufferCommand{SessionID: after.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 10}); err != nil {
+					return err
+				}
+			}
 			plan.hold = append(plan.hold, cycle)
 			if cycle.draining {
 				if err := journal.JournalBufferControl(ebpf.BufferCommand{SessionID: after.LocalSEID, Cookie: cycle.cookie, Lane: cycle.lane, Operation: 1, Mode: ebpf.BufferHold}); err != nil {
@@ -251,6 +268,23 @@ func (plan *packetBufferPlan) finish(conn *PfcpConnection, committed, terminal b
 	if committed {
 		owner.session = plan.after
 		if state := plan.after.downlink; state != nil {
+			for id := range plan.notify {
+				flow, exists := state.fars[id]
+				if exists {
+					if !conn.resetDownlinkFAR(&flow) {
+						state.stopped = true
+					}
+					state.fars[id] = flow
+				}
+			}
+			kept := state.pending[:0]
+			for _, notice := range state.pending {
+				if !plan.notify[notice.farID] {
+					kept = append(kept, notice)
+				}
+			}
+			clear(state.pending[len(kept):])
+			state.pending = kept
 			for id := range state.fars {
 				far, exists := plan.after.FARs[id]
 				if !exists || far.FarInfo.Action&12 != 12 {

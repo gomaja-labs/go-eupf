@@ -145,6 +145,16 @@ struct buffer_command {
     __u64 bar_until_ns;
 };
 
+// Used only by a notification-period journal reset/undo. Counters and packet
+// ownership remain in the original lane. TS 29.244 V20.1.0 clause 5.2.3.1.
+struct buffer_notice_snapshot {
+    __u64 seen,pending;
+    __u32 absent_seen,absent_pending;
+    __u64 times[65];
+    __u16 pdrs[65];
+    __u8 reserved[6];
+};
+
 static __always_inline void buffer_expire_bar(struct buffer_anchor *anchor, __u64 now) {
     if (anchor->bar_until_ns && now>=anchor->bar_until_ns) {
         anchor->bar_until_ns=0;
@@ -163,7 +173,9 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
     __u32 bar_limit=command->bar_limit,dl_limit=command->bar_dl_limit;
     __u32 uses_bar=command->uses_bar,downlink=command->downlink;
     __u64 until=command->bar_until_ns;
-    if (operation>10 || mode>BUFFER_DISCARD || ready>1 || uses_bar>1 || downlink>1) return XDP_ABORTED;
+    if (operation>11 || mode>BUFFER_DISCARD || ready>1 || uses_bar>1 || downlink>1) return XDP_ABORTED;
+    struct buffer_notice_snapshot *saved=(void *)(command+1);
+    if ((operation==10 || operation==11) && (void *)(saved+1)>(void *)(long)ctx->data_end) return XDP_ABORTED;
     struct buffer_anchor *anchor=bpf_map_lookup_elem(&buffer_anchors,&id);
     struct buffer_key state_key={.session_id=id,.lane=lane};
     struct buffer_far *far=bpf_map_lookup_elem(&buffer_states,&state_key);
@@ -235,7 +247,26 @@ int upf_buffer_control_func(struct xdp_md *ctx) {
             else { far->notices=far->seen=0;far->absent_notice=far->absent_seen=0; }
             action=XDP_DROP;
         } else if (operation==10) {
+            saved->seen=far->seen;saved->pending=far->notices;
+            saved->absent_seen=far->absent_seen;saved->absent_pending=far->absent_notice;
+#pragma clang loop unroll(disable)
+            for (int i=0;i<65;i++) { saved->times[i]=far->notice_time[i];saved->pdrs[i]=far->notice_pdr[i]; }
             far->notices=far->seen=0;far->absent_notice=far->absent_seen=0;
+            action=XDP_DROP;
+        } else if (operation==11) {
+            // Preserve observations that arrived during a rejected instruction.
+            // Already-notified old flows keep their old notification status;
+            // an unread old notice keeps its original first packet/time.
+            far->notices=(far->notices & ~saved->seen) | saved->pending;
+            far->seen |= saved->seen;
+            if (saved->absent_seen) far->absent_notice=saved->absent_pending;
+            far->absent_seen |= saved->absent_seen;
+#pragma clang loop unroll(disable)
+            for (int i=0;i<65;i++) {
+                if ((i<64 && (saved->pending & (1ULL<<i))) || (i==64 && saved->absent_pending)) {
+                    far->notice_time[i]=saved->times[i];far->notice_pdr[i]=saved->pdrs[i];
+                }
+            }
             action=XDP_DROP;
         }
         buffer_expire_bar(anchor,now);
