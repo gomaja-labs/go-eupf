@@ -414,7 +414,9 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 }
 func newIeNodeID(nodeID string) *ie.IE {
 	if address, err := netip.ParseAddr(nodeID); err == nil {
-		return ie.NewNodeIDAddress(address)
+		// TS 29.244 V20.1.0 clause 8.2.38: an IPv4-mapped input
+		// identifies an IPv4 node; select that family explicitly on send.
+		return ie.NewNodeIDAddress(address.Unmap())
 	}
 	return ie.NewNodeIDFQDN(nodeID)
 }
