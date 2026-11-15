@@ -57,7 +57,24 @@ func TestApplicationBufferAttachedKernelOnlyXDPKeepsWireOrder(t *testing.T) {
 		t.Run(map[bool]string{false: "IPv4", true: "IPv6"}[v6], func(t *testing.T) { testApplicationBufferAttachedTransition(t, v6, true, true) })
 	}
 }
-func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel bool) {
+func TestApplicationBufferGenericKernelContinuation(t *testing.T) {
+	for _, oneLink := range []bool{false, true} {
+		for _, overlap := range []bool{false, true} {
+			t.Run(fmt.Sprintf("one-link=%t/overlap=%t", oneLink, overlap), func(t *testing.T) {
+				testApplicationBufferAttachedTransition(t, false, true, true, bufferAttachedOptions{generic: true, oneLink: oneLink, overlap: overlap})
+			})
+		}
+	}
+}
+
+type bufferAttachedOptions struct{ generic, oneLink, overlap bool }
+
+func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel bool, options ...bufferAttachedOptions) {
+	var option bufferAttachedOptions
+	if len(options) > 0 {
+		option = options[0]
+	}
+
 	plane, buffering, conn, assoc, session, _ := publishPacketBufferFixtureOptions(t, BufferingOptions{Packets: 4096, PerSession: 64, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
 	command := func(args ...string) {
 		t.Helper()
@@ -71,6 +88,23 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 		pdr.Ipv6 = net.ParseIP("2001:db8::2")
 		session.PDRs[9] = pdr
 		err := applyPDR(pdr, conn.mapOperations)
+		conn.stateMu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if option.generic {
+		conn.stateMu.Lock()
+		id, err := plane.NewUrr(ebpf.UrrInfo{})
+		if err != nil {
+			conn.stateMu.Unlock()
+			t.Fatal(err)
+		}
+		session.URRs[1] = SUrrInfo{GlobalId: id}
+		pdr := session.PDRs[9]
+		pdr.URRIDs = []uint32{1}
+		session.PDRs[9] = pdr
+		err = conn.rebindSessionRules(session)
 		conn.stateMu.Unlock()
 		if err != nil {
 			t.Fatal(err)
@@ -96,21 +130,31 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	if err := unix.SetsockoptInt(receiver, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, 4<<20); err != nil {
 		t.Fatal(err)
 	}
-	command("link", "add", "buffer-source", "type", "veth", "peer", "name", "buffer-ingress")
-	t.Cleanup(func() {
-		if out, err := exec.Command("ip", "link", "del", "buffer-source").CombinedOutput(); err != nil {
-			t.Errorf("remove ingress: %v %s", err, out)
-		}
-	})
-	command("link", "set", "buffer-source", "up")
-	command("link", "set", "buffer-ingress", "up")
+	ingressName := "buffer-ingress"
+	if option.oneLink {
+		ingressName = "buffer-output"
+	}
+	if !option.oneLink {
+		command("link", "add", "buffer-source", "type", "veth", "peer", "name", "buffer-ingress")
+		t.Cleanup(func() {
+			if out, err := exec.Command("ip", "link", "del", "buffer-source").CombinedOutput(); err != nil {
+				t.Errorf("remove ingress: %v %s", err, out)
+			}
+		})
+		command("link", "set", "buffer-source", "up")
+		command("link", "set", "buffer-ingress", "up")
+	}
 	// The synthetic tunnel source needs an explicit reverse path for Linux RPF.
-	command("route", "add", "192.0.2.0/24", "dev", "buffer-ingress")
-	ingress, err := net.InterfaceByName("buffer-ingress")
+	command("route", "add", "192.0.2.0/24", "dev", ingressName)
+	ingress, err := net.InterfaceByName(ingressName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	attached, err := link.AttachXDP(link.XDPOptions{Program: plane.UpfIpEntrypointFunc, Interface: ingress.Index, Flags: link.XDPDriverMode})
+	mode := link.XDPDriverMode
+	if option.generic {
+		mode = link.XDPGenericMode
+	}
+	attached, err := link.AttachXDP(link.XDPOptions{Program: plane.UpfIpEntrypointFunc, Interface: ingress.Index, Flags: mode})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,19 +163,74 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 			t.Error(err)
 		}
 	})
-	source, err := net.InterfaceByName("buffer-source")
-	if err != nil {
-		t.Fatal(err)
-	}
-	output, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := unix.Close(output); err != nil {
-			t.Error(err)
+	var sourceIndex int
+	var sourceMAC net.HardwareAddr
+	output := receiver
+	if option.oneLink {
+		address, err := unix.Getsockname(receiver)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
+		sourceIndex = address.(*unix.SockaddrLinklayer).Ifindex
+		sourceMAC = net.HardwareAddr{2, 0, 0, 0, 0, 2}
+	} else {
+		source, err := net.InterfaceByName("buffer-source")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceIndex, sourceMAC = source.Index, source.HardwareAddr
+		output, err = unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := unix.Close(output); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if option.overlap {
+		id, err := plane.NewFar(ebpf.FarInfo{Action: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := plane.PutPdrDownlink(net.IP{198, 18, 1, 2}, ebpf.PdrInfo{SessionID: 99, PdrID: 10, FarId: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	statistics := &ebpf.UpfXdpActionStatistic{BpfObjects: plane}
+	if option.generic {
+		for _, corrupt := range []func([]byte){
+			func(frame []byte) { frame[22] ^= 1 },
+			func(frame []byte) { binary.NativeEndian.PutUint32(frame[18:], uint32(ingress.Index+1)) },
+		} {
+			frame, err := plane.BufferKernelEnvelope(bufferKernelPacket(t, 0), uint32(ingress.Index))
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy(frame[:6], ingress.HardwareAddr)
+			corrupt(frame)
+			if err := unix.Sendto(output, frame, 0, &unix.SockaddrLinklayer{Ifindex: sourceIndex, Protocol: binary.NativeEndian.Uint16(frame[12:14])}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			passed, dropped, err := plane.BufferContinuationCounts()
+			if err != nil || passed != 0 || dropped > 2 {
+				t.Fatalf("invalid envelope counts passed=%d dropped=%d error=%v", passed, dropped, err)
+			}
+			if dropped == 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("invalid envelopes not dropped: %d", dropped)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	beforeCounters := statistics.GetUpfExtStat()
+	defer func() { t.Logf("packet counter delta: %+v", beforeCounters.Delta(statistics.GetUpfExtStat())) }()
 	if err := unix.SetsockoptInt(receiver, unix.SOL_SOCKET, unix.SO_TIMESTAMPNS, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -206,13 +305,13 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	for id := range total {
 		frames[id] = bufferAttachedFrame(t, v6, uint16(id+100))
 		copy(frames[id][:6], ingress.HardwareAddr)
-		copy(frames[id][6:12], source.HardwareAddr)
+		copy(frames[id][6:12], sourceMAC)
 	}
 	reached := make(chan struct{})
 	producer := make(chan error, 1)
 	go func() {
 		for id, frame := range frames {
-			if err := unix.Sendto(output, frame, 0, &unix.SockaddrLinklayer{Ifindex: source.Index, Protocol: binary.NativeEndian.Uint16(frame[12:14])}); err != nil {
+			if err := unix.Sendto(output, frame, 0, &unix.SockaddrLinklayer{Ifindex: sourceIndex, Protocol: binary.NativeEndian.Uint16(frame[12:14])}); err != nil {
 				producer <- err
 				return
 			}
@@ -287,6 +386,9 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 			if allKernel {
 				prefix = "attached-kernel-only-ordered"
 			}
+			if option.generic {
+				prefix += fmt.Sprintf("-generic-one-link-%t-overlap-%t", option.oneLink, option.overlap)
+			}
 			name := fmt.Sprintf("%s-inner-v%d.pcap", prefix, map[bool]int{false: 4, true: 6}[v6])
 			if err := os.WriteFile(filepath.Join(directory, name), capture.Bytes(), 0600); err != nil {
 				t.Error(err)
@@ -317,7 +419,9 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 			t.Fatalf("receive %d/%d: %v", received, total, err)
 		}
 		frame = frame[:n]
-		if n < 70 || frame[12] != 8 || frame[13] != 0 || frame[23] != 17 || binary.BigEndian.Uint16(frame[36:38]) != 2152 {
+		port := uint16(2152)
+		minimum := 70
+		if n < minimum || frame[12] != 8 || frame[13] != 0 || frame[23] != 17 || binary.BigEndian.Uint16(frame[36:38]) != port {
 			continue
 		}
 		if err := writer.WritePacket(gopacket.CaptureInfo{Timestamp: time.Now(), Length: n, CaptureLength: n}, frame); err != nil {
@@ -393,5 +497,19 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	if err != nil || stats.Drops != 0 {
 		t.Fatalf("capture stats=%+v %v", stats, err)
 	}
-	t.Logf("attached driver XDP received=%d capture_drops=%d", received, stats.Drops)
+	if option.generic {
+		usage, err := plane.GetUrr(session.URRs[1].GlobalId)
+		if err != nil || usage.DownlinkVolume != uint64(total*32) || usage.UplinkVolume != 0 {
+			t.Fatalf("continuation repeated usage: %+v error=%v want=%d", usage, err, total*32)
+		}
+		delta := beforeCounters.Delta(statistics.GetUpfExtStat())
+		if delta.RxIp4 != uint64(total) || delta.RxUdp != uint64(total) || delta.RxGtpUnexp != 0 {
+			t.Fatalf("continuation repeated parsing or emitted Error Indication: %+v", delta)
+		}
+		passed, dropped, err := plane.BufferContinuationCounts()
+		if err != nil || passed != uint64(total) || dropped != 2 {
+			t.Fatalf("envelope counts passed=%d dropped=%d error=%v", passed, dropped, err)
+		}
+	}
+	t.Logf("attached XDP mode=%v received=%d capture_drops=%d", mode, received, stats.Drops)
 }

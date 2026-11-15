@@ -204,6 +204,9 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err := bpfObjects.ConfigureBufferPool(bpfObjects.bufferPackets); err != nil {
 		return err
 	}
+	if err := bpfObjects.configureBufferToken(); err != nil {
+		return err
+	}
 	bpfObjects.renderClosed = false
 	loaded = true
 	return nil

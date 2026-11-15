@@ -69,15 +69,27 @@ static __noinline int buffer_result_finish(struct xdp_md *ctx, int action, __u32
 }
 #define BUFFER_RETURN(ctx,action) return buffer_result_finish(ctx,action,0)
 
-// A private veth carries an eight-octet cursor after Ethernet. Redirecting to
-// original ingress at TC bypasses XDP and preserves kernel forwarding/ICMP,
-// including TTL, MTU and neighbour handling. Linux bpf_redirect BPF_F_INGRESS.
+// Driver mode removes its eight-octet cursor at TC. Generic XDP runs again on
+// ingress redirect, so retain its authenticated envelope until the entrypoint.
 SEC("tc/upf_buffer_kernel")
 int upf_buffer_kernel_func(struct __sk_buff *skb) {
     if (bpf_skb_pull_data(skb,22)) return TC_ACT_SHOT;
     void *data=(void *)(long)skb->data;
     void *end=(void *)(long)skb->data_end;
     if (data+22>end) return TC_ACT_SHOT;
+    struct ethhdr *ethernet=data;
+    if (ethernet->h_proto==bpf_htons(BUFFER_ETHERTYPE)) {
+        if (bpf_skb_pull_data(skb,BUFFER_ENVELOPE_SIZE+ETH_HLEN)) return TC_ACT_SHOT;
+        data=(void *)(long)skb->data;end=(void *)(long)skb->data_end;
+        if (data+BUFFER_ENVELOPE_SIZE+ETH_HLEN>end) return TC_ACT_SHOT;
+        struct buffer_cursor cursor;
+        __builtin_memcpy(&cursor,data+ETH_HLEN,sizeof(cursor));
+        __u32 zero=0;
+        __u64 *token=bpf_map_lookup_elem(&buffer_token,&zero);
+        if (cursor.magic!=BUFFER_CURSOR_MAGIC || !token || cursor.token!=*token ||
+            !cursor.ingress || cursor.ingress==skb->ifindex) return TC_ACT_SHOT;
+        return bpf_redirect(cursor.ingress,BPF_F_INGRESS);
+    }
     __u32 magic,ingress;
     __builtin_memcpy(&magic,data+14,4);
     __builtin_memcpy(&ingress,data+18,4);

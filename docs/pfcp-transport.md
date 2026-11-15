@@ -257,10 +257,16 @@ FORW. Redirect and same-device TX use an AF_PACKET socket on the resolved device
 Kernel PASS uses a private veth and a TC ingress redirect to the original ingress,
 preserving kernel routing, neighbour resolution, TTL, MTU and ICMP handling.
 In generic XDP mode this ingress redirect runs XDP again on Linux 5.15 and 6.18.
-A rendered packet that matches another UPF rule can consequently be processed or
-dropped again; generic-mode kernel continuation requires a design correction
-before buffering delivery can be accepted. Driver-mode testing does not cover
-this limitation. Local tunnels re-enter the private XDP dispatcher; echo and router
+The sender inspects the link's actual attachment mode and wraps the complete
+rendered frame in a private Ethernet envelope (Local Experimental EtherType 1,
+0x88b5), a magic value, the original ingress ifindex and a 64-bit process token
+drawn from crypto/rand. A one-entry, frozen BPF map holds the token. The buffering
+entrypoint authenticates the token, magic and ingress before any padding,
+classification or traffic counting, removes the envelope and returns XDP_PASS.
+Only its dedicated continuation counter advances; invalid envelopes are dropped
+and counted separately. Driver mode removes its existing cursor at TC. Both paths
+preserve the rendered frame, ingress device, protocol and packet type.
+Local tunnels re-enter the private XDP dispatcher; echo and router
 control use its existing continuations. DROP and ABORTED consume the retained
 packet. Outer GTP-U remains IPv4; both IPv4 and IPv6 inner packets are supported.
 A bounded per-packet kernel result cache prevents repeated test-run syscalls or

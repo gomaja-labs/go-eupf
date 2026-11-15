@@ -9,6 +9,8 @@ import (
 )
 
 type IpEntrypointObjects struct {
+	BufferToken               *ebpf.Map
+	BufferContinuationStat    *ebpf.Map
 	BufferBindings            *ebpf.Map
 	BufferStates              *ebpf.Map
 	BufferPool                *ebpf.Map

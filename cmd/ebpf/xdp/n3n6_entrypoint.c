@@ -23,6 +23,7 @@
 #include "xdp/utils/trace.h"
 #include "xdp/utils/packet_context.h"
 #include "xdp/buffering.h"
+#include "xdp/buffer_envelope.h"
 #include "xdp/buffer_result.h"
 #include "xdp/utils/packet_trace.h"
 #include "xdp/utils/parsers.h"
@@ -1111,6 +1112,12 @@ int upf_buffer_process_func(struct xdp_md *xdp) {
 // Combined N3 & N6 entrypoint. Use for "on-a-stick" interfaces
 SEC("xdp/upf_ip_entrypoint")
 int upf_ip_entrypoint_func(struct xdp_md *ctx) {
+#ifdef BUFFER_ADMISSION
+    void *data=(void *)(long)ctx->data,*end=(void *)(long)ctx->data_end;
+    struct ethhdr *ethernet=data;
+    if ((void *)(ethernet+1)<=end && ethernet->h_proto==bpf_htons(BUFFER_ETHERTYPE))
+        return buffer_consume_envelope(ctx);
+#endif
     // upf_printk("upf n3 & n6 combined entrypoint start");
     const __u32 key = 0;
     struct upf_statistic *statistic = bpf_map_lookup_elem(&upf_ext_stat, &key);

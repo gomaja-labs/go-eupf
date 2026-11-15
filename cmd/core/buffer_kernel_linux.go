@@ -97,6 +97,48 @@ func bufferLinkMessage(index int, up bool) []byte {
 	}
 	return data
 }
+
+// Read the current kernel attachment, including default-mode selection. Never
+// infer it from configuration: an attached link can have a different mode.
+// Linux UAPI if_link.h: IFLA_XDP_ATTACHED, XDP_ATTACHED_SKB = 2.
+func bufferIngressIsGeneric(index uint32) (bool, error) {
+	rib, err := syscall.NetlinkRIB(unix.RTM_GETLINK, unix.AF_UNSPEC)
+	if err != nil {
+		return false, err
+	}
+	messages, err := syscall.ParseNetlinkMessage(rib)
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if message.Header.Type != unix.RTM_NEWLINK || len(message.Data) < unix.SizeofIfInfomsg || binary.NativeEndian.Uint32(message.Data[4:]) != index {
+			continue
+		}
+		attributes, err := syscall.ParseNetlinkRouteAttr(&message)
+		if err != nil {
+			return false, err
+		}
+		for _, attribute := range attributes {
+			if attribute.Attr.Type&0x3fff != unix.IFLA_XDP {
+				continue
+			}
+			// ParseNetlinkRouteAttr skips an ifinfomsg; the nested payload has
+			// none, so supply an empty header before its attributes.
+			nested := syscall.NetlinkMessage{Header: syscall.NlMsghdr{Type: unix.RTM_NEWLINK}, Data: append(make([]byte, unix.SizeofIfInfomsg), attribute.Value...)}
+			xdp, err := syscall.ParseNetlinkRouteAttr(&nested)
+			if err != nil {
+				return false, err
+			}
+			for _, mode := range xdp {
+				if mode.Attr.Type == unix.IFLA_XDP_ATTACHED && len(mode.Value) == 1 {
+					return mode.Value[0] == 2, nil
+				}
+			}
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("ingress interface %d is gone", index)
+}
 func bufferTCMessage(index int, handle, parent, info uint32) []byte {
 	data := make([]byte, 20)
 	binary.NativeEndian.PutUint32(data[4:], uint32(index))

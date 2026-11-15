@@ -73,11 +73,23 @@ func (sender *bufferPacketSender) Send(packet ebpf.RenderedBuffer) error {
 		if packet.IngressIfindex == 0 {
 			return errors.New("kernel continuation has no ingress interface")
 		}
-		frame := make([]byte, len(packet.Frame)+8)
-		copy(frame, packet.Frame[:14])
-		binary.NativeEndian.PutUint32(frame[14:], 0x42554646)
-		binary.NativeEndian.PutUint32(frame[18:], packet.IngressIfindex)
-		copy(frame[22:], packet.Frame[14:])
+		generic, err := bufferIngressIsGeneric(packet.IngressIfindex)
+		if err != nil {
+			return fmt.Errorf("inspect kernel continuation ingress: %w", err)
+		}
+		var frame []byte
+		if generic {
+			frame, err = sender.plane.BufferKernelEnvelope(packet.Frame, packet.IngressIfindex)
+			if err != nil {
+				return err
+			}
+		} else {
+			frame = make([]byte, len(packet.Frame)+8)
+			copy(frame, packet.Frame[:14])
+			binary.NativeEndian.PutUint32(frame[14:], 0x42554646)
+			binary.NativeEndian.PutUint32(frame[18:], packet.IngressIfindex)
+			copy(frame[22:], packet.Frame[14:])
+		}
 		packet.Frame = frame
 		packet.Ifindex = uint32(sender.kernel.index)
 	}
