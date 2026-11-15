@@ -39,6 +39,8 @@ smoke)
 		local name=$1 pid=$2 grace=$3 deadline status=0
 		# setsid isolates the command and sudo's child. TERM is not inherited
 		# as ignored by a background job, unlike INT in non-interactive bash.
+		# Signal both the group and leader: sudo can lose a forwarded signal
+		# between fork and exec (https://github.com/sudo-project/sudo/issues/566).
 		sudo kill -TERM -- "-$pid" "$pid" 2>/dev/null || true
 		deadline=$((SECONDS + grace))
 		while kill -0 "$pid" 2>/dev/null && ((SECONDS < deadline)); do sleep .1; done
