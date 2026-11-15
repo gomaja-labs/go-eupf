@@ -23,7 +23,7 @@ func TestRestorationOccupiedFTEIDUsesRuleFailureOrCapacity(t *testing.T) {
 			request.PFCPSEReqFlags = ie.NewPFCPSEReqFlags(1)
 			request.CreatePDR = []*ie.IE{ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(1, tunnel.TEID, conn.n3Address, nil, 0)), ie.NewFARID(1))}
 			reply := sessionLimitExchange(t, conn, peer, request).(*message.SessionEstablishmentResponse)
-			expected := uint8(ie.CauseRuleCreationModificationFailure)
+			expected := ie.CauseRuleCreationModificationFailure
 			if maximum == 1 {
 				expected = ie.CauseNoResourcesAvailable
 			}
@@ -58,7 +58,7 @@ func TestRestorationUEIPv4OutsideUPFAllocationRangeIsUnavailable(t *testing.T) {
 			request.PFCPSEReqFlags = ie.NewPFCPSEReqFlags(1)
 			request.CreatePDR = []*ie.IE{ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(1), ie.NewUEIPAddress(6, address, "", 0, 0)), ie.NewFARID(1))}
 			reply := sessionLimitExchange(t, conn, peer, request)
-			expected := uint8(ie.CauseRequestAccepted)
+			expected := ie.CauseRequestAccepted
 			if address == "192.0.2.0" || address == "198.51.100.1" {
 				expected = ie.CauseSessionRestorationResourceUnavailable
 			}
