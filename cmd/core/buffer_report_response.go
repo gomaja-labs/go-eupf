@@ -64,9 +64,6 @@ func (conn *PfcpConnection) reportBufferContextMismatch(request *pendingRequest,
 	if session == nil {
 		return "session removed"
 	}
-	if request.reportBAR != session.bar {
-		return "BAR changed"
-	}
 	if request.reportBufferState != session.downlink {
 		return "notification lifetime replaced"
 	}
@@ -75,9 +72,6 @@ func (conn *PfcpConnection) reportBufferContextMismatch(request *pendingRequest,
 	}
 	if request.reportBufferRevision != session.bufferControlRevision {
 		return "CP buffering instruction changed"
-	}
-	if session.downlink != nil && request.reportBufferGeneration != session.downlink.generation {
-		return "notification generation changed"
 	}
 	return ""
 }

@@ -59,7 +59,6 @@ type pendingRequest struct {
 	localSEID              uint64
 	usage                  []reportedUsage
 	downlink               *reportedDownlink
-	reportBAR              *bufferingActionRule
 	reportBufferState      *downlinkNotifications
 	reportBufferGeneration uint64
 	reportBufferRevision   uint64
@@ -138,7 +137,6 @@ func (conn *PfcpConnection) prepareRequestContext(msg message.Message, peer *net
 	request.localSEID = localSEID
 	if association != nil && msg.MessageType() == message.MsgTypeSessionReportRequest {
 		if session := association.Sessions[localSEID]; session != nil {
-			request.reportBAR = session.bar
 			request.reportBufferState = session.downlink
 			request.reportBufferRevision = session.bufferControlRevision
 			if session.downlink != nil {

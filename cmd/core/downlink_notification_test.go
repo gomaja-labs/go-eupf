@@ -358,10 +358,12 @@ func TestDownlinkReportResponseCannotUndoLaterBAROrLifetime(t *testing.T) {
 			first := identityRead(t, peer).(*message.SessionReportRequest)
 			switch later {
 			case "bar":
+				session.bufferControlRevision++ // accepted CP Session Modification
 				if err := updateBAR(session, ie.NewUpdateBARWithinSessionModificationRequest(ie.NewBARID(0), ie.NewSuggestedBufferingPacketsCount(2))); err != nil {
 					t.Fatal(err)
 				}
 			case "generation":
+				session.bufferControlRevision++ // accepted CP DROBU modification
 				session.downlink.generation++
 			case "replacement":
 				replacement := *session
@@ -437,5 +439,38 @@ func TestStaleDownlinkCompletionCannotReoriginateRemovedFAR(t *testing.T) {
 	conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, old.Sequence(), ie.NewCause(ie.CauseSystemFailure))), peer.LocalAddr().(*net.UDPAddr))
 	if len(conn.transport.pending) != 0 {
 		t.Fatal("stale FAR report was reoriginated at a new CP")
+	}
+}
+
+func TestReportControlsRemainValidAfterAnotherReportResponse(t *testing.T) {
+	for _, firstDrop := range []bool{false, true} {
+		t.Run(strconv.FormatBool(firstDrop), func(t *testing.T) {
+			conn, _, session, peer := downlinkFixture(t, true)
+			if err := createBAR(session, ie.NewCreateBAR(ie.NewBARID(0))); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			queueDownlinkNotice(t, conn, session, 1, now)
+			first := identityRead(t, peer).(*message.SessionReportRequest)
+			conn.stateMu.Lock()
+			conn.noteDownlinkPacketLocked(session, 2, ebpf.BufferRecord{SessionID: 11, Cookie: 8, PDRID: 2, QFI: 9, QFIPresent: true, Notify: true}, now)
+			conn.stateMu.Unlock()
+			conn.serviceDownlinkNotifications(now)
+			second := identityRead(t, peer).(*message.SessionReportRequest)
+			controls := func(report *message.SessionReportRequest, drop bool) *message.SessionReportResponse {
+				response := message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))
+				if drop {
+					response.PFCPSRRspFlags = ie.NewPFCPSRRspFlags(1)
+				} else {
+					response.UpdateBAR = ie.NewUpdateBARWithinSessionReportResponse(ie.NewBARID(0), ie.NewDLBufferingSuggestedPacketCount(3))
+				}
+				return response
+			}
+			conn.Handle(protocolWire(t, controls(first, firstDrop)), peer.LocalAddr().(*net.UDPAddr))
+			conn.Handle(protocolWire(t, controls(second, !firstDrop)), peer.LocalAddr().(*net.UDPAddr))
+			if session.downlink.generation != 2 || !session.bar.dlPacketCountPresent || session.bar.dlPacketCount != 3 {
+				t.Fatalf("second report's controls were discarded: generation=%d BAR=%+v", session.downlink.generation, session.bar)
+			}
+		})
 	}
 }
