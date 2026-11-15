@@ -432,6 +432,12 @@ def test_node_requests_and_up_release_use_registered_port(server):
         assert len(get_json("/api/v1/pfcp_sessions")) == 1
         traffic.send("waiting-for-cp-release")
         remote.release()
+        # TS 29.244 V20.1.0 clause 6.2.8.3: acknowledgement and asynchronous
+        # reclamation are separate. This one-session fixture must finish in 2 s.
+        deadline = time.monotonic() + 2
+        while get_json("/api/v1/pfcp_sessions"):
+            assert time.monotonic() < deadline, "association session reclamation exceeded 2 seconds"
+            time.sleep(.01)
         traffic.send("after-cp-release", delivered=False)
         assert not get_json("/api/v1/pfcp_sessions")
         assert get_json("/api/v1/pfcp_associations") == []

@@ -200,7 +200,11 @@ CP Association Release is always accepted, including unknown Node IDs and
 retransmissions. Its response precedes cleanup. Admission to that association
 stops immediately, and receive-loop maintenance deletes sessions in batches of
 64, releasing locks between batches. Successful progress has no cleanup time
-limit. Each session that actually fails deletion starts its own three-second retry window, with
+limit. Callers requiring forwarding to have stopped must wait until the affected
+sessions disappear from `GET /api/v1/pfcp_sessions`. The registered-port release
+regression permits at most two seconds for its single-session reclamation before
+testing that a subsequent packet is not delivered; that fixture bound is not a
+maximum cleanup time for an arbitrarily large association. Each session that actually fails deletion starts its own three-second retry window, with
 100, 200, 400 and then at most 500 ms backoff. Retired-map reclamation and failed
 rollback use the same bounded recovery policy. A successful deletion clears that session's failure history; a transient error cannot give healthy remaining sessions a deadline. Affected IDs stay reserved.
 Exhaustion logs affected sessions and exits non-zero through the supervisor;
