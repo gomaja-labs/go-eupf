@@ -18,6 +18,7 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
 	"slices"
+	"strings"
 
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
@@ -55,15 +56,23 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 	if req.RecoveryTimeStamp != nil {
 		if stamp, err := req.RecoveryTimeStamp.RecoveryTimeStamp(); err == nil {
 			entity := sessionEntity(req, addr)
-			if _, exists := association.recoveries[entity]; !exists && len(association.recoveries) >= 1024 {
+			missing := 0
+			for address := range strings.SplitSeq(entity, " ") {
+				if _, exists := association.recoveries[address]; !exists {
+					missing++
+				}
+			}
+			if len(association.recoveries)+missing > 1024 {
 				return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
 			}
-			previous := association.recoveries[entity]
-			if !conn.observeEntityRecovery(association.ID, entity, stamp, true) {
-				if stamp.After(previous) {
-					return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), isTraced, nil
+			for address := range strings.SplitSeq(entity, " ") {
+				previous := association.recoveries[address]
+				if !conn.observeEntityRecovery(association.ID, address, stamp, true) {
+					if stamp.After(previous) {
+						return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), isTraced, nil
+					}
+					return nil, isTraced, nil
 				}
-				return nil, isTraced, nil
 			}
 		}
 	}
@@ -422,13 +431,13 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	if req.CPFSEID != nil {
 		if fields, err := req.CPFSEID.FSEID(); err == nil {
 			session.CPFSEIDIPv4, session.CPFSEIDIPv6 = slices.Clone(fields.IPv4Address), slices.Clone(fields.IPv6Address)
-			association.sessionEntities[req.SEID()] = session.controlIP(conn).String()
+			association.sessionEntities[req.SEID()] = entityAddresses(session.CPFSEIDIPv4, session.CPFSEIDIPv6, association.Addr)
 		}
 	}
 	conn.indexSession(association, association.Sessions[req.SEID()], -1)
 	association.Sessions[req.SEID()] = session
 	conn.indexSession(association, session, 1)
-	association.sessionEntities[req.SEID()] = session.controlIP(conn).String()
+	association.sessionEntities[req.SEID()] = entityAddresses(session.CPFSEIDIPv4, session.CPFSEIDIPv6, association.Addr)
 
 	additionalIEs := []*ie.IE{
 		ie.NewCause(ie.CauseRequestAccepted),

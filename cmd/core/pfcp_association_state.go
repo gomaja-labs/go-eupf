@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -79,16 +80,18 @@ func (conn *PfcpConnection) replaceAssociation(id, addr string, retention, featu
 			}
 			keep := retention != nil && old.ID == id && len(retainedEntities) == 0
 			for _, candidate := range retainedEntities {
-				if candidate == entity && old.ID == id {
+				if entityContains(entity, candidate) && old.ID == id {
 					keep = true
 				}
 			}
 			if keep {
 				fresh.Sessions[seid] = session
-				if stamp := old.recoveries[entity]; !stamp.IsZero() {
-					fresh.recoveries[entity] = stamp
+				for address := range strings.SplitSeq(entity, " ") {
+					if stamp := old.recoveries[address]; !stamp.IsZero() {
+						fresh.recoveries[address] = stamp
+					}
 				}
-				if entity == addr {
+				if entityContains(entity, addr) {
 					fresh.RecoveryTimestamp = old.RecoveryTimestamp
 				}
 				fresh.sessionEntities[seid] = entity
@@ -151,11 +154,11 @@ func (conn *PfcpConnection) observeEntityRecovery(addr, entity string, stamp tim
 			if origin == "" {
 				origin = assoc.Addr
 			}
-			if origin != entity {
+			if !entityContains(origin, entity) {
 				continue
 			}
 			retired.Sessions[seid] = session
-			retired.sessionEntities[seid] = entity
+			retired.sessionEntities[seid] = origin
 			conn.forgetSession(assoc, seid)
 		}
 		conn.retireAssociationLocked(retired)
@@ -243,7 +246,7 @@ func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, en
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for seq, request := range state.pending {
-		if request.associationID() == id && (entity == "" || request.entity == entity) {
+		if request.associationID() == id && (entity == "" || entityContains(request.entity, entity)) {
 			// Clause 6.2.6.2.2 retains the whole session. Cancellation must
 			// return pending usage to its retained URR, not discard it merely
 			// because the enclosing association object has been replaced.
@@ -258,7 +261,7 @@ func (conn *PfcpConnection) forgetPeerTransactions(id string, keepSetup bool, en
 		removed, bytes := 0, 0
 		for element := budget.entries.Front(); element != nil; {
 			next := element.ownerNext
-			if (!keepSetup || element.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || element.entity == entity) {
+			if (!keepSetup || element.key.typ != message.MsgTypeAssociationSetupRequest) && (entity == "" || entityContains(element.entity, entity)) {
 				removed++
 				bytes += element.size
 				state.unlinkResponse(element)
@@ -387,13 +390,32 @@ func sessionEntity(request *message.SessionEstablishmentRequest, fallback string
 	if err != nil {
 		return fallback
 	}
-	if fields.IPv4Address != nil {
-		return fields.IPv4Address.String()
+	return entityAddresses(fields.IPv4Address, fields.IPv6Address, fallback)
+}
+
+// Internal entity keys contain one or two canonical IP addresses, separated by
+// a space (which cannot occur in an IP literal). The same key travels with a
+// session's replay outcomes and pending requests. Never compare a heartbeat's
+// single address directly with this address set. TS 29.244 V20.1.0 clause 8.2.37.
+func entityAddresses(ipv4, ipv6 net.IP, fallback string) string {
+	var addresses []string
+	for _, ip := range []net.IP{ipv4, ipv6} {
+		if len(ip) != 0 {
+			addresses = append(addresses, ip.String())
+		}
 	}
-	if fields.IPv6Address != nil {
-		return fields.IPv6Address.String()
+	if len(addresses) == 0 {
+		return fallback
 	}
-	return fallback
+	return strings.Join(addresses, " ")
+}
+func entityContains(entity, address string) bool {
+	for candidate := range strings.SplitSeq(entity, " ") {
+		if candidate == address {
+			return true
+		}
+	}
+	return false
 }
 func (conn *PfcpConnection) rememberSessionEntity(request, response message.Message, peer string) {
 	assoc := conn.associationForMessage(request, peer)
