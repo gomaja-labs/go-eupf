@@ -4,6 +4,13 @@ The minimum is Ubuntu's Linux **5.15.0-25-generic** (5.15.0-25.25). The eBPF
 load and packet tests also run on the current development kernel. A newer
 host kernel alone does not validate the minimum.
 
+On 5.15.0-25, `bpf_fib_lookup` can return success with an all-zero destination
+MAC for a FAILED neighbour on ordinary FORW and buffered output, because it lacks
+[upstream fix 1fe4850b34ab](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1fe4850b34ab).
+Current Linux 5.15 stable carries the fix as
+[16d319ec18b0](https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/commit/?id=16d319ec18b0),
+while 5.15.0-25 remains the minimum verifier test target.
+
 `scripts/ci/test-kernel.py` builds a small initramfs around an already-built,
 statically linked test binary, static BusyBox, iproute2 and the matching veth
 and dummy modules. It boots KVM with no external network interface and runs the
