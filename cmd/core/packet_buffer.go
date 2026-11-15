@@ -86,31 +86,34 @@ type PacketBuffering struct {
 	metricsMu                        sync.Mutex
 	metricsRetained                  uint32
 	metricsOverflow, metricsCanceled uint64
-	prepareOnce                      sync.Once
-	prepareCancelOnce                sync.Once
-	prepareDone, prepareStop         chan struct{}
-	prepareError                     error
-	plane                            *ebpf.BpfObjects
-	sender                           packetBufferSender
-	complete                         func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
-	reader                           *ebpf.BufferReader
-	options                          BufferingOptions
-	mu                               sync.Mutex
-	owners                           map[uint64]*bufferOwner
-	work                             map[uint64]*bufferOwner
-	reserved                         uint32
-	storage                          []byte
-	entries                          []bufferedPacket
-	free                             []uint32
-	closed                           bool
-	stop                             chan struct{}
-	progress                         chan struct{}
-	failures                         chan error
-	wg                               sync.WaitGroup
-	closeOnce                        sync.Once
-	closeError                       error
-	baseTime                         time.Time
-	baseNS                           uint64
+	// prepareMu serializes startup context ownership with cancellation.
+	prepareMu                sync.Mutex
+	prepareCancel            context.CancelFunc
+	prepareOnce              sync.Once
+	prepareCancelOnce        sync.Once
+	prepareDone, prepareStop chan struct{}
+	prepareError             error
+	plane                    *ebpf.BpfObjects
+	sender                   packetBufferSender
+	complete                 func(ebpf.BufferCommand) (ebpf.BufferCommand, error)
+	reader                   *ebpf.BufferReader
+	options                  BufferingOptions
+	mu                       sync.Mutex
+	owners                   map[uint64]*bufferOwner
+	work                     map[uint64]*bufferOwner
+	reserved                 uint32
+	storage                  []byte
+	entries                  []bufferedPacket
+	free                     []uint32
+	closed                   bool
+	stop                     chan struct{}
+	progress                 chan struct{}
+	failures                 chan error
+	wg                       sync.WaitGroup
+	closeOnce                sync.Once
+	closeError               error
+	baseTime                 time.Time
+	baseNS                   uint64
 }
 
 // NewPacketBuffering preallocates payloads and starts the sole ring consumer.
@@ -149,13 +152,22 @@ func NewPacketBuffering(plane *ebpf.BpfObjects, options BufferingOptions) (*Pack
 }
 
 // Start initializes output after the API listener is ready, without extending
-// readiness. Close cancels admission waits and never joins this verifier.
+// readiness. Close cancels admission and installation without joining verification.
 func (buffering *PacketBuffering) Start(ctx context.Context) <-chan struct{} {
 	buffering.prepareOnce.Do(func() {
-		buffering.plane.StartBufferPrograms(ctx)
+		buffering.prepareMu.Lock()
+		loaderCtx, cancel := context.WithCancel(ctx)
+		buffering.prepareCancel = cancel
+		select {
+		case <-buffering.prepareStop:
+			cancel()
+		default:
+		}
+		buffering.prepareMu.Unlock()
+		buffering.plane.StartBufferPrograms(loaderCtx)
 		go func() {
 			if sender, ok := buffering.sender.(interface{ initialize(context.Context) error }); ok {
-				buffering.prepareError = sender.initialize(ctx)
+				buffering.prepareError = sender.initialize(loaderCtx)
 			} else {
 				buffering.prepareError = buffering.sender.Prepare()
 			}
@@ -172,6 +184,11 @@ func (buffering *PacketBuffering) Start(ctx context.Context) <-chan struct{} {
 // Verification owns its inputs and can finish later without being joined.
 func (buffering *PacketBuffering) CancelPreparation() {
 	buffering.prepareCancelOnce.Do(func() {
+		buffering.prepareMu.Lock()
+		defer buffering.prepareMu.Unlock()
+		if buffering.prepareCancel != nil {
+			buffering.prepareCancel()
+		}
 		if buffering.prepareStop != nil {
 			close(buffering.prepareStop)
 		}

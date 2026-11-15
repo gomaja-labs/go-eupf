@@ -85,3 +85,36 @@ func TestPacketBufferPreparedAdmissionDoesNotVerify(t *testing.T) {
 		t.Fatalf("prepared BUFF admission performed more initialization: %s", delay)
 	}
 }
+
+func TestPacketBufferCancellationPreventsLateInstallation(t *testing.T) {
+	for _, beforeStart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "during-load", true: "before-start"}[beforeStart], func(t *testing.T) {
+			plane, buffering, _, _, _, _ := packetBufferFixtureStartOptions(t, false, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
+			before := plane.UpfIpEntrypointFunc
+			if beforeStart {
+				buffering.CancelPreparation()
+			}
+			done := buffering.Start(context.Background())
+			started := time.Now()
+			buffering.CancelPreparation()
+			if time.Since(started) > 250*time.Millisecond {
+				t.Fatal("shutdown cancellation waited for verification")
+			}
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("canceled output preparation did not finish")
+			}
+			program, err := plane.BufferKernelIngressProgram()
+			if program != nil {
+				_ = program.Close()
+			}
+			if err == nil {
+				t.Fatal("shutdown cancellation left prepared output")
+			}
+			if plane.UpfIpEntrypointFunc != before || plane.UpfBufferAdmissionFunc != nil {
+				t.Fatal("shutdown cancellation installed live forwarding")
+			}
+		})
+	}
+}

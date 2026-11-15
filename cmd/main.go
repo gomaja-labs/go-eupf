@@ -458,7 +458,10 @@ func run(ctx context.Context) (runErr error) {
 
 	runDone := make(chan struct{})
 	defer close(runDone)
-	defer beginShutdown(pfcpConn, sxaConn, sxbConn)
+	defer func() {
+		packetBuffers.CancelPreparation()
+		beginShutdown(pfcpConn, sxaConn, sxbConn)
+	}()
 	go func() {
 		select {
 		case <-ctx.Done():
