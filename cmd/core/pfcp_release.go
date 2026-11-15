@@ -120,6 +120,15 @@ func (conn *PfcpConnection) startAssociationRelease(id string, trace bool) error
 	return err
 }
 func (conn *PfcpConnection) prepareAssociationReleaseLocked(assoc *NodeAssociation, now time.Time, trace bool) (*admittedRequest, error) {
+	if associationEPFAR(assoc) || assoc.enhancedRelease != 0 {
+		if assoc.enhancedRelease == 0 {
+			assoc.enhancedRelease = enhancedPreparing
+		}
+		if assoc.enhancedRelease == enhancedPreparing && !assoc.releaseRequestSent {
+			return conn.prepareEnhancedAssociationRequestLocked(assoc, true, now, trace)
+		}
+		return nil, nil
+	}
 	if assoc.releaseRequestSent || assoc.cleaning {
 		return nil, nil
 	}
@@ -165,6 +174,10 @@ func (conn *PfcpConnection) serviceReleasesLocked(now time.Time) []admittedReque
 		}
 	}
 	for _, assoc := range conn.NodeAssociations {
+		if assoc.enhancedRelease != 0 {
+			outgoing = append(outgoing, conn.serviceEnhancedAssociationLocked(assoc, now)...)
+			continue
+		}
 		if assoc.cleaning {
 			if !now.Before(assoc.cleanupNext) {
 				conn.cleanupAssociationLocked(assoc, now)
@@ -199,7 +212,7 @@ func (conn *PfcpConnection) beginAssociationCleanupLocked(assoc *NodeAssociation
 	}
 	assoc.cleaning = true // Admission stops before the Release Response.
 	assoc.cleanupNext = now
-	if conn.ResourceManager.ShuttingDown() || len(assoc.Sessions) == 0 {
+	if conn.ResourceManager.ShuttingDown() && assoc.enhancedRelease == 0 || len(assoc.Sessions) == 0 {
 		conn.finishAssociationCleanupLocked(assoc)
 	}
 }
@@ -249,7 +262,17 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 	batch := 0
 	attempt := func(id uint64, session *Session) {
 		batch++
-		if err := conn.DeleteSession(session); err != nil {
+		var err error
+		if assoc.enhancedRelease != 0 {
+			_, err = conn.beginLocalSessionReleaseLocked(assoc, session)
+		} else {
+			err = conn.DeleteSession(session)
+		}
+		if errors.Is(err, errTransactionCapacity) {
+			assoc.cleanupNext = now.Add(100 * time.Millisecond)
+			return
+		}
+		if err != nil {
 			failure := assoc.cleanupFailures[id]
 			if failure.first.IsZero() {
 				failure.first = maxTime(now, time.Now())
@@ -292,7 +315,9 @@ func (conn *PfcpConnection) cleanupAssociationLocked(assoc *NodeAssociation, now
 		}
 	}
 	if len(assoc.Sessions) == 0 {
-		conn.finishAssociationCleanupLocked(assoc)
+		if assoc.enhancedRelease == 0 || assoc.cleaning {
+			conn.finishAssociationCleanupLocked(assoc)
+		}
 		return
 	}
 	assoc.cleanupNext = time.Time{}
@@ -391,6 +416,10 @@ func (conn *PfcpConnection) BeginShutdown() {
 	}
 	conn.transport.mu.Unlock()
 	for _, assoc := range conn.NodeAssociations {
+		if assoc.enhancedRelease != 0 && assoc.enhancedDeadline.IsZero() {
+			interval, retries := conn.requestPolicy(message.MsgTypeAssociationUpdateRequest)
+			assoc.enhancedDeadline = time.Now().Add(interval*time.Duration(retries+1) + conn.releasePeriod())
+		}
 		if assoc.cleaning {
 			conn.finishAssociationCleanupLocked(assoc)
 		}

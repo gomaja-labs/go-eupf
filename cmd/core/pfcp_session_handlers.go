@@ -50,6 +50,9 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseNoEstablishedPFCPAssociation)).Inc()
 		return message.NewSessionEstablishmentResponse(0, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoEstablishedPFCPAssociation)), isTraced, nil
 	}
+	if association.enhancedRelease != 0 {
+		return message.NewSessionEstablishmentResponse(remoteSEID.SEID, req.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(ie.CauseNoResourcesAvailable)), isTraced, nil
+	}
 
 	// TS 23.007 V19.2.0 clause 19A: this timestamp belongs to the
 	// CP F-SEID IP address, not necessarily the datagram's source address.

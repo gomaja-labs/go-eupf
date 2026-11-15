@@ -36,7 +36,7 @@ type localSessionRelease struct {
 }
 
 func associationEPFAR(assoc *NodeAssociation) bool {
-	return assoc != nil && ie.NewCPFunctionFeatures(assoc.CPFeatures...).HasEPFAR()
+	return assoc != nil && ie.NewCPFunctionFeatures(assoc.CPFeatures...).HasEPFAR() && ie.NewUPFunctionFeatures(assoc.UPFeatures...).HasEPFAR()
 }
 
 // TS 29.244 V20.1.0 clauses 5.18.2 and 8.2.119: PSDBU follows local

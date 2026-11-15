@@ -69,6 +69,7 @@ type pendingRequest struct {
 	onComplete             func(requestResult)
 	completed              bool
 	completedOutcome       requestOutcome
+	enhancedPrepare        bool
 }
 
 func (conn *PfcpConnection) requestPolicy(typ uint8) (time.Duration, uint32) {
@@ -316,6 +317,11 @@ func (conn *PfcpConnection) originatorCompletion(req *pendingRequest) func(reque
 			}
 			conn.completeReportLocked(req, session, result)
 		case message.MsgTypeAssociationUpdateRequest:
+			if req.enhancedPrepare && assoc.enhancedRelease == enhancedPreparing && !assoc.cleaning {
+				assoc.enhancedRelease = enhancedDraining
+				assoc.releaseRequestSent = false
+				assoc.cleanupNext = time.Time{}
+			}
 			// TS 29.244 V20.1.0 clauses 6.2.7.3.2 and 6.4: an identical
 			// retransmission grants the CP the full period from reception.
 			if req.releasePeriod > 0 && !assoc.cleaning {

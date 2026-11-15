@@ -184,7 +184,7 @@ func (conn *PfcpConnection) serviceHeartbeats(now time.Time) {
 	outgoing := conn.serviceReleasesLocked(now)
 	var peers []string
 	for addr, assoc := range conn.NodeAssociations {
-		if !assoc.releaseDeadline.IsZero() || assoc.cleaning {
+		if !assoc.releaseDeadline.IsZero() || assoc.cleaning || assoc.enhancedRelease != 0 {
 			continue
 		}
 		if !assoc.failedAt.IsZero() && now.Sub(assoc.failedAt) >= conn.heartbeatGrace {
@@ -223,7 +223,7 @@ func (conn *PfcpConnection) heartbeatFailed(addr string, expected ...*NodeAssoci
 			return
 		}
 		assoc.heartbeatInFlight = false
-		if !assoc.releaseDeadline.IsZero() || assoc.cleaning {
+		if !assoc.releaseDeadline.IsZero() || assoc.cleaning || assoc.enhancedRelease != 0 {
 			return
 		}
 		if assoc.failedAt.IsZero() {

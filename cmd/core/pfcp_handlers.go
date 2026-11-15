@@ -371,7 +371,7 @@ func HandlePfcpAssociationSetupRequest(conn *PfcpConnection, msg message.Message
 		return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP connection releasing")
 	}
 	if value, err := request.NodeID.NodeID(); err == nil {
-		if old := conn.associationByID(nodeIDText(value)); old != nil && (!old.releaseDeadline.IsZero() || old.cleaning) {
+		if old := conn.associationByID(nodeIDText(value)); old != nil && (!old.releaseDeadline.IsZero() || old.cleaning || old.enhancedRelease != 0) {
 			return conn.errorResponse(message.MsgTypeAssociationSetupResponse, 0, request.Sequence(), ie.CauseNoResourcesAvailable, nil), true, errors.New("PFCP association releasing")
 		}
 	}
@@ -403,12 +403,39 @@ func HandlePfcpAssociationUpdateRequest(conn *PfcpConnection, msg message.Messag
 	node, _ := request.NodeID.NodeID()
 	assoc := conn.associationByID(nodeIDText(node))
 	cause := ie.CauseRequestAccepted
+	var features []byte
 	if activeAssociation(assoc) == nil || assoc.ID != nodeIDText(node) {
 		cause = ie.CauseNoEstablishedPFCPAssociation
-	} else if request.CPFunctionFeatures != nil {
-		if features, err := request.CPFunctionFeatures.CPFunctionFeatures(); err == nil {
-			assoc.CPFeatures = append([]byte(nil), features...)
+	} else {
+		features = assoc.CPFeatures
+		if request.CPFunctionFeatures != nil {
+			if value, err := request.CPFunctionFeatures.CPFunctionFeatures(); err == nil {
+				features = append([]byte(nil), value...)
+			}
 		}
+	}
+	if cause == ie.CauseRequestAccepted && request.PFCPAUReqFlags != nil {
+		flags, err := request.PFCPAUReqFlags.PFCPAUReqFlags()
+		if err != nil {
+			// Clause 7.6.8: this optional IE is absent when semantically invalid.
+			log.Warn().Err(err).Msg("Ignore invalid optional PFCPAUReq-Flags")
+			flags = 0
+		}
+		// TS 29.244 V20.1.0 clauses 5.18.1 and 8.2.120: ignore spare bits.
+		if flags&1 != 0 {
+			candidate := *assoc
+			candidate.CPFeatures = features
+			if !associationEPFAR(&candidate) {
+				return conn.errorResponse(message.MsgTypeAssociationUpdateResponse, 0, request.Sequence(), ie.CauseServiceNotSupported, ie.NewOffendingIE(ie.PFCPAUReqFlags)), true, nil
+			}
+			if assoc.enhancedRelease == 0 || assoc.enhancedRelease == enhancedPreparing {
+				assoc.enhancedRelease = enhancedDraining
+				assoc.cleanupNext = time.Time{}
+			}
+		}
+	}
+	if cause == ie.CauseRequestAccepted {
+		assoc.CPFeatures = features
 	}
 	return message.NewAssociationUpdateResponse(request.Sequence(), conn.profile.NodeID(conn.nodeId), ie.NewCause(cause)), true, nil
 }
