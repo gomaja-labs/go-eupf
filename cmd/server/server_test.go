@@ -31,6 +31,42 @@ func TestShutdownReturnsSuccess(t *testing.T) {
 		t.Fatalf("normal shutdown error: %v", err)
 	}
 }
+
+func TestReadySignalsOnlyAfterListen(t *testing.T) {
+	s := New("127.0.0.1:0", nil)
+	signal, ok := any(s).(interface{ Ready() <-chan struct{} })
+	if !ok {
+		t.Fatal("server has no in-process listener readiness signal")
+	}
+	select {
+	case <-signal.Ready():
+		t.Fatal("server ready before Listen")
+	default:
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Run() }()
+	select {
+	case <-signal.Ready():
+	case <-time.After(time.Second):
+		t.Fatal("Listen did not signal readiness")
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// Failed listeners do not unblock preparations waiting for readiness.
+	failed := New("invalid address", nil)
+	if err := failed.Run(); err == nil {
+		t.Fatal("invalid listen address accepted")
+	}
+	select {
+	case <-any(failed).(interface{ Ready() <-chan struct{} }).Ready():
+		t.Fatal("failed listener signalled readiness")
+	default:
+	}
+}
 func TestShutdownDeadlineClosesActiveRequests(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	s := New("127.0.0.1:0", http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release }))

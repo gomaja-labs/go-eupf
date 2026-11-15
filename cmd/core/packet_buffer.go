@@ -172,7 +172,11 @@ func (buffering *PacketBuffering) Start(ctx context.Context) <-chan struct{} {
 				buffering.prepareError = buffering.sender.Prepare()
 			}
 			if buffering.prepareError != nil {
-				log.Error().Err(buffering.prepareError).Msg("Buffered forwarding initialization failed for this process")
+				if loaderCtx.Err() != nil {
+					log.Debug().Err(buffering.prepareError).Msg("Buffered forwarding initialization canceled")
+				} else {
+					log.Error().Err(buffering.prepareError).Msg("Buffered forwarding initialization failed for this process")
+				}
 			}
 			close(buffering.prepareDone)
 		}()

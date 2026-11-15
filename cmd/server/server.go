@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -17,10 +18,13 @@ import (
 
 type Server struct {
 	httpServer *http.Server
+	ready      chan struct{}
+	readyOnce  sync.Once
 }
 
 func New(addr string, handler http.Handler) *Server {
 	return &Server{
+		ready: make(chan struct{}),
 		httpServer: &http.Server{
 			Addr:         addr,
 			Handler:      handler,
@@ -37,8 +41,13 @@ func (s *Server) Run() error {
 	if err != nil {
 		return err
 	}
+	s.readyOnce.Do(func() { close(s.ready) })
 	return s.serve(l)
 }
+
+// Ready closes after the listener is bound, independently of its address, TLS
+// or authentication. A failed Listen leaves the signal open until shutdown.
+func (s *Server) Ready() <-chan struct{} { return s.ready }
 
 func (s *Server) Stop(ctx context.Context) error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {

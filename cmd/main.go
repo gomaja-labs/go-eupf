@@ -445,7 +445,7 @@ func run(ctx context.Context) (runErr error) {
 
 	serverErrors := make(chan error, 2)
 	go func() { serverErrors <- apiSrv.Run() }()
-	go startBufferingAfterAPI(ctx, config.Conf.ApiAddress, packetBuffers)
+	go startBufferingAfterAPI(ctx, apiSrv.Ready(), packetBuffers.Start)
 	go func() { serverErrors <- metricsSrv.Run() }()
 	defer func() {
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -570,33 +570,15 @@ func growingMapMemory(infos ...*kernel.MapInfo) (int64, error) {
 	return total, nil
 }
 
-// Start only once the API listener accepts connections. This also works with
-// wildcard and TLS listeners; no HTTP request or authentication is required.
-func startBufferingAfterAPI(ctx context.Context, address string, buffering *core.PacketBuffering) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
+// Use listener ownership directly: no connection, DNS lookup or polling is
+// needed to start private forwarding after the API has successfully bound.
+func startBufferingAfterAPI(ctx context.Context, ready <-chan struct{}, start func(context.Context) <-chan struct{}) {
+	select {
+	case <-ctx.Done():
 		return
+	case <-ready:
 	}
-	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
-		host = "127.0.0.1"
-		if ip != nil && ip.To4() == nil {
-			host = "::1"
-		}
-	}
-	dialer := net.Dialer{Timeout: 100 * time.Millisecond}
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-		if err == nil {
-			_ = connection.Close()
-			buffering.Start(ctx)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
+	if ctx.Err() == nil {
+		start(ctx)
 	}
 }
