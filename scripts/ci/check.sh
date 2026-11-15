@@ -10,9 +10,12 @@ test)
 	go vet ./...
 	/opt/py/bin/pytest -q ./pytest/test_ci_smoke_cleanup.py
 	(cd scripts/enb-load-test/enb-emulator && go build ./... && go test ./... -count=1 && go vet ./...)
+	# The complete verifier-backed suite measured 589 seconds; race coverage
+	# reached the old ten-minute guard. Twenty minutes leaves another full
+	# measured run of headroom while retaining a per-package hang bound.
 	status=0
-	go test -exec sudo ./... -count=1 || status=1
-	go test -exec sudo -race -count=1 ./cmd/core/... ./cmd/api/... ./cmd/config/... || status=1
+	go test -exec sudo ./... -count=1 -timeout=20m || status=1
+	go test -exec sudo -race -count=1 -timeout=20m ./cmd/core/... ./cmd/api/... ./cmd/config/... || status=1
 	exit "$status"
 	;;
 lint)
