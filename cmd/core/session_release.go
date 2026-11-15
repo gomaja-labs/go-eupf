@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/rs/zerolog/log"
@@ -32,7 +33,7 @@ type localSessionRelease struct {
 	reports     []*ie.IE
 	next        int
 	inFlight    bool
-	charge      int
+	charge      int64
 	generations map[uint32]uint64
 }
 
@@ -44,8 +45,12 @@ func associationEPFAR(assoc *NodeAssociation) bool {
 // deletion, not a later CP Deletion Request. Final counts follow producer grace.
 // The caller owns stateMu; no network I/O happens inside this transaction.
 func (conn *PfcpConnection) beginLocalSessionReleaseLocked(assoc *NodeAssociation, session *Session) (SessionReleaseResult, error) {
-	charge := 2048 + 2048*len(session.URRs)
-	if len(conn.localReleases) >= min(128, conn.originatedRequestLimit()) || charge > (16<<20)-conn.localReleaseBytes {
+	charge := config.LocalReleaseContextBytes * (1 + int64(len(session.URRs)))
+	limit := conn.localReleaseLimit
+	if limit == 0 {
+		limit = 16 << 20
+	}
+	if len(conn.localReleases) >= min(128, conn.originatedRequestLimit()) || charge > limit-conn.localReleaseBytes {
 		return SessionReleaseResult{}, errTransactionCapacity
 	}
 	usage, err := conn.deleteSessionWithUsage(session)

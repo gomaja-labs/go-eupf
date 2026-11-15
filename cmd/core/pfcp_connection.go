@@ -52,7 +52,8 @@ type PfcpConnection struct {
 	packetBuffers                   *PacketBuffering
 	downlinkSessions                map[uint64]*NodeAssociation
 	localReleases                   map[uint64]*localSessionRelease
-	localReleaseBytes               int
+	localReleaseBytes               int64
+	localReleaseLimit               int64
 	bufferUpdates                   []*bufferReportUpdate
 	socketMu                        sync.RWMutex
 	closeOnce                       sync.Once
@@ -207,6 +208,7 @@ func NewPfcpConnection(
 		PCCRulesNameLinkURRID:    pccRulesNameLinkURRID,
 		profile:                  profile,
 		inactivityReleaseTimeout: time.Duration(config.Conf.InactivityReleaseTimeout) * time.Second,
+		localReleaseLimit:        config.Conf.LocalReleaseMemoryReserve(),
 		requestTimeout:           defaultDuration(config.Conf.PfcpRequestTimeout, 5), requestRetries: config.Conf.PfcpRequestRetries,
 		responseRetention: defaultDuration(config.Conf.PfcpResponseRetention, 60), maxReplayEntries: config.Conf.PfcpMaxReplayEntries, maxOriginatedRequests: config.Conf.PfcpMaxOriginatedRequests, replayMemoryMiB: config.Conf.PfcpReplayMemoryMiB, maxAssociations: config.Conf.PfcpMaxAssociations, allowedPeers: allowedPeers, heartbeatGrace: time.Duration(config.Conf.HeartbeatFailureGrace) * time.Second,
 		heartbeatTimeout: time.Duration(config.Conf.HeartbeatTimeout) * time.Second, heartbeatRetries: config.Conf.HeartbeatRetries,

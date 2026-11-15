@@ -48,7 +48,7 @@ func TestCgroupMemoryLimits(t *testing.T) {
 func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
 	for _, sessions := range []uint32{1, 1024, 65535, 1 << 20} {
 		c := UpfConfig{MaxSessions: sessions}
-		needed := 448*mib + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve() + c.BufferKernelMemoryReserve()
+		needed := 352*mib + 3*(16*mib+c.LocalReleaseMemoryReserve()) + int64(sessions)*32768 + c.BufferMemoryReserve() + c.UsageWindowMemoryReserve() + c.BufferKernelMemoryReserve()
 		if _, err := c.PFCPMemoryPlan(needed-1, 0); err == nil {
 			t.Fatalf("sessions %d: omitted per-session memory", sessions)
 		}
@@ -59,5 +59,23 @@ func TestMemoryBudgetReservesLiveSessionsAndTheirGC(t *testing.T) {
 	c := UpfConfig{}
 	if _, err := c.PFCPMemoryPlan(512*mib, 0); err == nil {
 		t.Fatal("unset sessions did not use standalone default")
+	}
+}
+
+func TestLocalReleaseReserveIncludesOneDenseSessionAndAllContextHeaders(t *testing.T) {
+	for _, capacity := range []uint32{1, 2048, 8192, 16384, 2097152} {
+		c := UpfConfig{UrrMapSize: capacity}
+		reserve := c.LocalReleaseMemoryReserve()
+		if reserve < 16*mib || reserve < 2048*(int64(capacity)+128) {
+			t.Fatalf("URR capacity %d cannot fit one dense session: %d", capacity, reserve)
+		}
+	}
+	c := UpfConfig{MaxSessions: 1024}
+	if c.LocalReleaseMemoryReserve() != 16*mib {
+		t.Fatal("chart reserve changed")
+	}
+	c = UpfConfig{MaxSessions: 16384}
+	if c.LocalReleaseMemoryReserve() < 2048*(32768+128) {
+		t.Fatal("automatic map capacity omitted")
 	}
 }
