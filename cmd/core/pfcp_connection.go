@@ -527,7 +527,7 @@ func (connection *PfcpConnection) Run() {
 			log.Warn().Err(err).Msg("Error reading PFCP socket")
 			continue
 		}
-		connection.Handle(buf[:n], addr)
+		connection.handleDatagram(buf[:n], addr, socket.LocalAddr().(*net.UDPAddr).AddrPort())
 	}
 }
 
@@ -577,11 +577,18 @@ func (connection *PfcpConnection) Receive(b []byte) (int, *net.UDPAddr, error) {
 }
 
 func (connection *PfcpConnection) Handle(b []byte, addr *net.UDPAddr) {
+	connection.stateMu.RLock()
+	local := connection.nodeAddrV4
+	connection.stateMu.RUnlock()
+	connection.handleDatagram(b, addr, local)
+}
+
+func (connection *PfcpConnection) handleDatagram(b []byte, addr *net.UDPAddr, local netip.AddrPort) {
 	if connection.isClosed() || addr == nil || len(b) > 65535 || !connection.admitPeer(addr.IP) {
 		return
 	}
 
-	if err := connection.pfcpHandlerMap.Handle(connection, b, addr); err != nil {
+	if err := connection.pfcpHandlerMap.Handle(connection, b, addr, local); err != nil {
 		log.Warn().Msgf("Error handling PFCP message: %s", err.Error())
 	}
 }
@@ -651,7 +658,7 @@ func (connection *PfcpConnection) sendEncoded(wire []byte, typ uint8, addr *net.
 }
 func (connection *PfcpConnection) sendEncodedAtSocket(wire []byte, typ uint8, addr *net.UDPAddr, trace bool, socket *net.UDPConn) error {
 	if trace && IsMessageTraceable(typ) {
-		connection.TraceMessage(wire, addr, false)
+		connection.traceMessageAtLocal(wire, addr, socket.LocalAddr().(*net.UDPAddr).AddrPort(), false)
 	}
 	if _, err := socket.WriteToUDP(wire, addr); err != nil {
 		return err
@@ -662,16 +669,33 @@ func (connection *PfcpConnection) sendEncodedAtSocket(wire []byte, typ uint8, ad
 }
 
 func (connection *PfcpConnection) TraceMessage(b []byte, addr *net.UDPAddr, rx bool) {
-	if connection.dumper == nil {
-		return
-	}
 	connection.stateMu.RLock()
 	local := connection.nodeAddrV4
 	connection.stateMu.RUnlock()
+	connection.traceMessageAtLocal(b, addr, local, rx)
+}
+
+func (connection *PfcpConnection) traceMessageAtLocal(b []byte, addr *net.UDPAddr, local netip.AddrPort, rx bool) {
+	if connection.dumper == nil || addr == nil {
+		return
+	}
+	peer := addr.AddrPort()
+	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
+	local = netip.AddrPortFrom(local.Addr().Unmap(), local.Port())
+	if local.Addr().IsUnspecified() {
+		// ReadFromUDP/WriteToUDP do not expose a wildcard socket's chosen
+		// local datagram address. Record the matching-family unspecified
+		// address; do not substitute a Node ID or guessed interface address.
+		ip := netip.IPv6Unspecified()
+		if peer.Addr().Is4() {
+			ip = netip.IPv4Unspecified()
+		}
+		local = netip.AddrPortFrom(ip, local.Port())
+	}
 	if rx {
-		connection.dumper.DumpRawIn(addr.AddrPort(), local, b)
+		connection.dumper.DumpRawIn(peer, local, b)
 	} else {
-		connection.dumper.DumpRawOut(addr.AddrPort(), local, b)
+		connection.dumper.DumpRawOut(peer, local, b)
 	}
 }
 

@@ -30,7 +30,7 @@ func TestStandaloneReplayKeyDoesNotReencodeDecodedRequest(t *testing.T) {
 	handlers := PfcpHandlerMap{message.MsgTypeSessionModificationRequest: func(_ *PfcpConnection, msg message.Message, _ string) (message.Message, bool, error) {
 		return message.NewSessionModificationResponse(77, msg.Sequence(), ie.NewCause(ie.CauseRequestAccepted)), false, nil
 	}}
-	if err := handlers.handleMessage(conn, encodingCountMessage{request, &calls}, wire, cp.LocalAddr().(*net.UDPAddr)); err != nil {
+	if err := handlers.handleMessage(conn, encodingCountMessage{request, &calls}, wire, cp.LocalAddr().(*net.UDPAddr), conn.nodeAddrV4); err != nil {
 		t.Fatal(err)
 	}
 	_ = identityRead(t, cp)

@@ -242,19 +242,23 @@ type PacketToWrite struct {
 
 func (dumper *PacketDumper) dumpRaw(srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16, iface int, packet []byte) {
 
-	ip := layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		SrcIP:    srcIP,
-		DstIP:    dstIP,
-		Protocol: layers.IPProtocolUDP,
+	udp := layers.UDP{SrcPort: layers.UDPPort(srcPort), DstPort: layers.UDPPort(dstPort)}
+	var network gopacket.SerializableLayer
+	var checksum gopacket.NetworkLayer
+	if srcIP.To4() != nil && dstIP.To4() != nil {
+		ip := &layers.IPv4{Version: 4, TTL: 64, SrcIP: srcIP.To4(), DstIP: dstIP.To4(), Protocol: layers.IPProtocolUDP}
+		network, checksum = ip, ip
+	} else if srcIP.To4() == nil && dstIP.To4() == nil && srcIP.To16() != nil && dstIP.To16() != nil {
+		ip := &layers.IPv6{Version: 6, HopLimit: 64, SrcIP: srcIP.To16(), DstIP: dstIP.To16(), NextHeader: layers.IPProtocolUDP}
+		network, checksum = ip, ip
+	} else {
+		log.Error().Msg("Cannot capture signalling with invalid or mixed address families")
+		return
 	}
-
-	udp := layers.UDP{
-		SrcPort: layers.UDPPort(srcPort),
-		DstPort: layers.UDPPort(dstPort),
+	if err := udp.SetNetworkLayerForChecksum(checksum); err != nil {
+		log.Error().Err(err).Msg("Set signalling capture checksum family")
+		return
 	}
-	_ = udp.SetNetworkLayerForChecksum(&ip)
 
 	options := gopacket.SerializeOptions{
 		ComputeChecksums: true,
@@ -263,7 +267,7 @@ func (dumper *PacketDumper) dumpRaw(srcIP net.IP, srcPort uint16, dstIP net.IP, 
 
 	buffer := gopacket.NewSerializeBuffer()
 	err := gopacket.SerializeLayers(buffer, options,
-		&ip,
+		network,
 		&udp,
 		gopacket.Payload(packet),
 	)

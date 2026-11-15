@@ -264,3 +264,10 @@ These settings take effect at startup and are shared by all PFCP endpoints. BUFF
 Zero selects the corresponding default. Accepting a BAR or BUFF/NOCP FAR never reserves packet storage or reduces session capacity. Compact metadata is sized to `max_sessions` and the FAR pool. Storage is taken per packet and shared across all endpoints, bounded by the global pool and the per-session limit. Fixed ring slots carry at most 2048 Ethernet-frame bytes; oversized frames, exhausted packet credit and a full ring drop the packet and increment the buffer drop count. Notification observations use separate durable state, so every first eligible downlink packet can notify even when it cannot be stored.
 
 BAR-associated FARs share their total and downlink-only suggested packet counts. Lowering a suggested count applies to later arrivals: existing packets stay until forwarding, discard or expiry (TS 29.244 V20.1.0 clauses 8.2.30 and 8.2.100). Extended DL duration replaces ordinary DL retention. A valid retained packet receives a bounded output window after producer grace permits forwarding. Storage and timing require workload-specific validation before enabling the capability gate.
+
+Signalling captures use the PFCP socket's bound local address and the datagram's
+peer address, with IPv4-mapped IPv6 addresses recorded as IPv4. IPv6 peers use
+IPv6 records. For a wildcard PFCP bind, the UDP API does not expose the selected
+local address per datagram: the record shows `0.0.0.0` for an IPv4 peer or `::`
+for an IPv6 peer, with the bound PFCP port. These unspecified addresses identify
+a capture limitation, not a Node ID or a guessed tunnel address.

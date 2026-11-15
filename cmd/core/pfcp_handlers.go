@@ -22,7 +22,7 @@ type PfcpFunc func(conn *PfcpConnection, msg message.Message, addr string) (mess
 
 type PfcpHandlerMap map[uint8]PfcpFunc
 
-func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *net.UDPAddr) error {
+func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *net.UDPAddr, local netip.AddrPort) error {
 	log.Debug().Msgf("Handling PFCP message from %s", addr)
 	bundled := len(buf) > 0 && buf[0]>>5 == 1 && buf[0]&4 != 0
 
@@ -109,7 +109,7 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		if bundled && !conn.supportsBundle(contexts[i]) {
 			continue
 		}
-		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr, contexts[i]); err != nil {
+		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr, local, contexts[i]); err != nil {
 			results = append(results, err)
 		}
 	}
@@ -135,7 +135,7 @@ func datagramFailures(err error) []*message.DatagramError {
 	return nil
 }
 
-func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr, contexts ...*NodeAssociation) error {
+func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg message.Message, buf []byte, addr *net.UDPAddr, local netip.AddrPort, contexts ...*NodeAssociation) error {
 	// TS 29.244 V20.1.0 clauses 6.4 and 7.6.5: discard unmatched responses.
 	var completed *pendingRequest
 	if !incomingMsg.IsRequest() {
@@ -308,7 +308,7 @@ func (handlerMap PfcpHandlerMap) handleMessage(conn *PfcpConnection, incomingMsg
 		conn.flushReportRetries()
 	}
 	if trace && IsMessageTraceable(incomingMsg.MessageType()) {
-		conn.TraceMessage(buf, addr, true)
+		conn.traceMessageAtLocal(buf, addr, local, true)
 	}
 	UpfMessageRxLatency.WithLabelValues(incomingMsg.MessageTypeName()).Observe(time.Since(startTime).Seconds())
 	if deferred {
