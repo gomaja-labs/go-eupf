@@ -273,7 +273,6 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 	}
 	type reference struct {
 		seid          uint64
-		association   *NodeAssociation
 		activity      *sessionActivity
 		active        bool
 		err           error
@@ -297,7 +296,7 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 		}
 		activity.sampling = true
 		activity.beginRead()
-		batch[n] = reference{seid: seid, association: assoc, activity: activity, timerRevision: session.inactivityRevision}
+		batch[n] = reference{seid: seid, activity: activity, timerRevision: session.inactivityRevision}
 		n++
 		delete(conn.activityDirty, seid)
 		return true
@@ -357,8 +356,15 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 	conn.stateMu.Lock()
 	var requests []admittedRequest
 	for _, item := range batch[:n] {
-		seid, assoc, activity := item.seid, item.association, item.activity
+		seid, activity := item.seid, item.activity
 		activity.sampling = false
+		// Setup may retain the session under a new association while the map
+		// read is in flight. Resolve its current owner under stateMu, including
+		// removal by release or CP restart (TS 29.244 V20.1.0 clause 5.11.2).
+		assoc := conn.activitySessions[seid]
+		if assoc == nil {
+			continue
+		}
 		session := assoc.Sessions[seid]
 		if conn.isClosed() || session == nil || assoc.cleaning || assoc.enhancedRelease != 0 || session.activity != activity {
 			continue
@@ -403,8 +409,12 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 		requests = append(requests, admittedRequest{wire, request.MessageType(), peer, socket, session.Traced})
 	}
 	for _, item := range batch[:n] {
-		session := item.association.Sessions[item.seid]
-		if !conn.isClosed() && item.err == nil && session != nil && session.activity == item.activity && !item.association.cleaning && item.association.enhancedRelease == 0 {
+		assoc := conn.activitySessions[item.seid]
+		if assoc == nil {
+			continue
+		}
+		session := assoc.Sessions[item.seid]
+		if !conn.isClosed() && item.err == nil && session != nil && session.activity == item.activity && !assoc.cleaning && assoc.enhancedRelease == 0 {
 			conn.scheduleSessionActivity(session, item.observed)
 		}
 	}
