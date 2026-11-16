@@ -60,6 +60,7 @@ type BpfObjects struct {
 	ruleMutex              sync.Mutex
 	ruleKeys               ruleKeyIndex
 	ruleImages             map[pdrMutationKey]pdrImage
+	freePDRImages          [][]IpEntrypointPdrEntry // ruleMutex owns retired Go slices.
 	// ruleMutex serializes the synchronous map writes that borrow this buffer.
 	publicationBucket IpEntrypointPdrBucket
 	rulePoison        error

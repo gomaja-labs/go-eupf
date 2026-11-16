@@ -39,6 +39,7 @@ type ruleTransaction struct {
 	completion             chan error
 	pdrs                   map[pdrMutationKey]*pdrMutation
 	pdrOrder               []*pdrMutation
+	reusablePDRImages      [][]IpEntrypointPdrEntry
 	bufferGrace            chan struct{}
 	capacityDeadline       time.Time
 }
@@ -140,6 +141,9 @@ func (tx *ruleTransaction) Commit() error {
 		}
 	}
 	tx.finished = true
+	for _, entries := range tx.reusablePDRImages {
+		tx.objects.recyclePDRImage(entries)
+	}
 	tx.objects.ruleMutex.Unlock()
 	return nil
 }

@@ -38,6 +38,28 @@ type pdrMutation struct {
 	previousSlot uint32
 }
 
+func (b *BpfObjects) copyPDRImage(entries []IpEntrypointPdrEntry) []IpEntrypointPdrEntry {
+	for i := len(b.freePDRImages) - 1; i >= 0; i-- {
+		if cap(b.freePDRImages[i]) >= len(entries) {
+			out := b.freePDRImages[i][:len(entries)]
+			last := len(b.freePDRImages) - 1
+			b.freePDRImages[i] = b.freePDRImages[last]
+			b.freePDRImages[last] = nil
+			b.freePDRImages = b.freePDRImages[:last]
+			copy(out, entries)
+			return out
+		}
+	}
+	return append([]IpEntrypointPdrEntry(nil), entries...)
+}
+
+func (b *BpfObjects) recyclePDRImage(entries []IpEntrypointPdrEntry) {
+	if cap(entries) > 0 && len(b.freePDRImages) < 2*MaxRulesPerSession {
+		clear(entries[:cap(entries)])
+		b.freePDRImages = append(b.freePDRImages, entries[:0])
+	}
+}
+
 func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutation, error) {
 	k := pdrMutationKey{m, key}
 	if tx.pdrs != nil {
@@ -74,7 +96,7 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		if len(image.entries) != 0 && image.owner != tx.sessionID {
 			return nil, ErrKeyOwned
 		}
-		draft.entries = append([]IpEntrypointPdrEntry(nil), image.entries...)
+		draft.entries = tx.objects.copyPDRImage(image.entries)
 	}
 
 	// Most requests touch only one or two keys. Keep that lookup in the existing
@@ -144,6 +166,9 @@ func (tx *ruleTransaction) publishPDRs() error {
 	for _, draft := range tx.pdrOrder {
 		if len(draft.entries) > MaxPDRsPerKey {
 			return ErrRuleCapacity
+		}
+		if !draft.changed {
+			tx.reusablePDRImages = append(tx.reusablePDRImages, draft.entries)
 		}
 	}
 	for _, remove := range []bool{false, true} {
@@ -235,9 +260,14 @@ func (tx *ruleTransaction) publishPDRs() error {
 			})
 			if remove {
 				delete(tx.objects.ruleImages, draft.pdrMutationKey)
+				tx.reusablePDRImages = append(tx.reusablePDRImages, draft.entries)
 			} else {
 				tx.objects.ruleImages[draft.pdrMutationKey] = publicationImage(draft.owner, draft.entries, publishedSlot)
 			}
+			// These Go images have no readers outside ruleMutex. Reuse only
+			// after successful Commit makes every undo record unreachable.
+			// Kernel bucket slots still follow their separate RCU grace.
+			tx.reusablePDRImages = append(tx.reusablePDRImages, draft.previous.entries)
 			tx.objects.recordPDRKey(draft.m, draft.key, value.SessionId, !remove)
 			if remove {
 				tx.retiredKey = true
