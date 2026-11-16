@@ -70,7 +70,10 @@ func (c *UpfConfig) BufferKernelMemoryReserve() int64 {
 	// kernel bytes at one packet. At 65536 slots the empty result hash adds
 	// about 16 bytes/slot, within the 4608-vs-4103 per-packet rounding below.
 	const deferredRuntime = 3 << 20
-	return deferredRuntime + 320*sessions + 1152*(2*fars) + 4608*int64(c.Buffering().Packets)
+	// Full authorization hashes measured 6.50-6.55 MiB of growing kernel
+	// charge for 65536 entries; round to 128 bytes per configured slot.
+	const ingressAuthorizations = 128 * GenericIngressCapacity
+	return deferredRuntime + ingressAuthorizations + 320*sessions + 1152*(2*fars) + 4608*int64(c.Buffering().Packets)
 }
 
 func (c *UpfConfig) bufferMetadataCapacity() (sessions, fars int64) {

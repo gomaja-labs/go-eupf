@@ -36,8 +36,15 @@ func TestMemoryBudgetIncludesReplacementRuleLifetimes(t *testing.T) {
 	if _, err := c.PFCPMemoryPlan(476*mib, 64*mib); err == nil {
 		t.Fatal("replacement FAR lifetimes and URR windows omitted from admission")
 	}
-	if _, err := c.PFCPMemoryPlan(477*mib, 64*mib); err != nil {
+	if _, err := c.PFCPMemoryPlan(485*mib, 64*mib); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMemoryBudgetIncludesGenericIngressAuthorizationGrowth(t *testing.T) {
+	c := UpfConfig{MaxSessions: 1024, PfcpReplayMemoryMiB: 96}
+	if _, err := c.PFCPMemoryPlan(484*mib, 64*mib); err == nil {
+		t.Fatal("generic ingress authorization growth omitted from admission")
 	}
 }
 

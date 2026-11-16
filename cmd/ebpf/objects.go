@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cilium/ebpf"
@@ -160,18 +161,19 @@ func (bpfObjects *BpfObjects) Load() error {
 	}
 
 	desiredMapSizes := map[string]uint32{
-		"qer_map":              qerCapacity,
-		"far_map":              farCapacity,
-		"pdr_map_downlink_ip4": bpfObjects.pdrMapSize,
-		"pdr_map_downlink_ip6": bpfObjects.pdrMapSize,
-		"pdr_map_teid_ip4":     bpfObjects.pdrMapSize,
-		"pdr_buckets":          bucketCapacity,
-		"urr_map":              urrCapacity,
-		"buffer_anchors":       bpfObjects.bufferSessions,
-		"session_activity":     bpfObjects.bufferSessions + 1,
-		"buffer_bindings":      farCapacity,
-		"buffer_states":        2 * farCapacity,
-		"buffer_notice_ready":  bpfObjects.bufferSessions,
+		"qer_map":                qerCapacity,
+		"far_map":                farCapacity,
+		"pdr_map_downlink_ip4":   bpfObjects.pdrMapSize,
+		"pdr_map_downlink_ip6":   bpfObjects.pdrMapSize,
+		"pdr_map_teid_ip4":       bpfObjects.pdrMapSize,
+		"pdr_buckets":            bucketCapacity,
+		"buffer_generic_ingress": config.GenericIngressCapacity,
+		"urr_map":                urrCapacity,
+		"buffer_anchors":         bpfObjects.bufferSessions,
+		"session_activity":       bpfObjects.bufferSessions + 1,
+		"buffer_bindings":        farCapacity,
+		"buffer_states":          2 * farCapacity,
+		"buffer_notice_ready":    bpfObjects.bufferSessions,
 	}
 
 	for name, size := range desiredMapSizes {
