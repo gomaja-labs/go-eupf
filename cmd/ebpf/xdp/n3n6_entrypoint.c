@@ -198,7 +198,7 @@ static __noinline const struct pdr *select_pdr(struct packet_context *ctx,struct
         ctx->return_pdr=&entry->return_pdr;ctx->return_nr_flag=entry->return_nr_flag;
         if (entry->notify==1 && __sync_val_compare_and_swap(&entry->notify,1,2)==1)
             output_sdf_event(ctx->xdp_ctx,session->session_id,entry->pdr_id,packet);
-        note_session_activity(entry->activity_id);
+        if (entry->activity_id) note_session_activity(entry->activity_id);
         return &entry->pdr;
     }
     return 0;
@@ -216,7 +216,7 @@ static __always_inline const struct pdr *select_unfiltered_pdr(struct packet_con
     ctx->nr_flag = entry->nr_flag;
     ctx->return_pdr = &entry->return_pdr;
     ctx->return_nr_flag = entry->return_nr_flag;
-    note_session_activity(entry->activity_id);
+    if (entry->activity_id) note_session_activity(entry->activity_id);
     return &entry->pdr;
 }
 static __always_inline void pdi_ports(struct packet_context *ctx,struct pdi_packet *tuple) {
@@ -1116,8 +1116,7 @@ SEC("xdp/upf_ip_entrypoint")
 int upf_ip_entrypoint_func(struct xdp_md *ctx) {
 #ifdef BUFFER_ADMISSION
     void *data=(void *)(long)ctx->data,*end=(void *)(long)ctx->data_end;
-    struct ethhdr *ethernet=data;
-    if ((void *)(ethernet+1)<=end && ethernet->h_proto==bpf_htons(BUFFER_ETHERTYPE))
+    if (data+ETH_HLEN<=end && *(__u16 *)(data+12)==bpf_htons(BUFFER_ETHERTYPE))
         return buffer_consume_envelope(ctx);
 #endif
     // upf_printk("upf n3 & n6 combined entrypoint start");

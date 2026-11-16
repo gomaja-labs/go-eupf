@@ -198,7 +198,7 @@ struct {
     __type(value, __u64);
     __uint(max_entries, 65536);
 } session_activity SEC(".maps");
-static __always_inline void note_session_activity(__u32 slot) {
+static __noinline void note_session_activity(__u32 slot) {
     if (!slot) return;
     // Packet writers only set the bit. User space clears an observed set bit
     // before timestamping it. A delayed store therefore only delays expiry;

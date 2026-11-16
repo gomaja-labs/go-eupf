@@ -5,8 +5,9 @@ package ebpf
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/gopacket/gopacket/layers"
 	"testing"
+
+	"github.com/gopacket/gopacket/layers"
 )
 
 func TestBufferEnvelopeAuthenticatesBeforeParsing(t *testing.T) {
@@ -69,7 +70,7 @@ func TestBufferEnvelopeAuthenticatesBeforeParsing(t *testing.T) {
 
 // TestBufferAdmissionPreservesLocalExperimentalFrames sends an ordinary IEEE 802 Local
 // Experimental EtherType 1 frame (not an envelope) through the initial and the
-// BUFF-capable entrypoint. Both are attached to the same links in turn.
+// BUFF-capable entrypoint. Both execute through kernel test-run with the same ingress context.
 func TestBufferAdmissionPreservesLocalExperimentalFrames(t *testing.T) {
 	b := loadDatapath(t)
 	frame := ethernetDatapath(t, layers.EthernetType(0x88b5), bytes.Repeat([]byte{0x5a}, 46))
@@ -81,6 +82,6 @@ func TestBufferAdmissionPreservesLocalExperimentalFrames(t *testing.T) {
 	passed, dropped, err := b.BufferContinuationCounts()
 	t.Logf("LocalExperimental initial_action=%d buff_action=%d continuation_passed=%d continuation_dropped=%d err=%v", before, after, passed, dropped, err)
 	if before != after || passed != 0 || dropped != 0 {
-		t.Fatalf("88-B5 wire frame: initial entrypoint action %d, BUFF entrypoint action %d", before, after)
+		t.Fatalf("88-B5 frame action: initial entrypoint action %d, BUFF entrypoint action %d", before, after)
 	}
 }
