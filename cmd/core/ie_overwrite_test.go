@@ -18,6 +18,7 @@ import (
 type MapOperationsMock struct {
 	uplinkPDR   ebpf.PdrInfo
 	downlinkPDR ebpf.PdrInfo
+	downlinkKey net.IP
 	urr         ebpf.UrrInfo
 	far         ebpf.FarInfo
 	nextID      uint32
@@ -33,6 +34,7 @@ func (mapOps *MapOperationsMock) PutPdrUplink(teid uint32, pdrInfo ebpf.PdrInfo)
 }
 func (mapOps *MapOperationsMock) PutPdrDownlink(ipv4 net.IP, pdrInfo ebpf.PdrInfo) error {
 	mapOps.downlinkPDR = pdrInfo
+	mapOps.downlinkKey = cloneIP(ipv4)
 	return nil
 }
 func (mapOps *MapOperationsMock) UpdatePdrUplink(teid uint32, pdrInfo ebpf.PdrInfo) error {

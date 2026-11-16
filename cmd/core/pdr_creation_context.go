@@ -366,7 +366,8 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		if ueIP.IPv4Address != nil {
 			// TS 23.527 V20.0.0 clause 4.3.2 NOTE: explicit UE addresses
 			// have the same availability during restoration and new admission.
-			// The automatic pool bounds only UPF allocation.			spdrInfo.Ipv4 = cloneIP(ueIP.IPv4Address)
+			// The automatic pool bounds only UPF allocation.
+			spdrInfo.Ipv4 = cloneIP(ueIP.IPv4Address)
 			spdrInfo.PdrInfo.UEIPv4 = cloneIP(ueIP.IPv4Address)
 		}
 		if ueIP.IPv6Address != nil {

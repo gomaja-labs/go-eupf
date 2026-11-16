@@ -4,11 +4,12 @@ import (
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-pfcp/ie"
+	"net"
 	"testing"
 )
 
-// The same CP-allocated UE IPv4 address outside the UPF pool is accepted without
-// RESTI but rejected with Cause 86 with RESTI.
+// Explicit CP addresses retain their lookup keys during both new admission
+// and restoration, independently of the automatic UPF pool.
 func TestRestorationAcceptsCPAllocatedUEIPv4(t *testing.T) {
 	resources, err := service.NewResourceManager("192.0.2.0/30", 4)
 	if err != nil {
@@ -27,6 +28,10 @@ func TestRestorationAcceptsCPAllocatedUEIPv4(t *testing.T) {
 		address := []string{"198.51.100.1", "198.51.100.2"}[i]
 		request.CreatePDR = []*ie.IE{ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(1), ie.NewUEIPAddress(6, address, "", 0, 0)), ie.NewFARID(1))}
 		causes[resti] = pipelineCause(t, sessionLimitExchange(t, conn, peer, request))
+		plane := conn.mapOperations.(*MapOperationsMock)
+		if !plane.downlinkKey.Equal(net.ParseIP(address)) {
+			t.Fatalf("RESTI=%t installed downlink key=%s want %s", resti, plane.downlinkKey, address)
+		}
 	}
 	t.Logf("CP-allocated UE IPv4 outside pool: without RESTI cause=%d, with RESTI cause=%d", causes[false], causes[true])
 	if causes[false] != ie.CauseRequestAccepted || causes[true] != ie.CauseRequestAccepted {
