@@ -158,7 +158,8 @@ static __always_inline int parse_udp(struct packet_context *ctx) {
     if ((const char *)(udp + 1) > ctx->data_end)
         return -1;
 
-    // RFC 768: UDP Length includes its header and excludes Ethernet padding.
+    // RFC 768 (Length field), updated by RFC 9868 section 7: UDP Length
+    // includes its header, excluding the IP surplus area and Ethernet padding.
     __u32 len = bounded_wire_length(udp->len);
     if (len < sizeof(*udp) || (!ctx->fragmented && (const char *)udp + len > ctx->data_end) ||
         (ctx->ip_end && ((const char *)(udp+1)>ctx->ip_end || (!ctx->fragmented && (const char *)udp + len > ctx->ip_end))))
