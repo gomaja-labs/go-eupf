@@ -21,15 +21,16 @@ import (
 // calls remain inside that reader; redirects consume no rule pointers after
 // return. This also covers every local-tunnel tail call in the same invocation.
 type ruleGrace struct {
-	inner, outer *cilium.Map
-	mu           sync.Mutex
-	pending      []graceWork
-	wake         chan struct{}
-	stop         chan struct{}
-	done         chan struct{}
-	err          error
-	failures     chan error
-	synchronize  func() error
+	inner, outer  *cilium.Map
+	mu            sync.Mutex
+	pending       []graceWork
+	wake          chan struct{}
+	stop          chan struct{}
+	done          chan struct{}
+	err           error
+	failures      chan error
+	synchronize   func() error
+	capacityReady chan struct{}
 }
 
 type graceWork struct {
@@ -87,6 +88,54 @@ func (g *ruleGrace) wait() error {
 	done := make(chan error, 1)
 	g.enqueue(graceWork{done: done})
 	return <-done
+}
+
+// ruleCapacityWait is one transaction's total wait budget after its first slot
+// shortage, excluding execution/scheduling time. Exhaustion remains temporary
+// resource unavailability (TS 29.244 V20.1.0 table 8.2.1-1, Cause 75).
+const ruleCapacityWait = 100 * time.Millisecond
+
+func (g *ruleGrace) waitForCapacity(deadline time.Time) error {
+	delay := time.Until(deadline)
+	if delay <= 0 {
+		return ErrRuleCapacity
+	}
+	g.mu.Lock()
+	if g.err != nil {
+		err := g.err
+		g.mu.Unlock()
+		return err
+	}
+	ready := g.capacityReady
+	if ready == nil {
+		ready = make(chan struct{})
+		g.capacityReady = ready
+		g.pending = append(g.pending, graceWork{reclaim: func() error {
+			g.mu.Lock()
+			g.capacityReady = nil
+			close(ready)
+			g.mu.Unlock()
+			return nil
+		}})
+	}
+	g.mu.Unlock()
+	select {
+	case g.wake <- struct{}{}:
+	default:
+	}
+	// One shared completion bounds retained waiter state even if the kernel
+	// barrier stalls indefinitely and successive requests exhaust their budget.
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ready:
+		return g.failure()
+	case <-timer.C:
+		if err := g.failure(); err != nil {
+			return err
+		}
+		return fmt.Errorf("rule retirement wait exceeded: %w", ErrRuleCapacity)
+	}
 }
 
 // ruleRecoveryWindow bounds actual I/O failures, never successful progress.
