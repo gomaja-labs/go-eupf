@@ -55,7 +55,7 @@ func (b *BpfObjects) BeginRuleTransaction(sessionID uint64) (RuleTransaction, er
 		b.ruleMutex.Unlock()
 		return nil, fmt.Errorf("rule state requires recovery: %w", errors.Join(b.rulePoison, b.grace.failure()))
 	}
-	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID, newFAR: make(map[uint32]bool), newQER: make(map[uint32]bool), newURR: make(map[uint32]bool)}, nil
+	return &ruleTransaction{ForwardingPlaneController: b, objects: b, sessionID: sessionID}, nil
 }
 
 func journalRule[T any](tx *ruleTransaction, m *cilium.Map, key interface{}, change func() error) error {
@@ -504,6 +504,9 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
 	id, err := tx.objects.nextRuleID(tx.objects.farIdTracker, &tx.objects.farMutex, &tx.capacityDeadline)
 	if err == nil {
+		if tx.newFAR == nil {
+			tx.newFAR = make(map[uint32]bool)
+		}
 		tx.newFAR[id] = true
 		tx.allocatedFAR = append(tx.allocatedFAR, id)
 	}
@@ -512,6 +515,9 @@ func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
 func (tx *ruleTransaction) GetNextQER() (uint32, error) {
 	id, err := tx.objects.nextRuleID(tx.objects.qerIdTracker, &tx.objects.qerMutex, &tx.capacityDeadline)
 	if err == nil {
+		if tx.newQER == nil {
+			tx.newQER = make(map[uint32]bool)
+		}
 		tx.newQER[id] = true
 		tx.allocatedQER = append(tx.allocatedQER, id)
 	}
@@ -520,6 +526,9 @@ func (tx *ruleTransaction) GetNextQER() (uint32, error) {
 func (tx *ruleTransaction) GetNextURR() (uint32, error) {
 	id, err := tx.objects.nextRuleID(tx.objects.urrIdTracker, &tx.objects.urrMutex, &tx.capacityDeadline)
 	if err == nil {
+		if tx.newURR == nil {
+			tx.newURR = make(map[uint32]bool)
+		}
 		tx.newURR[id] = true
 		tx.allocatedURR = append(tx.allocatedURR, id)
 	}
