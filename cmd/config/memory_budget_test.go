@@ -11,7 +11,7 @@ func TestMemoryBudgetIncludesSharedReplayAndKernelBaseline(t *testing.T) {
 	if _, err := c.PFCPMemoryPlan(128*mib, 25*mib); err == nil {
 		t.Fatal("accepted chart limit smaller than replay plus baseline")
 	}
-	if soft, err := c.PFCPMemoryPlan(512*mib, 25*mib); err != nil || soft != 409141248 {
+	if soft, err := c.PFCPMemoryPlan(512*mib, 25*mib); err != nil || soft != 408846336 {
 		t.Fatalf("soft limit %d: %v", soft, err)
 	}
 	if _, err := c.PFCPMemoryPlan(512*mib, 300*mib); err == nil {

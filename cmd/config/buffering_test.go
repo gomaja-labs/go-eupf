@@ -31,6 +31,16 @@ func TestMemoryBudgetIncludesPacketPoolAndBufferLifetimes(t *testing.T) {
 	}
 }
 
+func TestMemoryBudgetIncludesReplacementRuleLifetimes(t *testing.T) {
+	c := UpfConfig{MaxSessions: 1024, PfcpReplayMemoryMiB: 96}
+	if _, err := c.PFCPMemoryPlan(476*mib, 64*mib); err == nil {
+		t.Fatal("replacement FAR lifetimes and URR windows omitted from admission")
+	}
+	if _, err := c.PFCPMemoryPlan(477*mib, 64*mib); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBufferingSettingsFileFlagAndEnvironment(t *testing.T) {
 	for _, source := range []string{"file", "flag", "environment"} {
 		t.Run(source, func(t *testing.T) {

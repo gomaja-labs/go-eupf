@@ -6,11 +6,12 @@ import (
 	"math"
 
 	cilium "github.com/cilium/ebpf"
+	"github.com/gomaja-labs/go-eupf/cmd/config"
 )
 
 // MaxRulesPerSession is the admitted number of rules of each type in a PFCP
 // session. One PDR selects at most one of the two hash-key maps.
-const MaxRulesPerSession = 64
+const MaxRulesPerSession = config.MaxRulesPerSession
 
 // PDRBucketCapacity provisions every live hash key and bounded replacement
 // headroom. ruleMutex permits one publication transaction at a time; the PFCP

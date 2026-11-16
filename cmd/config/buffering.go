@@ -82,7 +82,9 @@ func (c *UpfConfig) bufferMetadataCapacity() (sessions, fars int64) {
 	if fars == 0 {
 		fars = 2 * sessions
 	}
-	return sessions, fars
+	// Buffer state and pending notifications can outlive the committed FAR.
+	// Include every physical nonzero version, independently of live admission.
+	return sessions, versionedRuleCapacity(fars)
 }
 
 // UsageWindowMemoryReserve keeps the per-URR window timestamps and restored
@@ -99,5 +101,5 @@ func (c *UpfConfig) UsageWindowMemoryReserve() int64 {
 		}
 		capacity = 2 * uint64(sessions)
 	}
-	return int64(capacity) * (2 * 384)
+	return versionedRuleCapacity(int64(capacity)) * (2 * 384)
 }
