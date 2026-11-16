@@ -33,7 +33,7 @@ func (conn *PfcpConnection) detachBufferGuard(owner *bufferOwner, cycle *bufferC
 	}
 	oldSlot := far.GlobalId
 	far.FarInfo.BufferSessionID, far.FarInfo.BufferCookie, far.FarInfo.BufferLane = 0, 0, 0
-	start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 	defer func() { result = errors.Join(result, finish(false)) }()
 	if err := start(); err != nil {
 		return err

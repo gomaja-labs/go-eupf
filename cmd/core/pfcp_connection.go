@@ -764,7 +764,7 @@ type deletedSessionUsage struct {
 
 func (connection *PfcpConnection) deleteSessionWithUsage(session *Session) (_ *deletedSessionUsage, err error) {
 	draft := cloneSession(session)
-	start, finish := connection.prepareSessionMutation(draft, deleteSessionMutation)
+	start, finish := connection.prepareSessionMutation(draft, deleteSessionMutation, true)
 	defer func() { err = errors.Join(err, finish(false)) }()
 	pool := NewOperationPool()
 	pool.Before = start

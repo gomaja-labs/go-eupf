@@ -31,7 +31,7 @@ func TestPacketBufferBARCountsShareDirectionsWithoutRestrictingOtherFARs(t *test
 	far.BARID = &barID
 	after.FARs[1] = far
 	after.FARs[2] = SFarInfo{FarInfo: ebpf.FarInfo{Action: 4}}
-	start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 	defer func() {
 		conn.stateMu.Lock()
 		defer conn.stateMu.Unlock()

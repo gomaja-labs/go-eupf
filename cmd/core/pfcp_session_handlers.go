@@ -104,7 +104,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		Uint64("RemoteSEID", session.RemoteSEID).
 		Logger()
 
-	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation, true)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -211,7 +211,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 
 	traced := session.IsSessionTraced()
 
-	start, finish := conn.prepareSessionMutation(session, deleteSessionMutation)
+	start, finish := conn.prepareSessionMutation(session, deleteSessionMutation, true)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -303,7 +303,10 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		printSessionModificationRequest(req, conn.profile)
 	}
 
-	start, finish := conn.prepareSessionMutation(session, updateSessionMutation)
+	// Only PDR instructions can change tunnel/address ownership (TS 29.244
+	// V20.1.0 table 7.5.4.1-1). Other rule updates keep those reservations.
+	resourceChanges := len(req.CreatePDR)+len(req.UpdatePDR)+len(req.RemovePDR) > 0
+	start, finish := conn.prepareSessionMutation(session, updateSessionMutation, resourceChanges)
 	defer func() {
 		if err := finish(false); err != nil {
 			logger.Error().Err(err).Msg("Restore rejected session transaction")
@@ -388,7 +391,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
 	}
 
-	conn.reconcileSessionResources(session)
+	if resourceChanges {
+		conn.reconcileSessionResources(session)
+	}
 	if err := finish(true); err != nil {
 		return message.NewSessionModificationResponse(session.RemoteSEID, req.Sequence(), ie.NewCause(ie.CauseSystemFailure)), traced, nil
 	}

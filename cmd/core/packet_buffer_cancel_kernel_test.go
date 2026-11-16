@@ -65,7 +65,7 @@ func TestPacketBufferCancellationReclaimsPackets(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+			start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 			conn.stagePacketBuffering(assoc, before, after, updateSessionMutation, outcome == "DROBU")
 			err := start()
 			if err == nil {

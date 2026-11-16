@@ -18,7 +18,7 @@ func setBufferAction(conn *PfcpConnection, assoc *NodeAssociation, before *Sessi
 	far := after.FARs[1]
 	far.FarInfo.Action = action
 	after.FARs[1] = far
-	start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 	conn.stagePacketBuffering(assoc, before, after, updateSessionMutation, false)
 	if err := start(); err != nil {
 		_ = finish(false)

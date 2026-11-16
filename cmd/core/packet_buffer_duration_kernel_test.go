@@ -79,7 +79,7 @@ func installPacketBufferDuration(t *testing.T, conn *PfcpConnection, assoc *Node
 	far := after.FARs[1]
 	far.BARID = &barID
 	after.FARs[1] = far
-	start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 	defer func() {
 		if err := finish(false); err != nil {
 			t.Error(err)

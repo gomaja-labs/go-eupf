@@ -5,6 +5,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
 )
@@ -15,14 +16,20 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 // prepareSessionMutation creates the private reservation view under stateMu.
 // Parsing and validation finish before map publication. Commit then
 // reserves every rule slot before applying the first map write.
-func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessionMutationKind) (func() error, func(bool) error) {
+func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessionMutationKind, resourceChanges bool) (func() error, func(bool) error) {
 	if session.buffers != nil {
 		waitBufferIO(session.buffers.owner)
 	}
 	maps, resources := conn.mapOperations, conn.ResourceManager
-	unlockReservations := resources.LockReservations()
 	owner := session.LocalSEID
-	journal := resources.BeginReservation(owner)
+	unlockReservations := func() {}
+	var journal *service.ReservationJournal
+	if resourceChanges {
+		unlockReservations = resources.LockReservations()
+		journal = resources.BeginReservation(owner)
+	} else {
+		journal = resources.BeginUnchangedReservation(owner)
+	}
 	reserved := journal.View()
 	proxy := &sessionMapProxy{maps}
 	conn.mapOperations, conn.ResourceManager = proxy, reserved
@@ -41,16 +48,18 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 				return err
 			}
 		}
-		keys := make([]ebpf.PDRKey, 0, len(session.PDRs))
-		for id, pdr := range session.PDRs {
-			keys = append(keys, ebpf.PDRKey{ID: id, TEID: pdr.Teid, IPv4: pdr.Ipv4, IPv6: pdr.Ipv6, IPv6Mask: pdr.PdrInfo.UEIPv6Mask})
-		}
-		if err := proxy.CheckPDRPlan(session.LocalSEID, keys); err != nil {
-			var plan *ebpf.PDRPlanError
-			if errors.As(err, &plan) {
-				return &ruleFailure{ie.RuleIDTypePDR, plan.ID, err}
+		if resourceChanges {
+			keys := make([]ebpf.PDRKey, 0, len(session.PDRs))
+			for id, pdr := range session.PDRs {
+				keys = append(keys, ebpf.PDRKey{ID: id, TEID: pdr.Teid, IPv4: pdr.Ipv4, IPv6: pdr.Ipv6, IPv6Mask: pdr.PdrInfo.UEIPv6Mask})
 			}
-			return &requestIEError{ie.CauseSystemFailure, 0, err}
+			if err := proxy.CheckPDRPlan(session.LocalSEID, keys); err != nil {
+				var plan *ebpf.PDRPlanError
+				if errors.As(err, &plan) {
+					return &ruleFailure{ie.RuleIDTypePDR, plan.ID, err}
+				}
+				return &requestIEError{ie.CauseSystemFailure, 0, err}
+			}
 		}
 		return nil
 	}

@@ -206,7 +206,7 @@ func TestSessionJournalReservesAndRollsBackPacketBuffers(t *testing.T) {
 		conn.stateMu.Unlock()
 		t.Fatal(err)
 	}
-	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation, true)
 	defer func() {
 		conn.stateMu.Lock()
 		err := finish(false)
@@ -262,7 +262,7 @@ func publishPacketBufferFixtureOptions(t *testing.T, options BufferingOptions) (
 	if err := conn.ResourceManager.AdmitSession(session.LocalSEID); err != nil {
 		t.Fatal(err)
 	}
-	start, finish := conn.prepareSessionMutation(session, createSessionMutation)
+	start, finish := conn.prepareSessionMutation(session, createSessionMutation, true)
 	defer func() {
 		if err := finish(false); err != nil {
 			t.Error(err)
@@ -373,7 +373,7 @@ func switchBufferedFARToForward(t *testing.T, conn *PfcpConnection, assoc *NodeA
 	far.FarInfo.RemoteIP = binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2})
 	far.FarInfo.Teid = 200
 	after.FARs[1] = far
-	start, finish := conn.prepareSessionMutation(after, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(after, updateSessionMutation, true)
 	defer func() {
 		if err := finish(false); err != nil {
 			t.Error(err)

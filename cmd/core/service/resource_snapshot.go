@@ -11,6 +11,7 @@ import (
 // reservation lock through Commit or Rollback, never across reclamation.
 type ReservationJournal struct {
 	manager     *ResourceManager
+	unchanged   bool
 	owner       uint64
 	view        *ResourceManager
 	oldTEIDs    map[uint32]uint32
@@ -51,6 +52,13 @@ func (manager *ResourceManager) BeginReservation(owner uint64) *ReservationJourn
 	return journal
 }
 
+// BeginUnchangedReservation preserves existing ownership for a request without
+// PDR instructions. The caller must not allocate or detach tunnel/address
+// resources through this view; it needs neither a reservation lock nor copies.
+func (manager *ResourceManager) BeginUnchangedReservation(owner uint64) *ReservationJournal {
+	return &ReservationJournal{owner: owner, view: manager, unchanged: true}
+}
+
 // View exposes allocator operations scoped to the pending session mutation.
 func (journal *ReservationJournal) View() *ResourceManager { return journal.view }
 
@@ -65,6 +73,9 @@ func (journal *ReservationJournal) Commit() func() error {
 // deferred reclamation if the failed transaction published any rule pointers.
 func (journal *ReservationJournal) Rollback() func() error { return journal.publish(true) }
 func (journal *ReservationJournal) publish(rollback bool) func() error {
+	if journal.unchanged {
+		return nil
+	}
 	owner := journal.owner
 	var reclaim []func()
 	if journal.manager == nil {
@@ -178,6 +189,9 @@ func (journal *ReservationJournal) publish(rollback bool) func() error {
 
 // Releases reports whether the request detaches an existing tunnel or address.
 func (journal *ReservationJournal) Releases() bool {
+	if journal.unchanged {
+		return false
+	}
 	if pool := journal.view.FTEIDM; pool != nil {
 		keep := make(map[uint32]bool)
 		for _, id := range pool.busyTEIDs[journal.owner] {

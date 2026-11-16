@@ -196,7 +196,7 @@ func (conn *PfcpConnection) applyPacketBufferReportUpdate(assoc *NodeAssociation
 	if work.after != nil {
 		candidate.barRevision = work.after.revision
 	}
-	start, finish := conn.prepareSessionMutation(candidate, updateSessionMutation)
+	start, finish := conn.prepareSessionMutation(candidate, updateSessionMutation, true)
 	defer func() { result = errors.Join(result, finish(false)) }()
 	conn.stagePacketBuffering(assoc, before, candidate, updateSessionMutation, work.drop)
 	if err := start(); err != nil {
