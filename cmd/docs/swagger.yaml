@@ -1,0 +1,1453 @@
+basePath: /api/v1
+consumes:
+- application/json
+definitions:
+  config.UpfConfig:
+    properties:
+      allowed_apns:
+        type: string
+      api_address:
+        type: string
+      api_allowed_origins:
+        items:
+          type: string
+        type: array
+      api_tls_cert_file:
+        type: string
+      api_tls_key_file:
+        type: string
+      association_setup_timeout:
+        type: integer
+      buffer_packets:
+        type: integer
+      buffer_per_session:
+        type: integer
+      buffer_retention_seconds:
+        type: integer
+      denied_apns:
+        type: string
+      far_map_size:
+        type: integer
+      feature_ueip:
+        type: boolean
+      gtp_echo_interval:
+        type: integer
+      gtp_peer:
+        items:
+          type: string
+        type: array
+      heartbeat_failure_grace:
+        type: integer
+      heartbeat_interval:
+        type: integer
+      heartbeat_retries:
+        type: integer
+      heartbeat_timeout:
+        type: integer
+      inactivity_release_timeout:
+        type: integer
+      interface_name:
+        items:
+          type: string
+        type: array
+      ip6_ra_prefix:
+        type: string
+      ip6_ra_support:
+        type: boolean
+      logging_caller:
+        type: boolean
+      logging_level:
+        type: string
+      max_sessions:
+        type: integer
+      metrics_address:
+        type: string
+      n3_address:
+        type: string
+      n3_adv_address:
+        type: string
+      n3_adv_address_5g:
+        type: string
+      n9_address:
+        type: string
+      n9_adv_address:
+        type: string
+      pa_address:
+        type: string
+      pdr_map_size:
+        type: integer
+      pfcp_address:
+        type: string
+      pfcp_max_associations:
+        type: integer
+      pfcp_max_originated_requests:
+        type: integer
+      pfcp_max_replay_entries:
+        type: integer
+      pfcp_node:
+        items:
+          type: string
+        type: array
+      pfcp_node_id:
+        type: string
+      pfcp_peer_allow_list:
+        items:
+          type: string
+        type: array
+      pfcp_profile:
+        type: string
+      pfcp_replay_memory_mib:
+        type: integer
+      pfcp_request_retries:
+        type: integer
+      pfcp_request_timeout:
+        type: integer
+      pfcp_response_retention:
+        type: integer
+      qci_dscp_mapping:
+        additionalProperties:
+          type: integer
+        type: object
+      qer_map_size:
+        type: integer
+      restoration_period:
+        type: integer
+      s1u_address:
+        type: string
+      s5s8_address:
+        type: string
+      sxa_address:
+        type: string
+      sxa_node:
+        items:
+          type: string
+        type: array
+      sxa_node_id:
+        type: string
+      sxb_address:
+        type: string
+      sxb_node:
+        items:
+          type: string
+        type: array
+      sxb_node_id:
+        type: string
+      teid_pool:
+        type: integer
+      trace_association:
+        type: boolean
+      trace_blocked:
+        type: boolean
+      trace_files:
+        type: integer
+      trace_heartbeat:
+        type: boolean
+      trace_in:
+        type: boolean
+      trace_max_packets:
+        type: integer
+      trace_max_size:
+        type: integer
+      trace_out:
+        type: boolean
+      ueip_pool:
+        type: string
+      urr_map_size:
+        type: integer
+      xdp_attach_mode:
+        enum:
+        - generic
+        - native
+        - offload
+        type: string
+    required:
+    - logging_level
+    type: object
+  core.NodeAssociation:
+    properties:
+      addr:
+        type: string
+      cpfeatures:
+        items:
+          format: int32
+          type: integer
+        type: array
+      id:
+        type: string
+      recoveryTimestamp:
+        type: string
+      sessions:
+        additionalProperties:
+          $ref: '#/definitions/core.Session'
+        type: object
+      upfeatures:
+        items:
+          format: int32
+          type: integer
+        type: array
+    type: object
+  core.PCCInfo:
+    properties:
+      far:
+        $ref: '#/definitions/ebpf.FarInfo'
+      notify:
+        type: boolean
+      pccname:
+        type: string
+      qer:
+        $ref: '#/definitions/ebpf.QerInfo'
+      rawSDFFilter:
+        type: string
+      sdffilter:
+        $ref: '#/definitions/ebpf.SdfFilter'
+    type: object
+  core.SFarInfo:
+    properties:
+      bar_id:
+        type: integer
+      farInfo:
+        $ref: '#/definitions/ebpf.FarInfo'
+      globalId:
+        format: int32
+        type: integer
+      interfaceType:
+        description: TS 29.281 V19.2.0 clause 7.3.2.3 excludes N19 End Markers.
+        format: int32
+        type: integer
+      interfaceTypePresent:
+        type: boolean
+    type: object
+  core.SPDRInfo:
+    properties:
+      allocatedTEID:
+        type: boolean
+      allocatedUEIP:
+        type: boolean
+      far_id:
+        type: integer
+      ipv4:
+        items:
+          type: integer
+        type: array
+      ipv6:
+        items:
+          type: integer
+        type: array
+      localFTEIDIPv4:
+        items:
+          type: integer
+        type: array
+      networkInstance:
+        type: string
+      pccinfo:
+        $ref: '#/definitions/core.PCCInfo'
+      pdrID:
+        format: int32
+        type: integer
+      pdrInfo:
+        $ref: '#/definitions/ebpf.PdrInfo'
+      qer_ids:
+        items:
+          type: integer
+        type: array
+      sourceInterface:
+        format: int32
+        type: integer
+      teid:
+        format: int32
+        type: integer
+      urr_ids:
+        items:
+          type: integer
+        type: array
+    type: object
+  core.SQerInfo:
+    properties:
+      globalId:
+        format: int32
+        type: integer
+      qerInfo:
+        $ref: '#/definitions/ebpf.QerInfo'
+    type: object
+  core.SUrrInfo:
+    properties:
+      globalId:
+        format: int32
+        type: integer
+      reportSeqNumber:
+        format: int32
+        type: integer
+      unreportedDownlink:
+        format: int64
+        type: integer
+      unreportedUplink:
+        format: int64
+        type: integer
+      urrInfo:
+        $ref: '#/definitions/ebpf.UrrInfo'
+    type: object
+  core.Session:
+    properties:
+      cpfseidipv4:
+        description: 'TS 29.244 V20.1.0 clause 4.3.2: session request destination.'
+        items:
+          type: integer
+        type: array
+      cpfseidipv6:
+        items:
+          type: integer
+        type: array
+      fars:
+        additionalProperties:
+          $ref: '#/definitions/core.SFarInfo'
+        type: object
+      imsi:
+        type: string
+      is5G:
+        type: boolean
+      localSEID:
+        format: int64
+        type: integer
+      msisdn:
+        type: string
+      pdrs:
+        additionalProperties:
+          $ref: '#/definitions/core.SPDRInfo'
+        type: object
+      qers:
+        additionalProperties:
+          $ref: '#/definitions/core.SQerInfo'
+        type: object
+      remoteSEID:
+        format: int64
+        type: integer
+      traced:
+        type: boolean
+      urrs:
+        additionalProperties:
+          $ref: '#/definitions/core.SUrrInfo'
+        type: object
+    type: object
+  core.SessionReleaseResult:
+    properties:
+      epfar:
+        type: boolean
+      seid:
+        type: integer
+    type: object
+  ebpf.FarInfo:
+    properties:
+      action:
+        format: int32
+        type: integer
+      destinationInterface:
+        format: int32
+        type: integer
+      destinationInterfacePresent:
+        type: boolean
+      endMarkerSuppressed:
+        description: EndMarkerSuppressed is derived from the N19/N19mb destination
+          label.
+        type: boolean
+      insertHandoverContainer:
+        description: InsertHandoverContainer is derived from N3/N9 data-forwarding
+          labels.
+        type: boolean
+      outerHeaderCreation:
+        format: int32
+        type: integer
+      remoteIP:
+        format: int32
+        type: integer
+      teid:
+        format: int32
+        type: integer
+      transportLevelMarking:
+        format: int32
+        type: integer
+    type: object
+  ebpf.IpWMask:
+    properties:
+      ip:
+        items:
+          type: integer
+        type: array
+      mask:
+        items:
+          type: integer
+        type: array
+      type:
+        description: '0: any, 1: ip4, 2: ip6, 3: session-assigned addresses'
+        format: int32
+        type: integer
+    type: object
+  ebpf.PdrInfo:
+    properties:
+      assigned_ipv4:
+        items:
+          type: integer
+        type: array
+      assigned_ipv6:
+        items:
+          type: integer
+        type: array
+      assigned_ipv6_mask:
+        items:
+          type: integer
+        type: array
+      far_id:
+        type: integer
+      gtp_extension_header_deletion:
+        type: integer
+      notify:
+        type: boolean
+      nr:
+        type: boolean
+      outer_header_removal:
+        type: integer
+      outer_header_removal_present:
+        type: boolean
+      pdr_id:
+        type: integer
+      precedence:
+        type: integer
+      qer_ids:
+        items:
+          type: integer
+        type: array
+      qfis:
+        items:
+          type: integer
+        type: array
+      return_far_id:
+        type: integer
+      return_nr:
+        type: boolean
+      return_qer_ids:
+        items:
+          type: integer
+        type: array
+      sdf_filters:
+        items:
+          $ref: '#/definitions/ebpf.SdfFilter'
+        type: array
+      session_id:
+        type: integer
+      source_interface:
+        type: integer
+      source_interface_present:
+        type: boolean
+      trace:
+        type: boolean
+      ue_destination:
+        type: boolean
+      ue_ipv4:
+        items:
+          type: integer
+        type: array
+      ue_ipv6:
+        items:
+          type: integer
+        type: array
+      ue_ipv6_mask:
+        items:
+          type: integer
+        type: array
+      urr_ids:
+        items:
+          type: integer
+        type: array
+    type: object
+  ebpf.PortRange:
+    properties:
+      lowerBound:
+        format: int32
+        type: integer
+      upperBound:
+        format: int32
+        type: integer
+    type: object
+  ebpf.QerInfo:
+    properties:
+      dscp:
+        format: int32
+        type: integer
+      gateStatusDL:
+        format: int32
+        type: integer
+      gateStatusUL:
+        format: int32
+        type: integer
+      maxBitrateDL:
+        format: int64
+        type: integer
+      maxBitrateUL:
+        format: int64
+        type: integer
+      qfi:
+        format: int32
+        type: integer
+      qfipresent:
+        type: boolean
+      rqi:
+        format: int32
+        type: integer
+    type: object
+  ebpf.QerMapElement:
+    properties:
+      gate_status_dl:
+        type: integer
+      gate_status_ul:
+        type: integer
+      id:
+        type: integer
+      max_bitrate_dl:
+        type: integer
+      max_bitrate_ul:
+        type: integer
+      qfi:
+        type: integer
+    type: object
+  ebpf.SdfFilter:
+    properties:
+      direction:
+        type: string
+      dstAddress:
+        $ref: '#/definitions/ebpf.IpWMask'
+      dstPortRange:
+        $ref: '#/definitions/ebpf.PortRange'
+      portsPresent:
+        type: boolean
+      protocol:
+        description: IP protocol number, or SDFProtocolAny
+        format: int32
+        type: integer
+      srcAddress:
+        $ref: '#/definitions/ebpf.IpWMask'
+      srcPortRange:
+        $ref: '#/definitions/ebpf.PortRange'
+    type: object
+  ebpf.UrrInfo:
+    properties:
+      downlinkVolume:
+        format: int64
+        type: integer
+      uplinkVolume:
+        format: int64
+        type: integer
+      volumeThreshold:
+        format: int64
+        type: integer
+      volumeTrigger:
+        type: boolean
+    type: object
+  rest.DataPlaneAddressesConfig:
+    properties:
+      n3_address:
+        type: string
+      n9_address:
+        type: string
+    required:
+    - n3_address
+    - n9_address
+    type: object
+  rest.DataPlaneEbpfConfig:
+    properties:
+      interface_name:
+        items:
+          type: string
+        type: array
+      xdp_attach_mode:
+        type: string
+    required:
+    - interface_name
+    - xdp_attach_mode
+    type: object
+  rest.FarMapElement:
+    properties:
+      action:
+        type: integer
+      id:
+        type: integer
+      outer_header_creation:
+        type: integer
+      remote_ip:
+        type: integer
+      teid:
+        type: integer
+      transport_level_marking:
+        type: integer
+    type: object
+  rest.GTPPathConfig:
+    properties:
+      gtp_echo_interval:
+        type: integer
+      gtp_peer:
+        items:
+          type: string
+        type: array
+    required:
+    - gtp_echo_interval
+    - gtp_peer
+    type: object
+  rest.LoggingCallerConfig:
+    properties:
+      logging_caller:
+        type: boolean
+    required:
+    - logging_caller
+    type: object
+  rest.LoggingLevelConfig:
+    properties:
+      logging_level:
+        type: string
+    required:
+    - logging_level
+    type: object
+  rest.NodeAssociationDescription:
+    properties:
+      addr:
+        type: string
+      id:
+        type: string
+    type: object
+  rest.PFCPN4Config:
+    properties:
+      pfcp_address:
+        type: string
+      pfcp_node_id:
+        type: string
+      pfcp_remote_node:
+        items:
+          type: string
+        type: array
+    required:
+    - pfcp_address
+    - pfcp_node_id
+    - pfcp_remote_node
+    type: object
+  rest.PFCPSxaConfig:
+    properties:
+      sxa_address:
+        type: string
+      sxa_node_id:
+        type: string
+      sxa_remote_node:
+        items:
+          type: string
+        type: array
+    required:
+    - sxa_address
+    - sxa_node_id
+    - sxa_remote_node
+    type: object
+  rest.PFCPSxbConfig:
+    properties:
+      sxb_address:
+        type: string
+      sxb_node_id:
+        type: string
+      sxb_remote_node:
+        items:
+          type: string
+        type: array
+    required:
+    - sxb_address
+    - sxb_node_id
+    - sxb_remote_node
+    type: object
+  rest.PFCPTimersConfig:
+    properties:
+      association_setup_timeout:
+        type: integer
+      heartbeat_timeout:
+        type: integer
+    required:
+    - association_setup_timeout
+    - heartbeat_timeout
+    type: object
+  rest.PacketStats:
+    properties:
+      rx_arp:
+        type: integer
+      rx_gtp_echo:
+        type: integer
+      rx_gtp_other:
+        type: integer
+      rx_gtp_pdu:
+        type: integer
+      rx_gtp_unexp:
+        type: integer
+      rx_icmp:
+        type: integer
+      rx_icmp6:
+        type: integer
+      rx_ip4:
+        type: integer
+      rx_ip6:
+        type: integer
+      rx_other:
+        type: integer
+      rx_tcp:
+        type: integer
+      rx_udp:
+        type: integer
+    type: object
+  rest.PdrMapElement:
+    properties:
+      rules:
+        items:
+          $ref: '#/definitions/ebpf.PdrInfo'
+        type: array
+      session_id:
+        type: integer
+    type: object
+  rest.RouteStats:
+    properties:
+      fib_lookup_ip4_error_drop:
+        type: integer
+      fib_lookup_ip4_error_pass:
+        type: integer
+      fib_lookup_ip4_ok:
+        type: integer
+      fib_lookup_ip6_error_drop:
+        type: integer
+      fib_lookup_ip6_error_pass:
+        type: integer
+      fib_lookup_ip6_ok:
+        type: integer
+    type: object
+  rest.XdpStats:
+    properties:
+      aborted:
+        type: integer
+      drop:
+        type: integer
+      pass:
+        type: integer
+      redirect:
+        type: integer
+      tx:
+        type: integer
+    type: object
+  tracing.TraceRecord:
+    properties:
+      connAddr:
+        type: string
+      imsi:
+        type: string
+      msisdn:
+        type: string
+      timestamp:
+        type: string
+    type: object
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+paths:
+  /config:
+    get:
+      description: Display configuration
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/config.UpfConfig'
+      summary: Display configuration
+      tags:
+      - Configuration
+  /config/dataplane_addresses:
+    post:
+      consumes:
+      - application/json
+      description: Update IP addresses for N3 and N9 interfaces
+      parameters:
+      - description: Dataplane addresses configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.DataPlaneAddressesConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update dataplane N3 and N9 addresses
+      tags:
+      - Configuration
+  /config/dataplane_ebpf:
+    post:
+      consumes:
+      - application/json
+      description: Bind network interfaces for eBPF dataplane processing
+      parameters:
+      - description: Dataplane eBPF configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.DataPlaneEbpfConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update dataplane eBPF interfaces
+      tags:
+      - Configuration
+  /config/gtp_path:
+    post:
+      consumes:
+      - application/json
+      description: Update GTP peers and echo interval
+      parameters:
+      - description: GTP path configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.GTPPathConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update GTP path configuration
+      tags:
+      - Configuration
+  /config/logging_caller:
+    post:
+      consumes:
+      - application/json
+      description: Enable or disable function caller information in logs
+      parameters:
+      - description: Logging caller configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.LoggingCallerConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update logging caller info
+      tags:
+      - Configuration
+  /config/logging_level:
+    post:
+      consumes:
+      - application/json
+      description: Update the log level (debug, info, warn, error, etc.)
+      parameters:
+      - description: Logging level config
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.LoggingLevelConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update logging level
+      tags:
+      - Configuration
+  /config/pfcp_n4:
+    post:
+      consumes:
+      - application/json
+      description: Update local and remote node information for PFCP N4 connection
+      parameters:
+      - description: PFCP N4 connection configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.PFCPN4Config'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update N4 PFCP connection settings
+      tags:
+      - Configuration
+  /config/pfcp_sxa:
+    post:
+      consumes:
+      - application/json
+      description: Update local and remote node information for PFCP Sxa connection
+      parameters:
+      - description: PFCP Sxa connection configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.PFCPSxaConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update Sxa PFCP connection settings
+      tags:
+      - Configuration
+  /config/pfcp_sxb:
+    post:
+      consumes:
+      - application/json
+      description: Update local and remote node information for PFCP Sxb connection
+      parameters:
+      - description: PFCP Sxb connection configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.PFCPSxbConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update Sxb PFCP connection settings
+      tags:
+      - Configuration
+  /config/pfcp_timers:
+    post:
+      consumes:
+      - application/json
+      description: Update heartbeat and association setup timeout values
+      parameters:
+      - description: PFCP timers configuration
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/rest.PFCPTimersConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update PFCP timers settings
+      tags:
+      - Configuration
+  /downlink_pdr_map/{id}:
+    get:
+      parameters:
+      - description: UE IP address
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.PdrMapElement'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the ordered PDR list for a UE address
+      tags:
+      - PDR
+  /far_map/{id}:
+    get:
+      description: Retrieve FAR map element by ID
+      parameters:
+      - description: FAR ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.FarMapElement'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get FAR map element
+      tags:
+      - FAR
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+      summary: Liveness
+  /packet_stats:
+    get:
+      description: Display packet statistics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.PacketStats'
+      summary: Display packet statistics
+      tags:
+      - Packet
+  /pfcp_associations:
+    get:
+      description: List PFCP associations
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/rest.NodeAssociationDescription'
+            type: array
+      summary: List PFCP associations
+      tags:
+      - PFCP
+  /pfcp_associations/full:
+    get:
+      description: List PFCP associations
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              $ref: '#/definitions/core.NodeAssociation'
+            type: object
+      summary: List PFCP associations
+      tags:
+      - PFCP
+  /pfcp_associations/release:
+    post:
+      description: Start bounded UP-initiated release. Associations and sessions remain
+        until CP Release or the advertised grace period expires.
+      responses:
+        "204":
+          description: No Content
+      summary: Release PFCP associations
+      tags:
+      - PFCP
+  /pfcp_sessions:
+    delete:
+      consumes:
+      - application/json
+      description: Deletes a PFCP session based on provided parameters. Exactly one
+        query key must be provided. Final usage delivery continues asynchronously;
+        epfar reports whether both functions negotiated PSDBU in the final report.
+      parameters:
+      - description: IMSI of the session to delete
+        in: query
+        name: imsi
+        type: string
+      - description: MSISDN of the session to delete
+        in: query
+        name: msisdn
+        type: string
+      - description: ID of the session to delete
+        in: query
+        name: id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/core.SessionReleaseResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete PFCP session by IMSI, MSISDN or ID
+      tags:
+      - PFCP
+    get:
+      parameters:
+      - description: ip
+        in: query
+        name: ip
+        type: string
+      - description: teid
+        in: query
+        name: teid
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/core.Session'
+            type: array
+      summary: If no parameters are given, list all PFCP sessions. If ip or teid is
+        given, single session will be returned. If both ip and teid are given, it
+        is possible to return two sessions.
+      tags:
+      - PFCP
+  /qer_map:
+    get:
+      description: List QER map content
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/ebpf.QerMapElement'
+            type: array
+      summary: List QER map content
+      tags:
+      - QER
+  /qer_map/{id}:
+    get:
+      description: List QER map content
+      parameters:
+      - description: Qer ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/ebpf.QerMapElement'
+            type: array
+      summary: List QER map content
+      tags:
+      - QER
+  /route_stats:
+    get:
+      description: Display route statistics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.RouteStats'
+      summary: Display route statistics
+      tags:
+      - Route
+  /subscriber_trace:
+    delete:
+      description: Disable tracing for a subscriber identified by IMSI or MSISDN
+      parameters:
+      - description: IMSI of subscriber
+        in: query
+        name: imsi
+        type: string
+      - description: MSISDN of subscriber
+        in: query
+        name: msisdn
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/tracing.TraceRecord'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+      summary: Stop subscriber trace
+      tags:
+      - Tracing
+    get:
+      description: List active traces filtered by IMSI or MSISDN
+      parameters:
+      - description: IMSI of subscriber
+        in: query
+        name: imsi
+        type: string
+      - description: MSISDN of subscriber
+        in: query
+        name: msisdn
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/tracing.TraceRecord'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+      summary: List active subscriber traces
+      tags:
+      - Tracing
+    post:
+      description: Enable tracing for a subscriber identified by IMSI or MSISDN
+      parameters:
+      - description: IMSI of subscriber
+        in: query
+        name: imsi
+        type: string
+      - description: MSISDN of subscriber
+        in: query
+        name: msisdn
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start subscriber trace
+      tags:
+      - Tracing
+  /uplink_pdr_map/{id}:
+    get:
+      parameters:
+      - description: Local TEID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.PdrMapElement'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the ordered PDR list for a TEID
+      tags:
+      - PDR
+  /xdp_stats:
+    get:
+      description: Display XDP statistics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.XdpStats'
+      summary: Display XDP statistics
+      tags:
+      - XDP
+produces:
+- application/json
+schemes:
+- http
+- https
+swagger: "2.0"
