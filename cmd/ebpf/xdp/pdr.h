@@ -94,6 +94,7 @@ struct {
     __type(key, __u32);
     __type(value, struct pdr_bucket);
     __uint(max_entries, PDR_MAP_SIZE * 4 + 1);
+    __uint(map_flags, BPF_F_MMAPABLE);
 } pdr_buckets SEC(".maps");
 
 /* ipv4 -> stable bucket slot */
@@ -186,6 +187,7 @@ struct
     __type(key, __u32);
     __type(value, struct far_info);
     __uint(max_entries, FAR_MAP_SIZE);
+    __uint(map_flags, BPF_F_MMAPABLE);
 } far_map SEC(".maps");
 
 // TS 29.244 V20.1.0 clause 5.11.2: observe received matching user packets,

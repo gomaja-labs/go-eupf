@@ -344,7 +344,7 @@ func (tx *ruleTransaction) UpdateFar(id uint32, info FarInfo) error {
 		return err
 	}
 	value := farMapValue(info)
-	if err := tx.objects.FarMap.Put(id, &value); err != nil {
+	if err := storeSharedRule(tx.objects.farMemory, id, &value); err != nil {
 		return err
 	}
 	tx.newFAR[id] = false

@@ -215,7 +215,7 @@ func (tx *ruleTransaction) publishPDRs() error {
 						key, kind := tx.objects.bucketKey(draft.m, draft.key)
 						bucket := &tx.objects.publicationBucket
 						bucket.Key, bucket.Kind = key, kind
-						err = tx.objects.PdrBuckets.Put(slot, bucket)
+						err = storeSharedRule(tx.objects.bucketMemory, slot, bucket)
 						if err == nil && tx.beforeWrite != nil {
 							err = tx.beforeWrite()
 						}

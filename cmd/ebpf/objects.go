@@ -6,10 +6,12 @@ package ebpf
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/rs/zerolog/log"
@@ -46,21 +48,22 @@ type BpfObjects struct {
 	// UpfBufferControlFunc loads when metadata first needs serialized control.
 	UpfBufferControlFunc *ebpf.Program
 	// UpfBufferAdmissionFunc loads before publishing the first BUFF producer.
-	UpfBufferAdmissionFunc *ebpf.Program
-	sharedConfiguration    *ebpf.Map
-	renderClosed           bool
-	bufferMutex            sync.Mutex
-	bindingMutex           sync.Mutex
-	bindingPresent         []uint64
-	bufferReadClaimed      bool
-	bufferReadClosed       bool
-	bufferReader           *BufferReader
-	bucketMutex            sync.Mutex
-	bucketIDs              *IdTracker
-	ruleMutex              sync.Mutex
-	ruleKeys               ruleKeyIndex
-	ruleImages             map[pdrMutationKey]pdrImage
-	freePDRImages          [][]IpEntrypointPdrEntry // ruleMutex owns retired Go slices.
+	UpfBufferAdmissionFunc  *ebpf.Program
+	sharedConfiguration     *ebpf.Map
+	renderClosed            bool
+	bufferMutex             sync.Mutex
+	bindingMutex            sync.Mutex
+	bindingPresent          []uint64
+	bufferReadClaimed       bool
+	bufferReadClosed        bool
+	bufferReader            *BufferReader
+	bucketMutex             sync.Mutex
+	bucketIDs               *IdTracker
+	ruleMutex               sync.Mutex
+	ruleKeys                ruleKeyIndex
+	ruleImages              map[pdrMutationKey]pdrImage
+	freePDRImages           [][]IpEntrypointPdrEntry // ruleMutex owns retired Go slices.
+	bucketMemory, farMemory *sharedRuleMemory
 	// ruleMutex serializes the synchronous map writes that borrow this buffer.
 	publicationBucket IpEntrypointPdrBucket
 	rulePoison        error
@@ -225,6 +228,14 @@ func (bpfObjects *BpfObjects) Load() error {
 		return err
 	}
 
+	bpfObjects.bucketMemory, err = newSharedRuleMemory(bpfObjects.PdrBuckets, unsafe.Sizeof(IpEntrypointPdrBucket{}))
+	if err != nil {
+		return fmt.Errorf("map PDR bucket storage: %w", err)
+	}
+	bpfObjects.farMemory, err = newSharedRuleMemory(bpfObjects.FarMap, unsafe.Sizeof(IpEntrypointFarInfo{}))
+	if err != nil {
+		return fmt.Errorf("map FAR storage: %w", err)
+	}
 	bpfObjects.grace, err = newRuleGrace()
 	if err != nil {
 		return err
@@ -298,6 +309,8 @@ func (bpfObjects *BpfObjects) Close() error {
 	bpfObjects.renderMutex.Unlock()
 	bpfObjects.activityMutex.Lock()
 	defer bpfObjects.activityMutex.Unlock()
+	err = errors.Join(err, bpfObjects.bucketMemory.close(), bpfObjects.farMemory.close())
+	bpfObjects.bucketMemory, bpfObjects.farMemory = nil, nil
 	bpfObjects.activityMemory = nil
 	bpfObjects.activityIDs = nil
 	return errors.Join(err, CloseAllObjects(

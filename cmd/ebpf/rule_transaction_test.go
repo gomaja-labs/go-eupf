@@ -129,13 +129,13 @@ func assertMapValue[T any](t *testing.T, lookup func(interface{}, interface{}) e
 	}
 }
 
-func TestFrozenPDRDeletionKeepsLiveSlot(t *testing.T) {
+func TestFailedPDRPublicationKeepsLiveSlot(t *testing.T) {
 	b := loadDatapath(t)
 	id, err := b.NewFar(FarInfo{Action: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.PdrBuckets.Freeze(); err != nil {
+	if err := b.PdrMapTeidIp4.Close(); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := b.BeginRuleTransaction(0)
@@ -146,7 +146,7 @@ func TestFrozenPDRDeletionKeepsLiveSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err == nil {
-		t.Fatal("frozen PDR accepted detachment")
+		t.Fatal("closed descriptor map accepted publication")
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
