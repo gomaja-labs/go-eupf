@@ -40,10 +40,12 @@ for _ in range(300):
 else:raise SystemExit(f'Runtime API did not become ready: {last}')
 PY
 # The default runtime supplies read-only sysfs and no mounted BPF filesystem.
-docker exec "$application" sh -c '
-    ! grep -q " /sys/fs/bpf " /proc/mounts &&
-    test ! -w /sys/fs/bpf && test ! -w /sys
-'
+docker exec "$application" awk '
+    $3 == "bpf" { bpf = 1 }
+    $2 == "/sys" { sysfs = 1 }
+    $2 ~ /^\/sys(\/|$)/ && $4 !~ /(^|,)ro(,|$)/ { writable = 1 }
+    END { exit (!sysfs || writable || bpf) }
+' /proc/mounts
 running_uid=$(docker exec "$application" id -u)
 [[ "$running_uid" == "$uid" ]]
 printf 'Runtime API ready; uid=%s image=%s\n' "$uid" "$image"
