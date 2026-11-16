@@ -193,7 +193,7 @@ func TestFARBindingRetainsBARZeroAndRemovesNullReference(t *testing.T) {
 	if session.FARs[1].BARID == nil || *session.FARs[1].BARID != 0 {
 		t.Fatal("FAR lost its present BAR zero reference")
 	}
-	err = updateFARs([]*ie.IE{ie.NewUpdateFAR(ie.NewFARID(1), ie.New(ie.BARID, nil))}, conn.mapOperations, session, pool, zerolog.Nop(), conn.profile)
+	err = updateFARs([]*ie.IE{ie.NewUpdateFAR(ie.NewFARID(1), ie.New(ie.BARID, nil))}, conn.mapOperations, session, pool, zerolog.Nop(), conn.profile, nil)
 	if err != nil || session.FARs[1].BARID != nil {
 		t.Fatalf("null BAR ID did not remove FAR reference: %v", err)
 	}

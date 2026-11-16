@@ -180,7 +180,7 @@ func TestEndMarkerCapabilityAndInterfaceRestrictions(t *testing.T) {
 		old.FARs[1] = f
 		next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
 		request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-		batch, err := conn.prepareEndMarkers(request, old, next)
+		batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, request.UpdateFAR), old, next)
 		if batch != nil {
 			batch.release()
 			t.Fatalf("interface %d created a container-free End Marker", typ)
@@ -263,7 +263,7 @@ func TestEndMarkerUsesEveryOldTunnelSource(t *testing.T) {
 				old.PutPDR(2, SPDRInfo{PdrID: 2, FARID: &fid, Teid: 10, SourceInterface: ie.SrcInterfaceCore})
 			}
 			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(fid), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-			batch, err := conn.prepareEndMarkers(request, old, next)
+			batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, request.UpdateFAR), old, next)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -332,7 +332,7 @@ func TestEndMarkerSourcesFollowProgrammedAddresses(t *testing.T) {
 			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
 			for _, address := range []string{"127.0.0.1", "127.0.0.2"} {
 				maps.n3 = net.ParseIP(address) // Same shared configuration changed by REST.
-				batch, err := conn.prepareEndMarkers(request, old, next)
+				batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, request.UpdateFAR), old, next)
 				if err != nil || batch == nil {
 					t.Fatalf("prepare: batch=%v err=%v", batch, err)
 				}
@@ -357,7 +357,7 @@ func TestEndMarkerSourceReadFailureRejectsPathSwitch(t *testing.T) {
 	old.NewFar(1, 1, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 200, RemoteIP: 1})
 	next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
 	request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-	batch, err := conn.prepareEndMarkers(request, old, next)
+	batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, request.UpdateFAR), old, next)
 	if batch != nil || !errors.Is(err, sentinel) {
 		t.Fatalf("source failure admitted path switch: batch=%v err=%v", batch, err)
 	}
@@ -377,4 +377,17 @@ func TestEndMarkerSourceReadFailureRejectsPathSwitch(t *testing.T) {
 	if conn.GetAssociation("127.0.0.1").Sessions[1].FARs[1] != before {
 		t.Fatal("source read failure committed a path switch")
 	}
+}
+
+func decodedMarkerUpdates(t *testing.T, values []*ie.IE) []farUpdate {
+	t.Helper()
+	var updates []farUpdate
+	for _, value := range values {
+		update, err := decodeFARUpdate(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	return updates
 }

@@ -332,14 +332,15 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 		return conn.bindSessionReplies(session)
 	}
 
-	err := processModificationRequestRules(conn, logger, operationPool, pdrContext, req, &createdPDRs, &updatedPDRs, &removedURRs, session)
+	var farUpdates []farUpdate
+	err := processModificationRequestRules(conn, logger, operationPool, pdrContext, req, &createdPDRs, &updatedPDRs, &removedURRs, session, &farUpdates)
 	if err != nil {
 		logger.Warn().Msgf("Rejecting Session Modification Request from: %s (failed to apply rules)", err)
 		PfcpMessageRxErrors.WithLabelValues(msg.MessageTypeName(), causeToString(ie.CauseRuleCreationModificationFailure)).Inc()
 		return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
 	}
 
-	markers, err := conn.prepareEndMarkers(req, previousSession, session)
+	markers, err := conn.prepareEndMarkers(farUpdates, previousSession, session)
 	if err != nil {
 		return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
 	}
@@ -350,19 +351,9 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	}()
 
 	var notifyFARs []uint32
-	for _, update := range req.UpdateFAR {
-		fields, err := update.UpdateFAR()
-		if err != nil {
-			return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
-		}
-		if fields.ApplyAction != nil {
-			id, err := fields.FARID.FARID()
-			if err != nil {
-				return sessionFailureResponse(req, session.RemoteSEID, err), traced, nil
-			}
-			if session.FARs[id].FarInfo.Action&12 == 12 {
-				notifyFARs = append(notifyFARs, id)
-			}
+	for _, update := range farUpdates {
+		if update.fields.ApplyAction != nil && session.FARs[update.id].FarInfo.Action&12 == 12 {
+			notifyFARs = append(notifyFARs, update.id)
 		}
 	}
 	dropBuffered := false
@@ -596,6 +587,10 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 	default:
 		return farInfo, &ie.InvalidTypeError{Type: far.Type}
 	}
+	return composeDecodedFarInfo(far.Type, action, outer, marking, destination, farInfo, profile)
+}
+
+func composeDecodedFarInfo(farType ie.IEType, action, outer, marking, destination *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf.FarInfo, error) {
 	// TS 29.244 V20.1.0 clause 5.4.4: a CP-function source uses the
 	// FAR destination to identify UL versus DL. Absent update fields preserve it.
 	if destination != nil {
@@ -614,7 +609,7 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 		farInfo.Action = flags[0]
 	}
 	// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2: null removes a provisioned value.
-	if far.Type == ie.UpdateFAR && isNullIE(outer) {
+	if farType == ie.UpdateFAR && isNullIE(outer) {
 		farInfo.OuterHeaderCreation, farInfo.Teid, farInfo.RemoteIP = 0, 0, 0
 	} else if outer != nil {
 		fields, err := profile.ParseOuterHeaderCreation(outer)
@@ -632,7 +627,7 @@ func composeFarInfo(far *ie.IE, farInfo ebpf.FarInfo, profile PfcpProfile) (ebpf
 			return farInfo, unsupportedRuleIE(ie.OuterHeaderCreation)
 		}
 	}
-	if far.Type == ie.UpdateFAR && isNullIE(marking) {
+	if farType == ie.UpdateFAR && isNullIE(marking) {
 		farInfo.TransportLevelMarking = 0
 	} else if marking != nil {
 		value, err := marking.TransportLevelMarking()
@@ -911,6 +906,7 @@ func processModificationRequestRules(
 	updatedPDRs *[]SPDRInfo,
 	removedURRs *[]*ie.IE,
 	session *Session,
+	farUpdates *[]farUpdate,
 ) error {
 	previousUsageRefs := usageReferences(session)
 	if err := validateSessionCapability(req); err != nil {
@@ -936,7 +932,7 @@ func processModificationRequestRules(
 	if err != nil {
 		return err
 	}
-	err = updateFARs(req.UpdateFAR, mapOperations, session, operationPool, logger, conn.profile)
+	err = updateFARs(req.UpdateFAR, mapOperations, session, operationPool, logger, conn.profile, farUpdates)
 	if err != nil {
 		return err
 	}
@@ -1204,19 +1200,24 @@ func updateFARs(
 	operationPool *OperationPool,
 	logger zerolog.Logger,
 	profile PfcpProfile,
+	decoded *[]farUpdate,
 ) error {
 	for _, far := range FARs {
-		fields, decodeErr := far.UpdateFAR()
-		if decodeErr != nil {
-			return decodeErr
-		}
-		farID, err := fields.FARID.FARID()
+		update, err := decodeFARUpdate(far)
 		if err != nil {
 			return err
 		}
+		fields, forwarding, farID := update.fields, update.forwarding, update.id
+		if decoded != nil {
+			*decoded = append(*decoded, update)
+		}
 		oldFar := session.GetFar(farID)
 
-		newFarInfo, err := composeFarInfo(far, oldFar.FarInfo, profile)
+		var outer, marking, destination *ie.IE
+		if forwarding != nil {
+			outer, marking, destination = forwarding.OuterHeaderCreation, forwarding.TransportLevelMarking, forwarding.DestinationInterface
+		}
+		newFarInfo, err := composeDecodedFarInfo(ie.UpdateFAR, fields.ApplyAction, outer, marking, destination, oldFar.FarInfo, profile)
 		if err != nil {
 			logger.Info().Msgf("Error extracting FAR info: %s", err.Error())
 			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
@@ -1227,11 +1228,7 @@ func updateFARs(
 		if err := retainBARReference(fields.BARID, &newFar); err != nil {
 			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
 		}
-		if fields.UpdateForwardingParameters != nil {
-			forwarding, err := fields.UpdateForwardingParameters.UpdateForwardingParameters()
-			if err != nil {
-				return err
-			}
+		if forwarding != nil {
 			if err := retainFarInterfaceType(forwarding.DestinationInterfaceType, &newFar); err != nil {
 				return err
 			}

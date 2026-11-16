@@ -11,7 +11,6 @@ import (
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
@@ -156,28 +155,14 @@ func sendEndMarker(packet endMarker) error {
 
 // TS 29.244 V20.1.0 table 7.5.4.3-1: SNDEM belongs to the
 // updated FAR, rather than the top-level Session Modification flags.
-func (conn *PfcpConnection) prepareEndMarkers(request *message.SessionModificationRequest, old, next *Session) (*endMarkerBatch, error) {
+func (conn *PfcpConnection) prepareEndMarkers(updates []farUpdate, old, next *Session) (*endMarkerBatch, error) {
 	var packets []endMarker
 	seen := make(map[string]bool)
-	for _, update := range request.UpdateFAR {
-		fields, err := update.UpdateFAR()
-		if err != nil {
-			return nil, err
-		}
-		if fields.UpdateForwardingParameters == nil {
+	for _, update := range updates {
+		if update.forwarding == nil || !update.forwarding.PFCPSMReqFlags.HasSNDEM() {
 			continue
 		}
-		forwarding, err := fields.UpdateForwardingParameters.UpdateForwardingParameters()
-		if err != nil {
-			return nil, err
-		}
-		if !forwarding.PFCPSMReqFlags.HasSNDEM() {
-			continue
-		}
-		id, err := fields.FARID.FARID()
-		if err != nil {
-			return nil, err
-		}
+		id := update.id
 		before, exists := old.FARs[id]
 		after, remains := next.FARs[id]
 		if !exists || !remains || before.FarInfo.OuterHeaderCreation&1 == 0 || after.FarInfo.OuterHeaderCreation&1 == 0 {

@@ -76,7 +76,7 @@ func TestGeneratedHandoverMarkerCarriesOneMappedFlow(t *testing.T) {
 	old.PutPDR(1, SPDRInfo{FARID: &fid, QERIDs: []uint32{1}, PdrID: 1})
 	old.NewQer(1, 1, ebpf.QerInfo{Qfi: 9, QFIPresent: true, RQI: 1})
 	req := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-	batch, err := conn.prepareEndMarkers(req, old, next)
+	batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, req.UpdateFAR), old, next)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestInactiveHandoverMarkerSendsNothing(t *testing.T) {
 	old.FARs[1] = f
 	next.NewFar(1, 2, ebpf.FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: 201, RemoteIP: 1})
 	req := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-	batch, err := conn.prepareEndMarkers(req, old, next)
+	batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, req.UpdateFAR), old, next)
 	if batch != nil {
 		batch.release()
 		t.Fatal("marker created without a mapped QFI")
@@ -210,7 +210,7 @@ func TestHandoverMarkerUsesNewMappingOnlyWhenOldQFIIsAbsent(t *testing.T) {
 			next.FARs[fid] = far
 			next.NewQer(1, 2, ebpf.QerInfo{Qfi: 9, QFIPresent: true})
 			request := message.NewSessionModificationRequest(1, 1, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewPFCPSMReqFlags(2))))
-			batch, err := conn.prepareEndMarkers(request, old, next)
+			batch, err := conn.prepareEndMarkers(decodedMarkerUpdates(t, request.UpdateFAR), old, next)
 			if err != nil {
 				t.Fatal(err)
 			}
