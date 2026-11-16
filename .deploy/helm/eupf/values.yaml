@@ -79,7 +79,7 @@ defaultEnv:
   # maps at the size the limit was set for. Raise both together for production.
   # Shared admission limit, including empty and retiring session contexts.
   UPF_MAX_SESSIONS: "1024"
-  UPF_PFCP_REPLAY_MEMORY_MIB: "64"
+  UPF_PFCP_REPLAY_MEMORY_MIB: "96"
   UPF_BUFFER_PACKETS: "4096"
   UPF_BUFFER_PER_SESSION: "4"
   UPF_BUFFER_RETENTION_SECONDS: "30"
@@ -114,7 +114,7 @@ config:
     # config.yml: |
     #   interface_name: eth0
     #   max_sessions: 1024
-    #   pfcp_replay_memory_mib: 64
+    #   pfcp_replay_memory_mib: 96
     #   buffer_packets: 4096
     #   buffer_per_session: 4
     #   buffer_retention_seconds: 30
@@ -324,7 +324,7 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
-# Memory floor: 2 * 64 MiB replay + B + 32 KiB * max_sessions
+# Memory floor: 2 * 96 MiB replay + B + 32 KiB * max_sessions
 # + 3 * (16 MiB + R) originated queues + 32 MiB transient + H + K + W.
 # B=max(64 MiB, observed loaded cgroup charge + growing-map reserve);
 # it includes empty buffering maps and the fixed 4 MiB packet ring.
@@ -334,9 +334,9 @@ ingress:
 # K=3 MiB + 320*N + 1152*(2*F) + 4608*P; growing kernel metadata stays outside Go's limit.
 # R=max(16 MiB, 2048*(U+128)); a single session can own every URR.
 # W=768*U, from sparse URR-map measurement-window profiles plus GC headroom.
-# Defaults: R=16 MiB, H=32 MiB, K=25.8125 MiB, W=1.5 MiB; floor=411.3125 MiB.
+# Defaults: R=16 MiB, H=32 MiB, K=25.8125 MiB, W=1.5 MiB; floor=475.3125 MiB.
 # Packet storage is taken on arrival; every admitted session can use BUFF/NOCP.
-# A larger measured B raises this floor. The chart's 64 MiB replay budget is
+# A larger measured B raises this floor. The chart's 96 MiB replay budget is
 # smaller than the standalone 128 MiB default; large replies fill it sooner.
 # These are startup accounting reserves. Full buffers, forwarding/rule load,
 # cgroup charge and CPU consumption still require workload-specific checks.

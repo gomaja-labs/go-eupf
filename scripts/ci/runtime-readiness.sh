@@ -35,7 +35,7 @@ application=$(docker create "${user_options[@]}" --cap-drop ALL \
 	--cap-add BPF --cap-add PERFMON --cap-add DAC_OVERRIDE \
 	--mount "type=bind,src=$mountpoint,dst=/sys/fs/bpf" \
 	-p 127.0.0.1::8080 -e UPF_API_ADDRESS=:8080 -e UPF_API_TOKEN=runtime-smoke \
-	-e UPF_MAX_SESSIONS=1024 -e UPF_PFCP_REPLAY_MEMORY_MIB=64 \
+	-e UPF_MAX_SESSIONS=1024 -e UPF_PFCP_REPLAY_MEMORY_MIB=96 \
 	-e UPF_XDP_ATTACH_MODE=generic -e UPF_INTERFACE_NAME=lo "$image")
 docker start "$application" >/dev/null
 port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}' "$application")
