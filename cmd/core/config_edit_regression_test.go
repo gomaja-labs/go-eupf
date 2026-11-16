@@ -3,6 +3,7 @@
 package core
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -33,6 +34,14 @@ func TestRemovingDataPlaneInterfaceClosesXDPLink(t *testing.T) {
 	links := []link.Link{l}
 	bpf := dataplane.NewBpfObjects()
 	bpf.UpfIpEntrypointFunc = prog
+	bpf.BufferGenericIngress, err = ebpf.NewMap(&ebpf.MapSpec{Type: ebpf.Hash, KeySize: 4, ValueSize: 4, MaxEntries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = bpf.BufferGenericIngress.Close() }()
+	if err := bpf.SetBufferGenericIngress(uint32(iface.Index), true); err != nil {
+		t.Fatal(err)
+	}
 	if err := BindDataPlaneInterfaces(bpf, &links, []string{iface.Name}, "generic"); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +59,10 @@ func TestRemovingDataPlaneInterfaceClosesXDPLink(t *testing.T) {
 	}
 	if err := BindDataPlaneInterfaces(bpf, &links, nil, "generic"); err != nil {
 		t.Fatal(err)
+	}
+	var mode uint32
+	if err := bpf.BufferGenericIngress.Lookup(uint32(iface.Index), &mode); !errors.Is(err, ebpf.ErrKeyNotExist) {
+		t.Fatalf("removed generic ingress remains authorized: %v", err)
 	}
 	if _, err := l.Info(); err == nil {
 		t.Error("removed interface's XDP link remains open after its handle was dropped")

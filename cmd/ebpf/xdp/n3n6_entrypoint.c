@@ -23,6 +23,7 @@
 #include "xdp/utils/trace.h"
 #include "xdp/utils/packet_context.h"
 #include "xdp/buffering.h"
+#define DEFAULT_XDP_ACTION XDP_PASS
 #include "xdp/buffer_envelope.h"
 #include "xdp/buffer_result.h"
 #include "xdp/utils/packet_trace.h"
@@ -34,7 +35,6 @@
 #include "xdp/utils/icmp.h"
 
 
-#define DEFAULT_XDP_ACTION XDP_PASS
 #define UPF_LOCAL_TUNNEL 5
 #define UPF_DOWNLINK_IP4 6
 #define UPF_DOWNLINK_IP6 7

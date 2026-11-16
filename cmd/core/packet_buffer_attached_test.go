@@ -158,6 +158,9 @@ func testApplicationBufferAttachedTransition(t *testing.T, v6, kernel, allKernel
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := plane.SetBufferGenericIngress(uint32(ingress.Index), option.generic); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if err := attached.Close(); err != nil {
 			t.Error(err)

@@ -90,13 +90,21 @@ func BindDataPlaneInterfaces(
 				continue
 			}
 			l, err := link.AttachXDP(link.XDPOptions{Program: program, Interface: int(index), Flags: StringToXDPAttachMode(xdpAttachMode)})
+			if err == nil {
+				if modeErr := setBufferIngressMode(bpfObjects, index); modeErr != nil {
+					err = errors.Join(modeErr, l.Close())
+				}
+			}
 			if err != nil {
 				var failures []error
 				failures = append(failures, fmt.Errorf("%w: %w", ErrAttachXDP, err))
 				for _, newLink := range added {
+					info, infoErr := newLink.Info()
 					if err := newLink.Close(); err != nil {
 						*links = append(*links, newLink)
 						failures = append(failures, err)
+					} else if infoErr == nil && info.XDP() != nil {
+						failures = append(failures, bpfObjects.SetBufferGenericIngress(info.XDP().Ifindex, false))
 					}
 				}
 				return errors.Join(failures...)
@@ -113,6 +121,8 @@ func BindDataPlaneInterfaces(
 			if err := l.Close(); err != nil {
 				kept = append(kept, l)
 				failures = append(failures, fmt.Errorf("%w: %w", ErrCloseOldLink, err))
+			} else {
+				failures = append(failures, bpfObjects.SetBufferGenericIngress(index, false))
 			}
 		}
 		*links = kept

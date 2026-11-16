@@ -10,6 +10,7 @@ import (
 	"net"
 	"syscall"
 
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -259,4 +260,12 @@ func (resource *bufferKernelLink) Close() error {
 	closeErr := unix.Close(resource.link.fd)
 	resource.link = nil
 	return errors.Join(removeErr, closeErr)
+}
+
+func setBufferIngressMode(plane *ebpf.BpfObjects, index uint32) error {
+	generic, err := bufferIngressIsGeneric(index)
+	if err != nil {
+		return err
+	}
+	return plane.SetBufferGenericIngress(index, generic)
 }

@@ -11,6 +11,7 @@ import (
 type IpEntrypointObjects struct {
 	SessionActivity           *ebpf.Map
 	BufferToken               *ebpf.Map
+	BufferGenericIngress      *ebpf.Map
 	BufferContinuationStat    *ebpf.Map
 	BufferBindings            *ebpf.Map
 	BufferStates              *ebpf.Map

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"github.com/cilium/ebpf"
 	"sync"
 )
 
@@ -49,14 +50,31 @@ func (b *BpfObjects) BufferKernelEnvelope(frame []byte, ingress uint32) ([]byte,
 }
 
 // BufferContinuationCounts returns authenticated and rejected envelope counts.
-func (b *BpfObjects) BufferContinuationCounts() (passed, dropped uint64, err error) {
-	var counters []struct{ Passed, Dropped uint64 }
+func (b *BpfObjects) BufferContinuationCounts() (passed, rejected uint64, err error) {
+	var counters []struct{ Passed, Rejected uint64 }
 	if err := b.BufferContinuationStat.Lookup(uint32(0), &counters); err != nil {
 		return 0, 0, err
 	}
 	for _, count := range counters {
 		passed += count.Passed
-		dropped += count.Dropped
+		rejected += count.Rejected
 	}
-	return passed, dropped, nil
+	return passed, rejected, nil
+}
+
+// SetBufferGenericIngress records the actual attachment mode for envelope
+// authentication. Call it before publishing a generic attachment for output,
+// and remove the entry after detaching the link.
+func (b *BpfObjects) SetBufferGenericIngress(index uint32, generic bool) error {
+	if b.BufferGenericIngress == nil {
+		return errors.New("generic ingress map is not loaded")
+	}
+	if generic {
+		return b.BufferGenericIngress.Put(index, uint32(1))
+	}
+	err := b.BufferGenericIngress.Delete(index)
+	if errors.Is(err, ebpf.ErrKeyNotExist) {
+		return nil
+	}
+	return err
 }

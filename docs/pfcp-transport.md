@@ -277,8 +277,7 @@ rendered frame in a private Ethernet envelope (Local Experimental EtherType 1,
 drawn from crypto/rand. A one-entry, frozen BPF map holds the token. The buffering
 entrypoint authenticates the token, magic and ingress before any padding,
 classification or traffic counting, removes the envelope and returns XDP_PASS.
-Only its dedicated continuation counter advances; invalid envelopes are dropped
-and counted separately. Driver mode removes its existing cursor at TC. Both paths
+Only an authenticated envelope on a configured generic-mode link is consumed. Other 88-B5 frames take the base action. Frames with the private magic but an invalid token, ingress, length or attachment mode increment the rejected-continuation counter and take the base action. Driver mode removes its existing cursor at TC. Both paths
 preserve the rendered frame, ingress device, protocol and packet type.
 Local tunnels re-enter the private XDP dispatcher; echo and router
 control use its existing continuations. A continuation whose ingress interface has disappeared is discarded once and counted as `ingress_removed` in `upf_buffer_discarded_packets_total`; it is never retried as an output failure. DROP and ABORTED consume the retained
