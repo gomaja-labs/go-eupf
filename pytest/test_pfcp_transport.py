@@ -527,14 +527,16 @@ def test_release_cleanup_failure_exits_and_restart_has_empty_maps(server, eviden
     binary = Path(os.environ["EUPF_REGRESSION_BINARY"]).resolve()
     try:
         remote.associate()
-        response = remote.establish([uplink_far(), uplink_pdr()])
+        qer = pfcp.IE_CreateQER(IE_list=[pfcp.IE_QER_Id(id=9), pfcp.IE_GateStatus(ul=0, dl=0)])
+        response = remote.establish([uplink_far(), qer, uplink_pdr(qers=(9,))])
         assert response[pfcp.IE_Cause].cause == 1
         teid = response[pfcp.IE_FTEID].TEID
         traffic = TunnelTraffic(teid)
         traffic.send("before-cleanup-failure")
-        # PDR indices detach synchronously. A frozen FAR map makes the
-        # later slot clear fail, exercising bounded asynchronous reclamation.
-        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "far_map"],
+        # PDR indices detach synchronously. QER mutable credit is still cleared
+        # after reader grace; freezing that map exercises bounded reclamation
+        # failure without depending on writes to immutable FAR configuration.
+        fault = subprocess.run([str(binary.parent / "mapfault"), str(process.pid), str(binary), "qer_map"],
                                check=True, capture_output=True, text=True)
         (evidence / "release-map-fault.json").write_text(fault.stdout)
         remote.release()

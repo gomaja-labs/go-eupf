@@ -34,11 +34,14 @@ def report_response(sock, request, seid, cause=1):
         pfcp.PFCPSessionReportResponse(IE_list=[pfcp.IE_Cause(cause=cause)])), DESTINATION)
 
 
-def terminal_report(packet, octets):
-    # TS 29.244 V20.1.0 tables 7.5.8.1-1/7.5.8.3-1 and clause 8.2.119.
+def terminal_report(packet, octets, epfar=False):
+    # TS 29.244 V20.1.0 tables 7.5.8.1-1/7.5.8.3-1 and clauses 5.18.2/8.2.119.
     assert packet.message_type == 56
     assert field(packet, 39) == (b"\x02" if octets else b"\x40")
-    assert field(packet, 161)[0] & 1
+    if epfar:
+        assert field(packet, 161)[0] & 1
+    else:
+        assert field(packet, 161) is None
     reports = [body for kind, body in children(bytes(packet.payload)) if kind == 80]
     assert len(reports) == (1 if octets else 0)
     if octets:
@@ -147,7 +150,7 @@ def test_enhanced_release_from_both_initiators(server, up_initiated):
                 pfcp.IE_NotImplemented(ietype=162, data=b"\x01")]))
             assert prepare[pfcp.IE_Cause].cause == 1
         report = pfcp.PFCP(entity.recvfrom(65535)[0])
-        terminal_report(report, octets)
+        terminal_report(report, octets, epfar=True)
         node.settimeout(.2)
         with pytest.raises(socket.timeout):
             node.recvfrom(65535)  # URSS must wait for the report's outcome.
