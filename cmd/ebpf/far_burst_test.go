@@ -87,7 +87,9 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 		packet := gopacket.NewPacket(out, layers.LayerTypeEthernet, gopacket.Default)
 		gtp, ok := packet.Layer(layers.LayerTypeGTPv1U).(*layers.GTPv1U)
 		ip, ipOK := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-		if action != 4 || !ok || !ipOK || !(gtp.TEID == uint32(100000+index) && ip.TOS == 0x10 || gtp.TEID == uint32(200000+index) && ip.TOS == 0x20) {
+		if action != 4 || !ok || !ipOK ||
+			(gtp.TEID != uint32(100000+index) || ip.TOS != 0x10) &&
+				(gtp.TEID != uint32(200000+index) || ip.TOS != 0x20) {
 			mixed++
 		}
 		observations++

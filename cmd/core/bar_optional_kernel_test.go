@@ -4,12 +4,13 @@ package core
 
 import (
 	"context"
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 // TS 29.244 V20.1.0 tables 7.5.2.6-1, 7.5.4.11-1 and clause 7.6.8.

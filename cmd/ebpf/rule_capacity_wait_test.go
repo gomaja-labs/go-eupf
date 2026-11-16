@@ -83,7 +83,9 @@ func TestPDRBucketCapacityHasBoundedRetirementWait(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		unblock()
-		<-result
+		if err := <-result; err != nil && !errors.Is(err, ErrRuleCapacity) {
+			t.Error(err)
+		}
 		t.Fatal("bucket allocation waited beyond the retirement bound")
 	}
 }
