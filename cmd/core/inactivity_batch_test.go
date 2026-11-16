@@ -19,7 +19,7 @@ func (p *blockedActivityPlane) ConsumeSessionActivity(uint32) (bool, error) {
 }
 
 func TestInactivityMapReadDoesNotHoldSessionLock(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
+	conn := &PfcpConnection{done: make(chan struct{}), inactivityReleaseTimeout: time.Hour}
 	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
 	plane := &blockedActivityPlane{entered: make(chan struct{}), resume: make(chan struct{})}
 	plane.enter = sync.OnceFunc(func() { close(plane.entered) })
@@ -69,7 +69,7 @@ func (p *completedActivityPlane) ConsumeSessionActivity(uint32) (bool, error) {
 }
 
 func TestInactivityObservationIsTimestampedAfterConsumption(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
+	conn := &PfcpConnection{done: make(chan struct{}), inactivityReleaseTimeout: time.Hour}
 	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
 	plane := &completedActivityPlane{}
 	now := time.Now()
@@ -84,7 +84,7 @@ func TestInactivityObservationIsTimestampedAfterConsumption(t *testing.T) {
 }
 
 func TestInactivityPollBoundsEachBatchAndVisitsEverySession(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
+	conn := &PfcpConnection{done: make(chan struct{}), inactivityReleaseTimeout: time.Hour}
 	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
 	plane := &sampledActivityPlane{reads: make(map[uint32]int)}
 	now := time.Now()
@@ -115,7 +115,7 @@ func TestInactivityPollBoundsEachBatchAndVisitsEverySession(t *testing.T) {
 }
 
 func TestInactivityDisabledDoesNotWaitForStateLock(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
+	conn := &PfcpConnection{done: make(chan struct{}), inactivityReleaseTimeout: time.Hour}
 	conn.stateMu.Lock()
 	defer conn.stateMu.Unlock()
 	finished := make(chan struct{})
@@ -131,7 +131,7 @@ func TestInactivityDisabledDoesNotWaitForStateLock(t *testing.T) {
 }
 
 func TestInactivityQueueTracksRemovalAndReplacement(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
+	conn := &PfcpConnection{done: make(chan struct{}), inactivityReleaseTimeout: time.Hour}
 	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
 	plane := &sampledActivityPlane{reads: make(map[uint32]int)}
 	now := time.Now()
@@ -156,7 +156,7 @@ func TestInactivityQueueTracksRemovalAndReplacement(t *testing.T) {
 	}
 	clear(conn.activityDirty)
 	clear(plane.reads)
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	for range 8 {
 		conn.serviceInactivity(now)
 	}
@@ -171,7 +171,7 @@ func TestInactivityQueueTracksRemovalAndReplacement(t *testing.T) {
 	for _, session := range assoc.Sessions {
 		conn.watchSessionActivity(assoc, session, -1)
 	}
-	if conn.activityHead != nil || conn.activityTail != nil || conn.activityCount.Load() != 0 {
+	if len(conn.activityQueue) != 0 || conn.activityCount.Load() != 0 {
 		t.Fatal("activity queue retained removed sessions")
 	}
 }

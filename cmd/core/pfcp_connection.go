@@ -48,9 +48,7 @@ var pfcpHandlers = PfcpHandlerMap{
 
 type PfcpConnection struct {
 	activitySessions, activityDirty map[uint64]*NodeAssociation
-	nextActivityPoll                time.Time
-	activityHead, activityTail      *sessionActivity
-	activityRemaining               int
+	activityQueue                   activityQueue
 	activityCount                   atomic.Int64
 	inactivityReleaseTimeout        time.Duration
 	packetBuffers                   *PacketBuffering

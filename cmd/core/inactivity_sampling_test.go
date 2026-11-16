@@ -40,13 +40,13 @@ func TestInactivityPendingObservationCannotBeOvertaken(t *testing.T) {
 	controller := &delayedActivityController{SessionActivityController: plane, entered: make(chan struct{}), resume: make(chan struct{}), afterConsume: true}
 	unblock := sync.OnceFunc(func() { close(controller.resume) })
 	session.activity.controller, session.activity.last = controller, time.Now().Add(-time.Hour)
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	finished := make(chan struct{})
 	go func() { conn.serviceInactivity(time.Now()); close(finished) }()
 	t.Cleanup(func() { unblock(); <-finished })
 	<-controller.entered
 	conn.stateMu.Lock()
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	conn.stateMu.Unlock()
 	conn.serviceInactivity(time.Now())
 	if controller.reads.Load() != 1 || !session.inactivityArmed {
@@ -73,7 +73,7 @@ func TestInactivitySamplerPinsSlotAndAdmissionThroughGrace(t *testing.T) {
 		}
 		t.Cleanup(func() { conn.ResourceManager.ReleaseSession(id) })
 	}
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	finished := make(chan struct{})
 	go func() { conn.serviceInactivity(time.Now()); close(finished) }()
 	t.Cleanup(func() { unblock(); <-finished })

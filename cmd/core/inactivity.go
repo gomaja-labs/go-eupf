@@ -1,6 +1,7 @@
 package core
 
 import (
+	"container/heap"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +16,17 @@ import (
 )
 
 const activityPollInterval = 100 * time.Millisecond
+const activityMaxInterval = 5 * time.Second
+
+// Two observations can contribute rounding delay. A 1/40 interval bounds
+// that delay to 5% of the timer, with a 200 ms floor and ten-second ceiling,
+// plus the worker tick and scheduling/I/O delay (TS 29.244 V20.1.0 clause 5.11.2).
+func activityObservationInterval(timer time.Duration) time.Duration {
+	if timer <= 0 {
+		return 0
+	}
+	return min(activityMaxInterval, max(activityPollInterval, timer/40))
+}
 
 // One sample may perform map I/O or admit a report. Bound work under stateMu
 // independently of the number of monitored sessions.
@@ -23,17 +35,18 @@ const activityPollBatchSize = 64
 // stateMu owns sampling state. The controller separately serializes map closure
 // and slot allocation; packet writers change only the activity map.
 type sessionActivity struct {
-	controller     ebpf.SessionActivityController
-	slot           uint32
-	last           time.Time
-	previous, next *sessionActivity
-	association    *NodeAssociation
-	seid           uint64
-	queued         bool
-	sampling       bool // stateMu prevents overlapping observations of one session.
-	readersMu      sync.Mutex
-	readers        int
-	afterReaders   func()
+	controller   ebpf.SessionActivityController
+	slot         uint32
+	last         time.Time
+	due          time.Time
+	index        int
+	association  *NodeAssociation
+	seid         uint64
+	queued       bool
+	sampling     bool // stateMu prevents overlapping observations of one session.
+	readersMu    sync.Mutex
+	readers      int
+	afterReaders func()
 }
 
 func (activity *sessionActivity) beginRead() {
@@ -87,6 +100,7 @@ func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE,
 			log.Debug().Err(err).Uint64("seid", session.LocalSEID).Msg("Discard incorrect optional inactivity timer")
 		} else {
 			session.inactivityTimer, session.inactivityArmed = value, value > 0
+			session.inactivityRevision++
 		}
 	}
 	if session.activity != nil || conn.inactivityReleaseTimeout == 0 && !session.inactivityArmed {
@@ -109,13 +123,37 @@ func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE,
 	return nil
 }
 
+// activityQueue is an intrusive deadline heap owned by stateMu. A session not
+// due costs one root comparison per worker tick, independent of population.
+type activityQueue []*sessionActivity
+
+func (q activityQueue) Len() int           { return len(q) }
+func (q activityQueue) Less(i, j int) bool { return q[i].due.Before(q[j].due) }
+func (q activityQueue) Swap(i, j int)      { q[i], q[j] = q[j], q[i]; q[i].index, q[j].index = i, j }
+func (q *activityQueue) Push(value any) {
+	a := value.(*sessionActivity)
+	a.index = len(*q)
+	a.queued = true
+	*q = append(*q, a)
+}
+func (q *activityQueue) Pop() any {
+	old := *q
+	n := len(old) - 1
+	a := old[n]
+	old[n] = nil
+	*q = old[:n]
+	a.queued = false
+	a.index = -1
+	return a
+}
+
 func (conn *PfcpConnection) watchSessionActivity(assoc *NodeAssociation, session *Session, delta int) {
 	activity := session.activity
 	if delta < 0 {
 		delete(conn.activitySessions, session.LocalSEID)
 		delete(conn.activityDirty, session.LocalSEID)
 		if activity != nil && activity.queued {
-			conn.unlinkSessionActivity(activity)
+			heap.Remove(&conn.activityQueue, activity.index)
 		}
 		conn.activityCount.Store(int64(len(conn.activitySessions)))
 		return
@@ -127,36 +165,55 @@ func (conn *PfcpConnection) watchSessionActivity(assoc *NodeAssociation, session
 		conn.activitySessions = make(map[uint64]*NodeAssociation)
 		conn.activityDirty = make(map[uint64]*NodeAssociation)
 	}
-	conn.activitySessions[session.LocalSEID], conn.activityDirty[session.LocalSEID] = assoc, assoc
+	conn.activitySessions[session.LocalSEID] = assoc
 	activity.association, activity.seid = assoc, session.LocalSEID
-	if !activity.queued {
-		conn.appendSessionActivity(activity)
+	if activity.due.IsZero() {
+		conn.activityDirty[session.LocalSEID] = assoc
+		activity.due = activity.last
+	}
+	if !activity.queued && !activity.sampling && conn.activityTimer(session) > 0 {
+		heap.Push(&conn.activityQueue, activity)
 	}
 	conn.activityCount.Store(int64(len(conn.activitySessions)))
 }
 
-func (conn *PfcpConnection) appendSessionActivity(activity *sessionActivity) {
-	activity.previous, activity.next, activity.queued = conn.activityTail, nil, true
-	if conn.activityTail != nil {
-		conn.activityTail.next = activity
-	} else {
-		conn.activityHead = activity
+func (conn *PfcpConnection) activityTimer(session *Session) time.Duration {
+	timer := session.inactivityTimer
+	if conn.inactivityReleaseTimeout > 0 && (timer == 0 || conn.inactivityReleaseTimeout < timer) {
+		timer = conn.inactivityReleaseTimeout
 	}
-	conn.activityTail = activity
+	return timer
 }
 
-func (conn *PfcpConnection) unlinkSessionActivity(activity *sessionActivity) {
-	if activity.previous != nil {
-		activity.previous.next = activity.next
-	} else {
-		conn.activityHead = activity.next
+func (conn *PfcpConnection) scheduleSessionActivity(session *Session, observed time.Time) {
+	activity := session.activity
+	// Keep the most recent configured cadence after a one-shot UPIR so a
+	// later update still observes a bounded activity age. A zero timer stops it.
+	timer := conn.activityTimer(session)
+	interval := activityObservationInterval(timer)
+	if interval == 0 {
+		return
 	}
-	if activity.next != nil {
-		activity.next.previous = activity.previous
-	} else {
-		conn.activityTail = activity.previous
+	due := observed.Add(interval)
+	deadline := time.Time{}
+	if session.inactivityArmed {
+		deadline = activity.last.Add(session.inactivityTimer)
 	}
-	activity.previous, activity.next, activity.queued = nil, nil, false
+	if conn.inactivityReleaseTimeout > 0 {
+		local := activity.last.Add(conn.inactivityReleaseTimeout)
+		if deadline.IsZero() || local.Before(deadline) {
+			deadline = local
+		}
+	}
+	if deadline.After(observed) && deadline.Before(due) {
+		due = deadline
+	}
+	activity.due = due
+	if activity.queued {
+		heap.Fix(&conn.activityQueue, activity.index)
+	} else {
+		heap.Push(&conn.activityQueue, activity)
+	}
 }
 
 // Periodic scans run independently of receive/dispatch. Yield between batches
@@ -214,34 +271,48 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 		conn.stateMu.Unlock()
 		return false
 	}
-	if periodic && conn.activityRemaining == 0 && !now.Before(conn.nextActivityPoll) {
-		conn.activityRemaining = len(conn.activitySessions)
-		conn.nextActivityPoll = now.Add(activityPollInterval)
-	}
 	type reference struct {
-		seid        uint64
-		association *NodeAssociation
-		activity    *sessionActivity
-		active      bool
-		err         error
-		observed    time.Time
+		seid          uint64
+		association   *NodeAssociation
+		activity      *sessionActivity
+		active        bool
+		err           error
+		observed      time.Time
+		timerRevision uint64
 	}
 	var batch [activityPollBatchSize]reference
 	n := 0
+	take := func(seid uint64, assoc *NodeAssociation) bool {
+		session := assoc.Sessions[seid]
+		if session == nil || session.activity == nil || assoc.cleaning || assoc.enhancedRelease != 0 {
+			delete(conn.activityDirty, seid)
+			return false
+		}
+		activity := session.activity
+		if activity.sampling {
+			return false
+		}
+		if activity.queued {
+			heap.Remove(&conn.activityQueue, activity.index)
+		}
+		activity.sampling = true
+		activity.beginRead()
+		batch[n] = reference{seid: seid, association: assoc, activity: activity, timerRevision: session.inactivityRevision}
+		n++
+		delete(conn.activityDirty, seid)
+		return true
+	}
 	dirtyLimit := activityPollBatchSize
-	if periodic && conn.activityRemaining > 0 {
+	if periodic && len(conn.activityQueue) > 0 && !conn.activityQueue[0].due.After(now) {
 		dirtyLimit /= 2
 	}
-	// A timer update must not wait behind a bulk association reindex or other
-	// sessions' dirty entries (TS 29.244 V20.1.0 clause 5.11.2).
-	if assoc := conn.activityDirty[priority]; priority != 0 && assoc != nil {
-		if session := assoc.Sessions[priority]; session != nil && session.activity != nil && !session.activity.sampling && !assoc.cleaning && assoc.enhancedRelease == 0 {
-			activity := session.activity
-			activity.sampling = true
-			activity.beginRead()
-			batch[n] = reference{seid: priority, association: assoc, activity: activity}
-			n++
-			delete(conn.activityDirty, priority)
+	// An explicit timer update observes its own session immediately, even when
+	// the previous scheduled deadline is far away (clause 5.11.2).
+	if priority != 0 {
+		if assoc := conn.activitySessions[priority]; assoc != nil {
+			if !take(priority, assoc) {
+				conn.activityDirty[priority] = assoc
+			}
 		}
 	}
 	inspected := 0
@@ -250,42 +321,16 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 			break
 		}
 		inspected++
-		session := assoc.Sessions[seid]
-		if session == nil || session.activity == nil || assoc.cleaning || assoc.enhancedRelease != 0 {
-			delete(conn.activityDirty, seid)
-			continue
-		}
-		activity := session.activity
-		if activity.sampling {
-			continue
-		}
-		activity.sampling = true
-		activity.beginRead()
-		batch[n] = reference{seid: seid, association: assoc, activity: activity}
-		n++
-		delete(conn.activityDirty, seid)
+		take(seid, assoc)
 	}
 	inspected = 0
-	for periodic && n < len(batch) && inspected < len(batch) && conn.activityRemaining > 0 && conn.activityHead != nil {
-		activity := conn.activityHead
-		conn.unlinkSessionActivity(activity)
-		conn.appendSessionActivity(activity)
-		conn.activityRemaining--
+	for periodic && n < len(batch) && inspected < len(batch) && len(conn.activityQueue) > 0 && !conn.activityQueue[0].due.After(now) {
+		activity := heap.Pop(&conn.activityQueue).(*sessionActivity)
 		inspected++
-		session := activity.association.Sessions[activity.seid]
-		if activity.sampling || session == nil || session.activity != activity || activity.association.cleaning || activity.association.enhancedRelease != 0 {
-			continue
-		}
-		activity.sampling = true
-		activity.beginRead()
-		batch[n] = reference{seid: activity.seid, association: activity.association, activity: activity}
-		n++
+		take(activity.seid, activity.association)
 	}
-	more := periodic && conn.activityRemaining > 0 && inspected > 0 || len(conn.activityDirty) > 0 && n > 0
+	more := periodic && len(conn.activityQueue) > 0 && !conn.activityQueue[0].due.After(now) || len(conn.activityDirty) > 0 && n > 0
 	if n == 0 {
-		if conn.activityHead == nil {
-			conn.activityRemaining = 0
-		}
 		conn.stateMu.Unlock()
 		return more
 	}
@@ -332,6 +377,12 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 			}
 			continue
 		}
+		// A timer instruction must use an observation that began after
+		// provisioning. An older empty read can precede a later packet and
+		// cannot establish inactivity for the new timer (clause 5.11.2).
+		if session.inactivityRevision != item.timerRevision {
+			continue
+		}
 		if !session.inactivityArmed || elapsed < session.inactivityTimer {
 			continue
 		}
@@ -351,8 +402,11 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 		session.inactivityArmed = false
 		requests = append(requests, admittedRequest{wire, request.MessageType(), peer, socket, session.Traced})
 	}
-	if conn.activityHead == nil {
-		conn.activityRemaining = 0
+	for _, item := range batch[:n] {
+		session := item.association.Sessions[item.seid]
+		if !conn.isClosed() && item.err == nil && session != nil && session.activity == item.activity && !item.association.cleaning && item.association.enhancedRelease == 0 {
+			conn.scheduleSessionActivity(session, item.observed)
+		}
 	}
 	conn.stateMu.Unlock()
 	for _, item := range batch[:n] {

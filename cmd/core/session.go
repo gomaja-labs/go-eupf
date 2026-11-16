@@ -22,6 +22,7 @@ type Session struct {
 	activityReserved      bool
 	inactivityTimer       time.Duration
 	inactivityArmed       bool
+	inactivityRevision    uint64
 	bufferControlRevision uint64
 	bufferPlan            *packetBufferPlan
 	buffers               *packetBufferSession

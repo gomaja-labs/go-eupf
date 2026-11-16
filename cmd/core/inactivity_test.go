@@ -113,13 +113,13 @@ func inactivityReport(t *testing.T, conn *PfcpConnection, session *Session, peer
 func TestInactivityUPIRStopsUntilTimerUpdated(t *testing.T) {
 	conn, assoc, session, plane, peer := inactivityFixture(t, 2*time.Second, 0)
 	session.activity.last = time.Now().Add(-3 * time.Second)
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	conn.serviceInactivity(time.Now())
 	inactivityReport(t, conn, session, peer)
 	if session.inactivityArmed || assoc.Sessions[session.LocalSEID] != session || !plane.active {
 		t.Fatal("UPIR removed live session or kept timer armed")
 	}
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	conn.serviceInactivity(time.Now().Add(30 * time.Second))
 	if pipelineRead(t, peer, 10*time.Millisecond) != nil {
 		t.Fatal("UPIR repeated without update")
@@ -165,13 +165,13 @@ func TestInactivityLocalReleaseUsesSameActivityAndDeletion(t *testing.T) {
 			conn, assoc, session, plane, peer := inactivityFixture(t, cpTimer, time.Second)
 			session.activity.last = time.Now().Add(-2 * time.Second)
 			plane.count++
-			conn.nextActivityPoll = time.Time{}
+			forceInactivityPoll(conn)
 			conn.serviceInactivity(time.Now())
 			if assoc.Sessions[session.LocalSEID] == nil {
 				t.Fatal("activity ignored by local release")
 			}
 			session.activity.last = time.Now().Add(-2 * time.Second)
-			conn.nextActivityPoll = time.Time{}
+			forceInactivityPoll(conn)
 			conn.serviceInactivity(time.Now())
 			conn.serviceLocalSessionReleases()
 			report := identityRead(t, peer).(*message.SessionReportRequest)
@@ -197,7 +197,7 @@ func TestInactivityFailedModificationAndReadFailure(t *testing.T) {
 		t.Fatal("existing PDR not rebound for monitoring")
 	}
 	plane.failRead = true
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	conn.serviceInactivity(time.Now().Add(time.Hour))
 	if conn.FatalError() == nil || assoc.Sessions[session.LocalSEID] == nil {
 		t.Fatal("counter failure falsely deleted session")
@@ -293,4 +293,11 @@ func FuzzSessionInactivityTimerUpdate(f *testing.F) {
 			t.Fatal("accepted timer left inconsistent activity ownership")
 		}
 	})
+}
+
+// Force a due observation when a test changes the retained activity timestamp.
+func forceInactivityPoll(conn *PfcpConnection) {
+	for seid, assoc := range conn.activitySessions {
+		conn.activityDirty[seid] = assoc
+	}
 }

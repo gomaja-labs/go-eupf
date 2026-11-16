@@ -28,7 +28,7 @@ func TestInactivityEmptyObservationCannotExpireAcrossLaterPacket(t *testing.T) {
 	conn, _, session, activity, _ := inactivityFixture(t, time.Second, 0)
 	controller := &delayedEmptyActivityController{SessionActivityController: activity, entered: make(chan struct{}), resume: make(chan struct{})}
 	session.activity.controller = controller
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	unblock := sync.OnceFunc(func() { close(controller.resume) })
 	done := make(chan struct{})
 	go func() { conn.serviceInactivity(time.Now()); close(done) }()
@@ -46,7 +46,7 @@ func TestInactivityEmptyObservationCannotExpireAcrossLaterPacket(t *testing.T) {
 	if !session.inactivityArmed {
 		t.Fatal("empty observation expired after a later packet had arrived before its deadline")
 	}
-	conn.nextActivityPoll = time.Time{}
+	forceInactivityPoll(conn)
 	conn.serviceInactivity(time.Now())
 	if !session.inactivityArmed || time.Since(session.activity.last) > time.Second {
 		t.Fatal("next observation lost the packet that followed the empty read")

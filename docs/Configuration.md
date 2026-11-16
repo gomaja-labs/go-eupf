@@ -284,8 +284,13 @@ The common configuration validation checks its bound for every source.
 
 This local policy differs from a CP-provisioned User Plane Inactivity Timer:
 that timer sends one UPIR and preserves the session until the CP supplies further
-instructions (clause 5.11.2). Background activity sampling targets 100 ms,
-with scheduler and processing delay. Each batch snapshots at most 64 sessions,
+instructions (clause 5.11.2). Each session's observation interval is
+`I = min(5 seconds, max(100 ms, T / 40))`, where T is the smaller nonzero local
+or most recently provisioned CP timer. A deadline heap visits due sessions on a
+100 ms worker tick. Expiry rounding is bounded by `2I + 100 ms`, plus scheduler,
+I/O, processing and capacity delay: the timer fraction is 5%, with a 200 ms floor
+and ten-second ceiling before the worker tick. It never expires early.
+Each batch snapshots at most 64 sessions,
 reads activity outside the PFCP state lock, and checks their current lifetimes and
 timers before acting. Updated timers receive priority checks after each frame. See [PFCP transport](pfcp-transport.md) for update,
 reclamation and failure semantics. Per-PDR UPINT is rejected.
