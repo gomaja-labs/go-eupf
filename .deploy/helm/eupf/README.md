@@ -20,7 +20,7 @@ The default values configure a pod with `UPF_*` environment variables (see below
   ```
 
 - **Privileges**: the default container runs as UID/GID 1000 with NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF and PERFMON capabilities. It is not privileged. Adapt capabilities and kernel policy for your cluster.
-- The image provides `/dumps` owned by UID/GID 1000 for packet captures. If you override the user, provide a writable capture directory at `/dumps`.
+- The image provides `/dumps` owned by root:GID 1000, mode `0770`, for packet captures. Root and the default UID/GID 1000 can both write there. If you override the user, provide a writable capture directory at `/dumps`.
 - eUPF uses unpinned maps and requires no BPF filesystem, writable sysfs, or hostPath volume. Map state is recreated on startup. NET_RAW is used only for downlink data buffering continuation.
 
 ## Configuration

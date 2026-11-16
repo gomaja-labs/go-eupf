@@ -67,10 +67,10 @@ COPY --from=builder /app/cmd/docs/swagger.* /app/
 COPY --from=builder /app/cmd/ebpf/zeroentrypoint_bpf.o /app/
 COPY entrypoint.sh /app/bin/entrypoint.sh
 # Packet capture writes dumps/ from the image working directory (/). Give
-# the chart's UID/GID ownership of its data directory without DAC_OVERRIDE.
+# root and the chart's GID access to the data directory.
 RUN mkdir /dumps \
-    && chown 1000:1000 /dumps \
-    && chmod 750 /dumps \
+    && chown 0:1000 /dumps \
+    && chmod 770 /dumps \
     && apk add --no-cache libcap \
     && setcap cap_net_admin,cap_net_raw,cap_sys_resource,cap_bpf,cap_perfmon=ep /app/bin/eupf \
     && apk del libcap
