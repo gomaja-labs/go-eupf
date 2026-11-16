@@ -233,3 +233,77 @@ func TestBufferMetadataControlDoesNotLoadOutput(t *testing.T) {
 		t.Fatal("metadata preparation loaded output")
 	}
 }
+
+func TestUnbufferedFARVersionsDoNotWriteEmptyBindings(t *testing.T) {
+	b := loadDatapath(t)
+	// A read-only empty binding map proves that ordinary FORW never attempts
+	// a binding mutation, including version retirement and rollback.
+	if err := b.BufferBindings.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	id, err := b.NewFar(FarInfo{Action: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := b.BeginRuleTransaction(200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := tx.NewFar(FarInfo{Action: 2})
+	if err == nil {
+		err = tx.DeleteFar(id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := b.SynchronizeRules(); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = b.BeginRuleTransaction(200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.NewFar(FarInfo{Action: 2}); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SynchronizeRules(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DeleteFar(next); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBufferBindingPresenceFollowsClearAndIDReuse(t *testing.T) {
+	b := loadDatapath(t)
+	id, err := b.NewFar(FarInfo{Action: 4, BufferSessionID: 42, BufferCookie: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding bufferBinding
+	if err := b.BufferBindings.Lookup(id, &binding); err != nil || binding.Cookie != 7 {
+		t.Fatalf("binding missing: %+v %v", binding, err)
+	}
+	if err := b.DeleteFar(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.BufferBindings.Lookup(id, &binding); !isKeyAbsent(err) {
+		t.Fatalf("cleared FAR retained binding: %v", err)
+	}
+	next, err := b.NewFar(FarInfo{Action: 2})
+	if err != nil || next != id {
+		t.Fatalf("FAR ID not reused: %d %v", next, err)
+	}
+	info, err := b.GetFar(next)
+	if err != nil || info.BufferCookie != 0 {
+		t.Fatalf("new FAR inherited binding: %+v %v", info, err)
+	}
+}

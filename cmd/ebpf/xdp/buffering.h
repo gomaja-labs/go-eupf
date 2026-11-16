@@ -18,7 +18,7 @@
 struct buffer_binding { __u64 session_id,cookie; __u32 lane,reserved; };
 struct {
     __uint(type,BPF_MAP_TYPE_HASH);
-    __uint(map_flags,BPF_F_NO_PREALLOC);
+    __uint(map_flags,BPF_F_NO_PREALLOC|BPF_F_RDONLY_PROG);
     __uint(max_entries,FAR_MAP_SIZE);
     __type(key,__u32);
     __type(value,struct buffer_binding);

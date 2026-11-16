@@ -50,6 +50,8 @@ type BpfObjects struct {
 	sharedConfiguration    *ebpf.Map
 	renderClosed           bool
 	bufferMutex            sync.Mutex
+	bindingMutex           sync.Mutex
+	bindingPresent         []uint64
 	bufferReadClaimed      bool
 	bufferReadClosed       bool
 	bufferReader           *BufferReader
@@ -186,6 +188,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	}
 	bpfObjects.IpEntrypointObjects = objects.IpEntrypointObjects
 	bpfObjects.sharedConfiguration = objects.Configuration
+	bpfObjects.bindingPresent = make([]uint64, (uint64(farCapacity)+63)/64)
 	// Own freshly assigned handles even if subsequent initialization fails.
 	bpfObjects.ruleClosed = false
 	bpfObjects.bufferMutex.Lock()

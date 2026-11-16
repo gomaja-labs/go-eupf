@@ -434,16 +434,54 @@ func (b *BpfObjects) putBufferBinding(slot uint32, info FarInfo) error {
 	if err := b.prepareBufferAdmission(); err != nil {
 		return err
 	}
-	return b.BufferBindings.Put(slot, bufferBinding{SessionID: info.BufferSessionID, Cookie: info.BufferCookie, Lane: info.BufferLane})
+	b.bindingMutex.Lock()
+	defer b.bindingMutex.Unlock()
+	if uint64(slot/64) >= uint64(len(b.bindingPresent)) {
+		return errors.New("buffer binding slot is outside the FAR pool")
+	}
+	if err := b.BufferBindings.Put(slot, bufferBinding{SessionID: info.BufferSessionID, Cookie: info.BufferCookie, Lane: info.BufferLane}); err != nil {
+		return err
+	}
+	b.bindingPresent[slot/64] |= uint64(1) << (slot % 64)
+	return nil
 }
 
 func (b *BpfObjects) clearBufferBinding(slot uint32) error {
 	if b.BufferBindings == nil {
 		return errors.New("buffer binding map is not loaded")
 	}
+	b.bindingMutex.Lock()
+	defer b.bindingMutex.Unlock()
+	if uint64(slot/64) >= uint64(len(b.bindingPresent)) {
+		return errors.New("buffer binding slot is outside the FAR pool")
+	}
+	bit := uint64(1) << (slot % 64)
+	// The unpinned map starts empty, only these helpers write it, and an ID is
+	// returned only after clearing its old binding. Ordinary FORW has no binding
+	// syscall at creation, retirement or rollback.
+	if b.bindingPresent[slot/64]&bit == 0 {
+		return nil
+	}
 	err := b.BufferBindings.Delete(slot)
-	if isKeyAbsent(err) {
+	if err == nil || isKeyAbsent(err) {
+		b.bindingPresent[slot/64] &^= bit
 		return nil
 	}
 	return err
+}
+
+func (b *BpfObjects) lookupBufferBinding(slot uint32, value *bufferBinding) error {
+	b.bindingMutex.Lock()
+	defer b.bindingMutex.Unlock()
+	*value = bufferBinding{}
+	if b.BufferBindings == nil {
+		return errors.New("buffer binding map is not loaded")
+	}
+	if uint64(slot/64) >= uint64(len(b.bindingPresent)) {
+		return errors.New("buffer binding slot is outside the FAR pool")
+	}
+	if b.bindingPresent[slot/64]&(uint64(1)<<(slot%64)) == 0 {
+		return nil
+	}
+	return b.BufferBindings.Lookup(slot, value)
 }

@@ -219,7 +219,7 @@ func (bpfObjects *BpfObjects) GetFar(internalId uint32) (FarInfo, error) {
 	}
 
 	var binding bufferBinding
-	if err := bpfObjects.BufferBindings.Lookup(internalId, &binding); err != nil && !isKeyAbsent(err) {
+	if err := bpfObjects.lookupBufferBinding(internalId, &binding); err != nil && !isKeyAbsent(err) {
 		return FarInfo{}, err
 	}
 	farInfo.BufferSessionID, farInfo.BufferCookie, farInfo.BufferLane = binding.SessionID, binding.Cookie, binding.Lane
@@ -240,7 +240,7 @@ func (bpfObjects *BpfObjects) UpdateFar(internalId uint32, farInfo FarInfo) erro
 	log.Debug().Msgf("EBPF: Update FAR: internalId=%d, farInfo=%+v", internalId, farInfo)
 
 	var before bufferBinding
-	err := bpfObjects.BufferBindings.Lookup(internalId, &before)
+	err := bpfObjects.lookupBufferBinding(internalId, &before)
 	if err != nil && !isKeyAbsent(err) {
 		return err
 	}
