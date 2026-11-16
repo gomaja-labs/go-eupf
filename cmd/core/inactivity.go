@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -14,13 +15,21 @@ import (
 
 const activityPollInterval = 100 * time.Millisecond
 
+// One sample may perform map I/O or admit a report. Bound work under stateMu
+// independently of the number of monitored sessions.
+const activityPollBatchSize = 64
+
 // stateMu owns sampling state. The controller separately serializes map closure
 // and counter-slot allocation; packet writers change only the counter map.
 type sessionActivity struct {
-	controller ebpf.SessionActivityController
-	slot       uint32
-	observed   uint64
-	last       time.Time
+	controller     ebpf.SessionActivityController
+	slot           uint32
+	observed       uint64
+	last           time.Time
+	previous, next *sessionActivity
+	association    *NodeAssociation
+	seid           uint64
+	queued         bool
 }
 
 // TS 29.244 V20.1.0 clauses 5.11.2 and 8.2.83: a zero or null timer
@@ -65,12 +74,17 @@ func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE,
 }
 
 func (conn *PfcpConnection) watchSessionActivity(assoc *NodeAssociation, session *Session, delta int) {
+	activity := session.activity
 	if delta < 0 {
 		delete(conn.activitySessions, session.LocalSEID)
 		delete(conn.activityDirty, session.LocalSEID)
+		if activity != nil && activity.queued {
+			conn.unlinkSessionActivity(activity)
+		}
+		conn.activityCount.Store(int64(len(conn.activitySessions)))
 		return
 	}
-	if session.activity == nil {
+	if activity == nil {
 		return
 	}
 	if conn.activitySessions == nil {
@@ -78,23 +92,98 @@ func (conn *PfcpConnection) watchSessionActivity(assoc *NodeAssociation, session
 		conn.activityDirty = make(map[uint64]*NodeAssociation)
 	}
 	conn.activitySessions[session.LocalSEID], conn.activityDirty[session.LocalSEID] = assoc, assoc
+	activity.association, activity.seid = assoc, session.LocalSEID
+	if !activity.queued {
+		conn.appendSessionActivity(activity)
+	}
+	conn.activityCount.Store(int64(len(conn.activitySessions)))
+}
+
+func (conn *PfcpConnection) appendSessionActivity(activity *sessionActivity) {
+	activity.previous, activity.next, activity.queued = conn.activityTail, nil, true
+	if conn.activityTail != nil {
+		conn.activityTail.next = activity
+	} else {
+		conn.activityHead = activity
+	}
+	conn.activityTail = activity
+}
+
+func (conn *PfcpConnection) unlinkSessionActivity(activity *sessionActivity) {
+	if activity.previous != nil {
+		activity.previous.next = activity.next
+	} else {
+		conn.activityHead = activity.next
+	}
+	if activity.next != nil {
+		activity.next.previous = activity.previous
+	} else {
+		conn.activityTail = activity.previous
+	}
+	activity.previous, activity.next, activity.queued = nil, nil, false
+}
+
+// Periodic scans run independently of receive/dispatch. Yield between batches
+// so requests can acquire stateMu while a large monitored population is sampled.
+func (conn *PfcpConnection) runInactivity() {
+	ticker := time.NewTicker(activityPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-conn.done:
+			return
+		case <-ticker.C:
+			for conn.serviceInactivity(time.Now()) {
+				runtime.Gosched()
+			}
+		}
+	}
 }
 
 // TS 29.244 V20.1.0 clauses 5.11.2 and 5.18.2 share the received-packet
 // activity source. Sampling rounds activity time upwards, never expiring early.
-func (conn *PfcpConnection) serviceInactivity(now time.Time) {
+func (conn *PfcpConnection) serviceInactivity(now time.Time) bool {
+	if conn.activityCount.Load() == 0 {
+		return false
+	}
 	conn.stateMu.Lock()
 	if conn.isClosed() {
 		conn.stateMu.Unlock()
-		return
+		return false
 	}
-	sessions := conn.activityDirty
-	if !now.Before(conn.nextActivityPoll) {
-		sessions = conn.activitySessions
+	if conn.activityRemaining == 0 && !now.Before(conn.nextActivityPoll) {
+		conn.activityRemaining = len(conn.activitySessions)
 		conn.nextActivityPoll = now.Add(activityPollInterval)
 	}
+	type reference struct {
+		seid        uint64
+		association *NodeAssociation
+	}
+	var batch [activityPollBatchSize]reference
+	n := 0
+	dirtyLimit := activityPollBatchSize
+	if conn.activityRemaining > 0 {
+		dirtyLimit /= 2
+	}
+	for seid, assoc := range conn.activityDirty {
+		if n == dirtyLimit {
+			break
+		}
+		batch[n] = reference{seid, assoc}
+		n++
+		delete(conn.activityDirty, seid)
+	}
+	for n < len(batch) && conn.activityRemaining > 0 && conn.activityHead != nil {
+		activity := conn.activityHead
+		conn.unlinkSessionActivity(activity)
+		conn.appendSessionActivity(activity)
+		conn.activityRemaining--
+		batch[n] = reference{activity.seid, activity.association}
+		n++
+	}
 	var requests []admittedRequest
-	for seid, assoc := range sessions {
+	for _, item := range batch[:n] {
+		seid, assoc := item.seid, item.association
 		session := assoc.Sessions[seid]
 		if session == nil || assoc.cleaning || assoc.enhancedRelease != 0 || session.activity == nil {
 			continue
@@ -136,11 +225,15 @@ func (conn *PfcpConnection) serviceInactivity(now time.Time) {
 		session.inactivityArmed = false
 		requests = append(requests, admittedRequest{wire, request.MessageType(), peer, socket, session.Traced})
 	}
-	clear(conn.activityDirty)
+	more := len(conn.activityDirty) > 0 || conn.activityRemaining > 0 && conn.activityHead != nil
+	if conn.activityHead == nil {
+		conn.activityRemaining = 0
+	}
 	conn.stateMu.Unlock()
 	if err := conn.sendAdmitted(requests); err != nil {
 		log.Warn().Err(err).Msg("Send inactivity report")
 	}
+	return more
 }
 
 func (conn *PfcpConnection) failInactivityLocked(err error) {

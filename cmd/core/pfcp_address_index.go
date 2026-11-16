@@ -42,8 +42,9 @@ func (conn *PfcpConnection) forgetSession(assoc *NodeAssociation, seid uint64) {
 	if session := assoc.Sessions[seid]; session != nil && !assoc.retired {
 		conn.indexSession(assoc, session, -1)
 	}
-	delete(conn.activitySessions, seid)
-	delete(conn.activityDirty, seid)
+	if session := assoc.Sessions[seid]; session != nil {
+		conn.watchSessionActivity(assoc, session, -1)
+	}
 	delete(assoc.Sessions, seid)
 	delete(assoc.sessionEntities, seid)
 	delete(assoc.cleanupFailures, seid)

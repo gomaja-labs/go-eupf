@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/config"
@@ -48,6 +49,9 @@ var pfcpHandlers = PfcpHandlerMap{
 type PfcpConnection struct {
 	activitySessions, activityDirty map[uint64]*NodeAssociation
 	nextActivityPoll                time.Time
+	activityHead, activityTail      *sessionActivity
+	activityRemaining               int
+	activityCount                   atomic.Int64
 	inactivityReleaseTimeout        time.Duration
 	packetBuffers                   *PacketBuffering
 	downlinkSessions                map[uint64]*NodeAssociation
@@ -476,6 +480,7 @@ func (connection *PfcpConnection) SendAssociationReleaseRequest() *AssociationRe
 }
 
 func (connection *PfcpConnection) Run() {
+	go connection.runInactivity()
 	ticker := connection.associationTicker()
 	defer ticker.Stop()
 	reportTicker := time.NewTicker(5 * time.Second)
