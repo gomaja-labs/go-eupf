@@ -186,6 +186,25 @@ func (conn *PfcpConnection) serviceInactivityUpdates(now time.Time, seid uint64)
 	conn.sampleInactivity(now, false, seid)
 }
 
+// TS 29.244 V20.1.0 clause 5.11.2: a timer instruction rearms reporting
+// without resetting packet age. Other requests use the background sweep;
+// unrelated FAR changes must not add an activity read to every request.
+func (conn *PfcpConnection) serviceInactivityRequest(request message.Message) {
+	if conn.activityCount.Load() == 0 {
+		return
+	}
+	switch value := request.(type) {
+	case *message.SessionEstablishmentRequest:
+	case *message.SessionModificationRequest:
+		if value.UserPlaneInactivityTimer == nil {
+			return
+		}
+	default:
+		return
+	}
+	conn.serviceInactivityUpdates(time.Now(), request.SEID())
+}
+
 func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, priority uint64) bool {
 	if conn.activityCount.Load() == 0 {
 		return false
