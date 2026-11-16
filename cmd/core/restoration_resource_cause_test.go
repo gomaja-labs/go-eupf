@@ -43,7 +43,7 @@ func TestRestorationOccupiedFTEIDUsesRuleFailureOrCapacity(t *testing.T) {
 	}
 }
 
-func TestRestorationUEIPv4OutsideUPFAllocationRangeIsUnavailable(t *testing.T) {
+func TestRestorationExplicitUEIPv4IsIndependentOfAutomaticPool(t *testing.T) {
 	for _, address := range []string{"192.0.2.0", "198.51.100.1", "192.0.2.1", "192.0.2.3"} {
 		t.Run(address, func(t *testing.T) {
 			resources, err := service.NewResourceManager("192.0.2.0/30", 4)
@@ -59,9 +59,6 @@ func TestRestorationUEIPv4OutsideUPFAllocationRangeIsUnavailable(t *testing.T) {
 			request.CreatePDR = []*ie.IE{ie.NewCreatePDR(ie.NewPDRID(7), ie.NewPrecedence(1), ie.NewPDI(ie.NewSourceInterface(1), ie.NewUEIPAddress(6, address, "", 0, 0)), ie.NewFARID(1))}
 			reply := sessionLimitExchange(t, conn, peer, request)
 			expected := ie.CauseRequestAccepted
-			if address == "192.0.2.0" || address == "198.51.100.1" {
-				expected = ie.CauseSessionRestorationResourceUnavailable
-			}
 			if cause := pipelineCause(t, reply); cause != expected {
 				t.Fatalf("address=%s cause=%d want=%d", address, cause, expected)
 			}

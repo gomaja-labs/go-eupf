@@ -364,13 +364,9 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 
 		spdrInfo.PdrInfo.UEDestination = ueIP.Flags&4 != 0
 		if ueIP.IPv4Address != nil {
-			// TS 23.527 V20.0.0 clause 4.3.2 NOTE; TS 29.244 V20.1.0
-			// table 8.2.1-1: Cause 86 is only for permanently unavailable
-			// UP-allocated addresses. Ownership conflicts remain PDR failures.
-			if pdrContext.Restoration && config.Conf.FeatureUEIP && (pdrContext.ResourceManager == nil || !pdrContext.ResourceManager.IPAM.CanAllocateIPv4(ueIP.IPv4Address)) {
-				return &requestIEError{ie.CauseSessionRestorationResourceUnavailable, ie.UEIPAddress, fmt.Errorf("UE IPv4 address is outside the configured UPF allocation range")}
-			}
-			spdrInfo.Ipv4 = cloneIP(ueIP.IPv4Address)
+			// TS 23.527 V20.0.0 clause 4.3.2 NOTE: explicit UE addresses
+			// have the same availability during restoration and new admission.
+			// The automatic pool bounds only UPF allocation.			spdrInfo.Ipv4 = cloneIP(ueIP.IPv4Address)
 			spdrInfo.PdrInfo.UEIPv4 = cloneIP(ueIP.IPv4Address)
 		}
 		if ueIP.IPv6Address != nil {

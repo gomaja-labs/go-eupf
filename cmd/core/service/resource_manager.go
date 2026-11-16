@@ -198,18 +198,6 @@ func (pool *IPAM) record(owner uint64, ip net.IP) {
 	pool.ownerIPs[owner][key] = append(net.IP(nil), ip...)
 }
 
-// CanAllocateIPv4 reports the configured automatic allocation range, regardless
-// of current ownership. Explicit CP allocation can use addresses outside it.
-func (pool *IPAM) CanAllocateIPv4(ip net.IP) bool {
-	if pool == nil {
-		return false
-	}
-	if pool.parent != nil {
-		return pool.parent.CanAllocateIPv4(ip)
-	}
-	return ip.To4() != nil && pool.pool != nil && pool.pool.Contains(ip) && !pool.pool.IP.Equal(ip)
-}
-
 // ReserveIP keeps explicit addresses out of the allocation pool as well.
 // TS 29.244 V20.1.0 clauses 5.2.1 and 5.21.
 func (pool *IPAM) ReserveIP(owner uint64, ip net.IP) error {

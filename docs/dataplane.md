@@ -227,7 +227,7 @@ V19.2.0 clause 19A). A newer timestamp removes that entity's existing sessions
 through the same journal. Cleanup failure retains ownership for retry. Setup
 timestamps remain ignored. Recovery history is bounded to 1024 entities per
 association; a new entity beyond the bound is rejected. RESTI accepts available
-explicit resources return restoration failure Cause 86 only when their local F-TEID address is unavailable on the requested interface or their UPF-allocated IPv4 UE address is outside the configured allocation range; an occupied resource returns Cause 73 with its Failed PDR ID, and session capacity always returns Cause 75
+explicit resources return restoration failure Cause 86 only when no session could use them, such as a local F-TEID address unavailable on the requested interface (TS 23.527 V20.0.0 clause 4.3.2 NOTE). CP-provisioned UE IPv4 addresses follow the same acceptance rules as new sessions, independently of the automatic UPF pool; an occupied resource returns Cause 73 with its Failed PDR ID, and session capacity always returns Cause 75
 (TS 29.244 V20.1.0 Table 7.5.2.1-1 note 4). Other unimplemented restoration or
 charging flags are rejected. Native N6 PDIs support Core ingress and destination UE-IP lookup. Native
 source-address lookup, Access ingress without F-TEID, and forwarding without a
