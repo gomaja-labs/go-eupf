@@ -1,11 +1,12 @@
 package core
 
 import (
+	"net"
+	"testing"
+
 	"github.com/gomaja-labs/go-eupf/cmd/config"
 	"github.com/gomaja-labs/go-eupf/cmd/core/service"
 	"github.com/gomaja-labs/go-pfcp/ie"
-	"net"
-	"testing"
 )
 
 // Explicit CP addresses retain their lookup keys during both new admission

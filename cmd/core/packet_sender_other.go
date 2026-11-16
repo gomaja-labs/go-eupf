@@ -4,6 +4,7 @@ package core
 
 import (
 	"errors"
+
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 )
 

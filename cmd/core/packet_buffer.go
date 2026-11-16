@@ -612,11 +612,12 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			}
 			if reason != "" {
 				bufferDiscardedPackets.WithLabelValues(reason).Inc()
-				if reason == "expiry" {
+				switch reason {
+				case "expiry":
 					owner.discardExpiry++
-				} else if reason == "cancellation" {
+				case "cancellation":
 					owner.discardCancellation++
-				} else if reason == "ingress_removed" {
+				case "ingress_removed":
 					owner.discardIngress++
 				}
 			}

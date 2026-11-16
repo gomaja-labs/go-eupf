@@ -4,8 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"github.com/cilium/ebpf"
 	"sync"
+
+	"github.com/cilium/ebpf"
 )
 
 // One secret per process authenticates private generic-XDP continuations. Each

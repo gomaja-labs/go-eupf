@@ -1,10 +1,11 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-pfcp/ie"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 func TestInactivityObservationCadenceFollowsSessionTimer(t *testing.T) {

@@ -1,12 +1,13 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 func TestRuleOnlyModificationDoesNotWaitForAddressReservations(t *testing.T) {

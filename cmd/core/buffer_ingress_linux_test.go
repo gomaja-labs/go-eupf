@@ -4,11 +4,12 @@ package core
 
 import (
 	"errors"
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
-	"golang.org/x/sys/unix"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"golang.org/x/sys/unix"
 )
 
 func TestKernelContinuationRemovedIngressIsTerminal(t *testing.T) {

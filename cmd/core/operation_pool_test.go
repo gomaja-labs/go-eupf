@@ -3,9 +3,10 @@ package core
 import (
 	"errors"
 	"fmt"
-	"github.com/gomaja-labs/go-pfcp/ie"
 	"reflect"
 	"testing"
+
+	"github.com/gomaja-labs/go-pfcp/ie"
 )
 
 func TestOperationPoolReservesBeforeAnyWrite(t *testing.T) {

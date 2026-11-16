@@ -5,13 +5,14 @@ package core
 import (
 	"context"
 	"errors"
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
-	"golang.org/x/sys/unix"
 	"net"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"golang.org/x/sys/unix"
 )
 
 func TestBufferSenderStartupRemovesOnlyStalePrivateLinks(t *testing.T) {
@@ -85,7 +86,10 @@ attempts:
 				}
 			}
 			select {
-			case <-done:
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
 				_ = sender.Close()
 				continue attempts
 			default:
