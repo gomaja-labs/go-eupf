@@ -5,9 +5,12 @@ package core
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -181,75 +184,101 @@ func bufferTCMessage(index int, handle, parent, info uint32) []byte {
 }
 
 type bufferKernelLink struct {
+	mu      sync.Mutex
+	closed  bool
+	ownerFD int
 	link    *bufferNetlink
 	index   int
 	name    string
 	address net.HardwareAddr
 }
 
-func newBufferKernelLink(programFD int) (_ *bufferKernelLink, err error) {
+func newBufferKernelLink(programFD int, adopt func(*bufferKernelLink) error) (_ *bufferKernelLink, err error) {
 	link, err := newBufferNetlink()
 	if err != nil {
 		return nil, err
 	}
-	resource := &bufferKernelLink{link: link}
+	resource := &bufferKernelLink{link: link, ownerFD: -1}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, resource.Close())
 		}
 	}()
-	var random [10]byte
+	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
+		return nil, err
+	}
+	alias := "go-eupf-buffer:" + hex.EncodeToString(random[:])
+	resource.ownerFD, err = unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err = unix.Bind(resource.ownerFD, &unix.SockaddrUnix{Name: "@" + alias}); err != nil {
 		return nil, err
 	}
 	resource.name = fmt.Sprintf("eub%x", random[:4])
 	peer := resource.name + "p"
 	resource.address = net.HardwareAddr{2, random[4], random[5], random[6], random[7], random[8]}
+	// Publish ownership before RTM_NEWLINK. Close marks the resource closed
+	// under its own mutex, so no later step can create a link after shutdown.
+	if err = adopt(resource); err != nil {
+		return nil, err
+	}
 	peerData := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(peer), 0))...)
 	// Carry the complete retained frame class, rewrite headroom and cursor.
 	// Linux still applies the actual forwarding device's MTU after reinjection.
+	peerData = append(peerData, bufferAttribute(unix.IFLA_IFALIAS, append([]byte(alias), 0))...)
 	peerData = append(peerData, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
 
 	vethData := bufferAttribute(1|unix.NLA_F_NESTED, peerData) // VETH_INFO_PEER
 	info := append(bufferAttribute(unix.IFLA_INFO_KIND, []byte("veth\x00")), bufferAttribute(unix.IFLA_INFO_DATA|unix.NLA_F_NESTED, vethData)...)
 	data := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(resource.name), 0))...)
+	data = append(data, bufferAttribute(unix.IFLA_IFALIAS, append([]byte(alias), 0))...)
 	data = append(data, bufferAttribute(unix.IFLA_ADDRESS, resource.address)...)
 	data = append(data, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
 	data = append(data, bufferAttribute(unix.IFLA_LINKINFO|unix.NLA_F_NESTED, info)...)
-	if err = link.change(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
+	if err = resource.change(unix.RTM_NEWLINK, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
 		return nil, fmt.Errorf("create kernel continuation veth: %w", err)
 	}
 	iface, err := net.InterfaceByName(resource.name)
 	if err != nil {
 		return nil, err
 	}
+	resource.mu.Lock()
 	resource.index = iface.Index
+	resource.mu.Unlock()
 	other, err := net.InterfaceByName(peer)
 	if err != nil {
 		return nil, err
 	}
 	for _, index := range []int{iface.Index, other.Index} {
-		if err = link.change(unix.RTM_NEWLINK, 0, bufferLinkMessage(index, true)); err != nil {
+		if err = resource.change(unix.RTM_NEWLINK, 0, bufferLinkMessage(index, true)); err != nil {
 			return nil, err
 		}
 	}
 	data = append(bufferTCMessage(other.Index, 0xffff0000, 0xfffffff1, 0), bufferAttribute(1, []byte("clsact\x00"))...)
-	if err = link.change(unix.RTM_NEWQDISC, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
+	if err = resource.change(unix.RTM_NEWQDISC, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
 		return nil, fmt.Errorf("create kernel continuation qdisc: %w", err)
 	}
 	options := append(bufferAttribute(6, bufferUint32(uint32(programFD))), bufferAttribute(7, []byte("upf_buffer_kernel\x00"))...)
 	options = append(options, bufferAttribute(8, bufferUint32(1))...) // TCA_BPF_FLAG_ACT_DIRECT
 	data = append(bufferTCMessage(other.Index, 1, 0xfffffff2, 1<<16|0x0300), bufferAttribute(1, []byte("bpf\x00"))...)
 	data = append(data, bufferAttribute(2|unix.NLA_F_NESTED, options)...)
-	if err = link.change(unix.RTM_NEWTFILTER, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
+	if err = resource.change(unix.RTM_NEWTFILTER, unix.NLM_F_CREATE|unix.NLM_F_EXCL, data); err != nil {
 		return nil, fmt.Errorf("attach kernel continuation filter: %w", err)
 	}
 	return resource, nil
 }
 func (resource *bufferKernelLink) Close() error {
-	if resource == nil || resource.link == nil {
+	if resource == nil {
 		return nil
 	}
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	if resource.closed {
+		return nil
+	}
+	resource.closed = true
 	var removeErr error
 	if resource.name != "" {
 		iface, err := net.InterfaceByName(resource.name)
@@ -258,6 +287,10 @@ func (resource *bufferKernelLink) Close() error {
 		}
 	}
 	closeErr := unix.Close(resource.link.fd)
+	if resource.ownerFD >= 0 {
+		closeErr = errors.Join(closeErr, unix.Close(resource.ownerFD))
+		resource.ownerFD = -1
+	}
 	resource.link = nil
 	return errors.Join(removeErr, closeErr)
 }
@@ -268,4 +301,83 @@ func setBufferIngressMode(plane *ebpf.BpfObjects, index uint32) error {
 		return err
 	}
 	return plane.SetBufferGenericIngress(index, generic)
+}
+
+func (resource *bufferKernelLink) change(kind, flags uint16, payload []byte) error {
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	if resource.closed {
+		return errors.New("kernel continuation link is closed")
+	}
+	return resource.link.change(kind, flags, payload)
+}
+
+// Abstract Unix sockets are scoped to the network namespace and disappear on
+// process exit. Unlike PIDs, this ownership check also works across containers
+// sharing a network namespace but using different PID namespaces.
+func removeStaleBufferLinks() error {
+	rib, err := syscall.NetlinkRIB(unix.RTM_GETLINK, unix.AF_UNSPEC)
+	if err != nil {
+		return err
+	}
+	messages, err := syscall.ParseNetlinkMessage(rib)
+	if err != nil {
+		return err
+	}
+	var control *bufferNetlink
+	defer func() {
+		if control != nil {
+			_ = unix.Close(control.fd)
+		}
+	}()
+	for _, message := range messages {
+		if message.Header.Type != unix.RTM_NEWLINK || len(message.Data) < unix.SizeofIfInfomsg {
+			continue
+		}
+		attrs, err := syscall.ParseNetlinkRouteAttr(&message)
+		if err != nil {
+			return err
+		}
+		for _, attr := range attrs {
+			if attr.Attr.Type != unix.IFLA_IFALIAS {
+				continue
+			}
+			alias := strings.TrimRight(string(attr.Value), "\x00")
+			token, ok := strings.CutPrefix(alias, "go-eupf-buffer:")
+			if !ok || len(token) != 32 {
+				continue
+			}
+			if _, err := hex.DecodeString(token); err != nil {
+				continue
+			}
+			fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+			if err != nil {
+				return err
+			}
+			ownerErr := unix.Connect(fd, &unix.SockaddrUnix{Name: "@" + alias})
+			closeErr := unix.Close(fd)
+			if closeErr != nil {
+				return closeErr
+			}
+			if ownerErr == nil {
+				continue
+			}
+			if !errors.Is(ownerErr, unix.ECONNREFUSED) && !errors.Is(ownerErr, unix.ENOENT) {
+				return ownerErr
+			}
+			if control == nil {
+				control, err = newBufferNetlink()
+				if err != nil {
+					return err
+				}
+			}
+			index := int(binary.NativeEndian.Uint32(message.Data[4:]))
+			err = control.change(unix.RTM_DELLINK, 0, bufferLinkMessage(index, false))
+			// Deleting one veth also removes its peer from this dump's snapshot.
+			if err != nil && !errors.Is(err, unix.ENODEV) {
+				return err
+			}
+		}
+	}
+	return nil
 }

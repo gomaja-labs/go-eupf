@@ -22,6 +22,9 @@ type bufferPacketSender struct {
 }
 
 func newBufferPacketSender(plane *ebpf.BpfObjects) (packetBufferSender, error) {
+	if err := removeStaleBufferLinks(); err != nil {
+		return nil, fmt.Errorf("remove stale kernel continuation links: %w", err)
+	}
 	return &bufferPacketSender{plane: plane, fd: -1}, nil
 }
 
@@ -52,7 +55,15 @@ func (sender *bufferPacketSender) initialize(ctx context.Context) error {
 	if err := unix.SetsockoptInt(fd, unix.SOL_PACKET, unix.PACKET_QDISC_BYPASS, 1); err != nil {
 		return errors.Join(err, unix.Close(fd))
 	}
-	kernel, err := newBufferKernelLink(program.FD())
+	kernel, err := newBufferKernelLink(program.FD(), func(resource *bufferKernelLink) error {
+		sender.mu.Lock()
+		defer sender.mu.Unlock()
+		if sender.closed || ctx.Err() != nil {
+			return errors.New("buffer output initialization canceled")
+		}
+		sender.kernel = resource
+		return nil
+	})
 	if err != nil {
 		return errors.Join(err, unix.Close(fd))
 	}

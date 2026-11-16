@@ -286,7 +286,7 @@ A bounded per-packet kernel result cache prevents repeated test-run syscalls or
 send retries from repeating QER/URR processing on later local legs. Successful
 completion removes that cache entry with the packet's idempotent acknowledgement.
 The runtime requires NET_RAW in addition to its existing BPF and network
-administration capabilities. The kernel needs veth, clsact and cls_bpf support.
+administration capabilities. The kernel needs veth, clsact and cls_bpf support. Link ownership is registered before creation, so shutdown can remove an initialization in progress without waiting for program verification. Each private veth carries an alias identifying an abstract Unix owner socket in the same network namespace. Startup removes marked links only when that owner socket has disappeared; live owners and unmarked links are preserved.
 
 Packet order is defined at hand-over: per FAR, every older retained packet is
 handed to its continuation before a later packet can enter any output. The carrying
