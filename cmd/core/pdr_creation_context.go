@@ -50,25 +50,18 @@ func NewPDRCreationContext(session *Session, resourceManager *service.ResourceMa
 
 // GetURRIDs reads the PDR usage-rule list; a null occurrence removes the entire list.
 func GetURRIDs(i *ie.IE) ([]uint32, error) {
-	var children []*ie.IE
-	switch i.Type {
-	case ie.CreatePDR:
-		f, err := i.CreatePDR()
-		if err != nil {
-			return nil, err
-		}
-		children = f.URRID
-	case ie.UpdatePDR:
-		f, err := i.UpdatePDR()
-		if err != nil {
-			return nil, err
-		}
-		children = f.URRID
-	default:
+	if i.Type != ie.CreatePDR && i.Type != ie.UpdatePDR {
 		return nil, &ie.InvalidTypeError{Type: i.Type}
+	}
+	children, err := i.ValueAsGrouped()
+	if err != nil {
+		return nil, err
 	}
 	var ids []uint32
 	for _, child := range children {
+		if child.Type != ie.URRID {
+			continue
+		}
 		// TS 29.244 V20.1.0 clauses 5.6.3 and 8.1.2: a null URR ID removes the list.
 		if isNullIE(child) {
 			return nil, nil

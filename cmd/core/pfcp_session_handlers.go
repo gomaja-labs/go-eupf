@@ -1005,7 +1005,16 @@ func createFARs(
 		if err != nil {
 			return err
 		}
-		farInfo, err := composeFarInfo(far, ebpf.FarInfo{}, profile)
+		var forwarding *ie.ForwardingParametersFields
+		var outer, marking, destination *ie.IE
+		if fields.ForwardingParameters != nil {
+			forwarding, err = fields.ForwardingParameters.ForwardingParameters()
+			if err != nil {
+				return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
+			}
+			outer, marking, destination = forwarding.OuterHeaderCreation, forwarding.TransportLevelMarking, forwarding.DestinationInterface
+		}
+		farInfo, err := composeDecodedFarInfo(ie.CreateFAR, fields.ApplyAction, outer, marking, destination, ebpf.FarInfo{}, profile)
 		if err != nil {
 			logger.Warn().Msgf("Error extracting FAR info: %s", err.Error())
 			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
@@ -1019,11 +1028,7 @@ func createFARs(
 			return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
 		}
 		session.FARs[farID] = saved
-		if fields.ForwardingParameters != nil {
-			forwarding, err := fields.ForwardingParameters.ForwardingParameters()
-			if err != nil {
-				return err
-			}
+		if forwarding != nil {
 			saved := session.FARs[farID]
 			if err := retainFarInterfaceType(forwarding.DestinationInterfaceType, &saved); err != nil {
 				return err
@@ -1142,12 +1147,12 @@ func createPDRs(
 	mapOperations := conn.mapOperations
 
 	for _, pdr := range PDRs {
-		fields, decodeErr := pdr.CreatePDR()
+		children, decodeErr := pdr.ValueAsGrouped()
 		if decodeErr != nil {
 			return decodeErr
 		}
 		// PDR should be created last, because we need to reference FARs and QERs global id
-		pdrID, err := fields.PDRID.PDRID()
+		pdrID, err := firstChild(children, ie.PDRID).PDRID()
 		if err != nil {
 			continue
 		}
