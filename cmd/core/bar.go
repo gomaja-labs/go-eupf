@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gomaja-labs/go-pfcp/ie"
 	"github.com/gomaja-labs/go-pfcp/message"
 )
@@ -71,13 +73,18 @@ func applyBARParameters(bar *bufferingActionRule, delay, count, duration, dlCoun
 		}
 	}
 	if dlCount != nil {
-		bar.dlPacketCount, bar.dlPacketCountPresent = 0, !isNullIE(dlCount)
-		if bar.dlPacketCountPresent {
+		if isNullIE(dlCount) {
+			bar.dlPacketCount, bar.dlPacketCountPresent = 0, false
+		} else {
 			value, err := dlCount.DLBufferingSuggestedPacketCount()
 			if err != nil {
-				return invalidRequestIE(ie.DLBufferingSuggestedPacketCount, err)
+				// TS 29.244 V20.1.0 clause 7.6.8 and tables 7.5.2.6-1,
+				// 7.5.4.11-1, 7.5.9.2-1: this child is optional. Treat an
+				// incorrect value as absent, preserving any provisioned count.
+				log.Debug().Err(err).Uint8("bar", bar.id).Msg("Discard incorrect optional DL buffering suggested packet count")
+			} else {
+				bar.dlPacketCount, bar.dlPacketCountPresent = value, true
 			}
-			bar.dlPacketCount = value
 		}
 	}
 	return nil
