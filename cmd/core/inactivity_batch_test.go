@@ -14,6 +14,31 @@ func (p *sampledActivityPlane) ConsumeSessionActivity(slot uint32) (bool, error)
 }
 func (p *sampledActivityPlane) ReleaseSessionActivity(uint32) {}
 
+type completedActivityPlane struct {
+	sampledActivityPlane
+	completed time.Time
+}
+
+func (p *completedActivityPlane) ConsumeSessionActivity(uint32) (bool, error) {
+	p.completed = time.Now()
+	return true, nil
+}
+
+func TestInactivityObservationIsTimestampedAfterConsumption(t *testing.T) {
+	conn := &PfcpConnection{done: make(chan struct{})}
+	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
+	plane := &completedActivityPlane{}
+	now := time.Now()
+	session := NewSession(1, 2, "", "", false)
+	session.activity = &sessionActivity{controller: plane, slot: 1, last: now.Add(-time.Hour)}
+	assoc.Sessions[session.LocalSEID] = session
+	conn.watchSessionActivity(assoc, session, 1)
+	conn.serviceInactivity(now)
+	if session.activity.last.Before(plane.completed) {
+		t.Fatal("activity preceding the clear was timestamped too early")
+	}
+}
+
 func TestInactivityPollBoundsEachBatchAndVisitsEverySession(t *testing.T) {
 	conn := &PfcpConnection{done: make(chan struct{})}
 	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
