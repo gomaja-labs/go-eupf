@@ -99,10 +99,7 @@ func HandlePfcpSessionEstablishmentRequest(conn *PfcpConnection, msg message.Mes
 		session.Is5G = true
 	}
 
-	logger := log.With().
-		Uint64("LocalSEID", session.LocalSEID).
-		Uint64("RemoteSEID", session.RemoteSEID).
-		Logger()
+	logger := sessionLogger(log.Logger, session)
 
 	start, finish := conn.prepareSessionMutation(session, createSessionMutation, true)
 	defer func() {
@@ -204,10 +201,7 @@ func HandlePfcpSessionDeletionRequest(conn *PfcpConnection, msg message.Message,
 
 	session = cloneSession(session)
 
-	logger := log.With().
-		Uint64("LocalSEID", session.LocalSEID).
-		Uint64("RemoteSEID", session.RemoteSEID).
-		Logger()
+	logger := sessionLogger(log.Logger, session)
 
 	traced := session.IsSessionTraced()
 
@@ -282,10 +276,7 @@ func HandlePfcpSessionModificationRequest(conn *PfcpConnection, msg message.Mess
 	session = cloneSession(session)
 	session.Is5G = session.Is5G || requestHasQFI(req.CreateQER) || requestHasQFI(req.UpdateQER)
 
-	logger := log.With().
-		Uint64("LocalSEID", session.LocalSEID).
-		Uint64("RemoteSEID", session.RemoteSEID).
-		Logger()
+	logger := sessionLogger(log.Logger, session)
 
 	// This IE shall be present if the CP function decides to change its F-SEID for the PFCP session. The UP function
 	// shall use the new CP F-SEID for subsequent PFCP Session related messages for this PFCP Session
