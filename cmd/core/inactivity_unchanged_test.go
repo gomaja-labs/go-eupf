@@ -1,12 +1,13 @@
 package core
 
 import (
-	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
-	"github.com/gomaja-labs/go-pfcp/ie"
-	"github.com/gomaja-labs/go-pfcp/message"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
+	"github.com/gomaja-labs/go-pfcp/ie"
+	"github.com/gomaja-labs/go-pfcp/message"
 )
 
 type countedActivityController struct {
