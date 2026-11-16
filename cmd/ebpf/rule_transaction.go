@@ -399,11 +399,10 @@ func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	}
 	tx.removedVersions[0] = appendVersionRemoval(tx.removedVersions[0], id)
 	// The detached slot remains reserved until every old reader has returned.
-	// Clearing an unreachable value is reclamation, not a rule-plan write.
+	// Configuration is immutable and every allocation initializes the complete
+	// value before publishing a reference. Its unreachable old bytes need no
+	// clearing write; mutable binding identities still need explicit removal.
 	tx.retired = append(tx.retired, func() error {
-		if err := tx.objects.FarMap.Put(id, &IpEntrypointFarInfo{}); err != nil {
-			return err
-		}
 		if err := tx.objects.clearBufferBinding(id); err != nil {
 			return err
 		}
