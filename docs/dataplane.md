@@ -184,8 +184,10 @@ updated. Removing the last PDR association reports non-null usage and retains a 
 URR. Reattaching a PDR resumes measurement from zero. Sequence numbers start
 at zero independently for each URR. Reports
 include total, uplink and downlink octets; packet timestamps are omitted because
-they are not measured. No end-marker emission, buffering, application detection,
-IPv6 outer tunnel or IPv6 UE address allocation capability is advertised.
+they are not measured. End Marker emission (EMPU) and the supported buffering
+subset (DDND, DLBD, DBDM and UDBC) are advertised; see [rule capabilities](rule-capabilities.md).
+Application detection, IPv6 outer tunnels and IPv6 UE address allocation are
+not advertised.
 Explicit IPv6 prefix ownership includes uplink-only PDIs. Both concurrently
 chosen resources appear in Created PDR; allocations through Update PDR use
 Updated PDR.

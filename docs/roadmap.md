@@ -165,3 +165,95 @@ separate from PFCP session admission. TS 29.244 V20.1.0 clause 5.2.1 describes
 packet detection and forwarding rules; it does not require BGP or define a
 Kubernetes route controller. Prefix aggregation needs deployment evidence that
 the entire prefix has the same reachable UPF next hop.
+
+## Traffic steering and service function chaining
+
+Upstream PR 549 requests FAR Forwarding Policy handling and NSH encapsulation
+for N6-LAN service function chaining. This is deferred until a supported policy
+model and a repeatable service-chain lab are available. The current
+[`validateForwardingCapability`](../cmd/core/rule_capability.go#L293) rejects a
+Forwarding Policy IE with Cause 70 (Invalid Forwarding Policy); it does not
+interpret the opaque policy identifier as an NSH header or service-path ID.
+
+TS 29.244 V20.1.0 clauses 5.4.8 and 8.2.23 and Table 7.5.2.3-2 define steering
+through a policy configured locally in the UPF. TS 23.501 V19.9.0 clauses
+5.6.16.1 and 5.6.16.2 describe directional policy selection and AF influence;
+the encapsulation and forwarding between service functions are deployment
+choices. See the [published TS 23.501 text](https://www.etsi.org/deliver/etsi_ts/123500_123599/123501/19.09.00_60/ts_123501v190900p.pdf).
+
+A design needs a bounded policy-ID-to-action registry, validated destinations,
+separate uplink/downlink policies, explicit encapsulation and metadata rules,
+MTU and checksum handling, return-path classification, loop prevention and
+atomic policy replacement with FAR lifetimes. Changes would span
+[`rule validation`](../cmd/core/rule_capability.go),
+[`FAR processing`](../cmd/core/pfcp_session_handlers.go),
+[`rule publication`](../cmd/ebpf/objects.go), the
+[`XDP entrypoint`](../cmd/ebpf/xdp/n3n6_entrypoint.c) and its packet parsers.
+Reconsider after this model, the applicable encapsulation specification and
+its current corrections, and verifier-backed wire tests establish both
+service-chain forwarding and ordinary forwarding without a policy. Advertise
+TRST, and AFSFC if metadata is supported, only for the implemented subset.
+
+## OAI nFAPI lab version pins
+
+Upstream PR 552 requests matching OAI compose revisions and core/RAN image
+tags, plus related deployment fixes. It is deferred with the lab validation
+items: updating tags alone does not establish registration, PFCP admission,
+GTP-U forwarding or return routing. The PR body names the 2023.w43 RAN images,
+while its diff selects v2.1.0; neither combination has been validated here.
+
+Reconsider with an exact OAI compose/config commit and immutable image digests
+for the core, gNB, UE and proxy, matching nFAPI and configuration interfaces,
+a recorded host/kernel/topology and a current eUPF image digest. Merge the
+[`override`](deployments/oai-nfapi-sim-compose/docker-compose.override.yml)
+with that pinned base, validate the resulting Compose model, then run clean
+startup, registration, session creation, bidirectional UE traffic and teardown
+with PFCP/GTP-U captures. Record health checks, expected routes, resource needs
+and repeatable commands in the lab README. Parsing this override with a
+synthetic base checks its structure, not the OAI combination.
+
+## Requests evaluated and not adopted
+
+### Global XDP metric variables
+
+Upstream issue 609 asks to replace metric maps with global XDP variables.
+Retain the per-CPU arrays in
+[`statistics.h`](../cmd/ebpf/xdp/statistics.h): independent CPU counters avoid
+cross-CPU contention on the packet path. Ordinary shared global increments
+would lose concurrent updates; shared counters need atomic operations and
+introduce contention and cache-line traffic. Globals in a per-CPU map would
+retain the same aggregation requirement. Linux 5.15 is the minimum kernel;
+map-backed BPF globals being available does not establish either an atomic
+operation's portability or a performance improvement on that kernel. The
+scrape collector reads each statistics map once and sums the CPU slots.
+Reconsider only with verifier/load evidence on 5.15 and measured packet-path
+CPU cost, loss, throughput and scrape cost under multi-CPU load showing an
+advantage while preserving counter semantics.
+
+### Parsing transport headers only for SDF matching
+
+Upstream issue 608 asks to parse TCP/UDP only when an SDF port filter needs
+them. The [`entrypoint`](../cmd/ebpf/xdp/n3n6_entrypoint.c) also needs the outer
+UDP destination to recognise N3/N9 GTP-U, including Echo and End Marker
+handling. Inner transport ports feed SDF matching; validated outer
+UDP pointers and lengths also feed GTP-U rewrites and checksum handling. TCP
+header length and IPv6 transport parsing validate packet bounds even without
+a port filter. Deferring every transport parse until SDF evaluation would
+remove these checks or make other consumers depend on missing context.
+Keep the shared bounds-checked parsers. Reconsider selective lazy parsing
+with profiles showing a material cost, an explicit dependency for every
+consumer, and unchanged malformed/fragmented-packet, GTP-U control, SDF and
+checksum results on the minimum kernel. TCP-only and UDP/GTP-U paths need
+separate evidence; they do not have identical consumers.
+
+### gotestsum in CI
+
+Upstream PR 679 requests pinned gotestsum and GitHub-formatted failure groups.
+Keep plain `go test` in [`check.sh`](../scripts/ci/check.sh): it already preserves
+package/test failure output and exit status, supports the privileged test
+executor and race runs, and avoids another installed reporting dependency.
+Compact presentation alone does not justify extending the simplified CI
+pipeline. Reconsider if actual CI logs repeatedly prevent locating failures
+or if a consumer requires structured reports that `go test -json` cannot
+supply directly; any wrapper must preserve exit status, timeouts and the
+privileged executor.
