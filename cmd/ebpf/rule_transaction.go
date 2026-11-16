@@ -13,6 +13,9 @@ import (
 // holds the control-plane state lock for its lifetime.
 type RuleTransaction interface {
 	ForwardingPlaneController
+	// CheckRuleCapacity admits the net change in committed live rules before
+	// any publication. The returned exhausted family uses DetachRule's kinds.
+	CheckRuleCapacity(change RuleCounts) (uint8, error)
 	Commit() error
 	Rollback() error
 }

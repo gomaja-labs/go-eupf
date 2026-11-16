@@ -333,3 +333,5 @@ func TestSessionReleaseRequiresTransactionAndReclamation(t *testing.T) {
 		t.Fatal("concurrent completion freed capacity more than once")
 	}
 }
+
+func (*sessionFailureTransaction) CheckRuleCapacity(ebpf.RuleCounts) (uint8, error) { return 0, nil }

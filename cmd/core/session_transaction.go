@@ -17,6 +17,10 @@ type sessionMapProxy struct{ ebpf.ForwardingPlaneController }
 // Parsing and validation finish before map publication. Commit then
 // reserves every rule slot before applying the first map write.
 func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessionMutationKind, resourceChanges bool) (func() error, func(bool) error) {
+	previous := sessionRuleCounts(session)
+	if kind == createSessionMutation {
+		previous = ebpf.RuleCounts{}
+	}
 	if session.buffers != nil {
 		waitBufferIO(session.buffers.owner)
 	}
@@ -42,6 +46,18 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 		}
 		if err != nil {
 			return &requestIEError{ie.CauseSystemFailure, 0, err}
+		}
+		planned := sessionRuleCounts(session)
+		if kind == deleteSessionMutation {
+			planned = ebpf.RuleCounts{}
+		}
+		// Use the complete plan, not reservation order: replacements consume
+		// no extra live capacity. Reject before buffer publication, rule writes
+		// or reservation commit. TS 29.244 V20.1.0 clauses 6.3.2.3, 6.3.3.3
+		// and table 8.2.1-1 (Cause 75), with clause 8.2.80 Failed Rule ID.
+		change := ebpf.RuleCounts{FAR: planned.FAR - previous.FAR, QER: planned.QER - previous.QER, URR: planned.URR - previous.URR}
+		if family, err := tx.CheckRuleCapacity(change); err != nil {
+			return &ruleFailure{family, firstCreatedRule(session, family), err}
 		}
 		if session.bufferPlan != nil {
 			if err := session.bufferPlan.begin(conn, tx); err != nil {
@@ -184,6 +200,37 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 		return err
 	}
 	return start, finish
+}
+
+func sessionRuleCounts(session *Session) ebpf.RuleCounts {
+	return ebpf.RuleCounts{FAR: len(session.FARs), QER: len(session.QERs), URR: len(session.URRs)}
+}
+
+// Planned Create rules have no global slot until reservation. Choose the lowest
+// local ID so a live shortage identifies a created rule deterministically.
+func firstCreatedRule(session *Session, family uint8) uint32 {
+	first := ^uint32(0)
+	switch family {
+	case ie.RuleIDTypeFAR:
+		for id, rule := range session.FARs {
+			if rule.GlobalId == 0 {
+				first = min(first, id)
+			}
+		}
+	case ie.RuleIDTypeQER:
+		for id, rule := range session.QERs {
+			if rule.GlobalId == 0 {
+				first = min(first, id)
+			}
+		}
+	case ie.RuleIDTypeURR:
+		for id, rule := range session.URRs {
+			if rule.GlobalId == 0 {
+				first = min(first, id)
+			}
+		}
+	}
+	return first
 }
 
 type sessionMutationKind uint8

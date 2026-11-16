@@ -74,6 +74,31 @@ func appendVersionRemoval(ids []uint32, id uint32) []uint32 {
 	}
 	return ids
 }
+
+// RuleCounts describes a session's rule population or its net planned change.
+// Immutable replacements consume physical headroom without changing this count.
+type RuleCounts struct {
+	FAR, QER, URR int
+}
+
+func (tx *ruleTransaction) CheckRuleCapacity(change RuleCounts) (uint8, error) {
+	b := tx.objects
+	for i, delta := range []int{change.FAR, change.QER, change.URR} {
+		t := []*IdTracker{b.farIdTracker, b.qerIdTracker, b.urrIdTracker}[i]
+		if delta <= 0 || t == nil || t.live == nil {
+			continue
+		}
+		mu := []*sync.Mutex{&b.farMutex, &b.qerMutex, &b.urrMutex}[i]
+		mu.Lock()
+		count := int64(t.liveCount) + int64(delta)
+		mu.Unlock()
+		if count > int64(t.liveLimit) {
+			return uint8(i + 1), ErrRuleCapacity
+		}
+	}
+	return 0, nil
+}
+
 func (tx *ruleTransaction) checkLiveVersionCapacity() error {
 	b := tx.objects
 	for i, t := range []*IdTracker{b.farIdTracker, b.qerIdTracker, b.urrIdTracker} {

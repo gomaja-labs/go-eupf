@@ -261,3 +261,5 @@ func (m *MapOperationsMock) DetachRule(uint8, uint32) error { return nil }
 func (m *MapOperationsMock) SynchronizeRules() error { return nil }
 
 func (mapOps *MapOperationsMock) RetireQer(id uint32) error { return mapOps.DeleteQer(id) }
+
+func (*mapTransactionMock) CheckRuleCapacity(ebpf.RuleCounts) (uint8, error) { return 0, nil }

@@ -227,3 +227,5 @@ func TestFinalUsageMayCompleteDuringResponseConstruction(t *testing.T) {
 		})
 	}
 }
+
+func (*delayedUsageTransaction) CheckRuleCapacity(ebpf.RuleCounts) (uint8, error) { return 0, nil }

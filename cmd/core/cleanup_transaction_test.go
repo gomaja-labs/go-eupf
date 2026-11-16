@@ -57,3 +57,5 @@ func TestDeletionReportsSystemFailureWithoutLosingSession(t *testing.T) {
 		t.Fatal("failed deletion replaced live session")
 	}
 }
+
+func (*cleanupFailureTx) CheckRuleCapacity(ebpf.RuleCounts) (uint8, error) { return 0, nil }
