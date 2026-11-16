@@ -90,12 +90,24 @@ func validatePDI(value *ie.IE, required bool) *requestIEError {
 		}
 		return nil
 	}
-	fields, err := value.PDI()
+	children, err := value.ValueAsGrouped()
 	if err != nil {
 		return invalidRequestIE(ie.PDI, err)
 	}
 	// TS 29.244 V20.1.0 Tables 7.5.2.2-1 and 7.5.2.2-2.
-	return requireIEs(requiredIE{ie.SourceInterface, fields.SourceInterface})
+	return requireIEs(requiredIE{ie.SourceInterface, firstChild(children, ie.SourceInterface)})
+}
+
+// firstChild follows the codec's first-occurrence rule (clause 7.6.10).
+// Mandatory-presence checks need only these children, rather than allocating
+// complete typed views that the rule planner will construct afterwards.
+func firstChild(children []*ie.IE, typ ie.IEType) *ie.IE {
+	for _, child := range children {
+		if child != nil && child.Type == typ {
+			return child
+		}
+	}
+	return nil
 }
 
 // validateRule checks mandatory children of the rule families consumed by this UPF.
@@ -103,14 +115,14 @@ func validatePDI(value *ie.IE, required bool) *requestIEError {
 func validateRule(value *ie.IE) *requestIEError {
 	switch value.Type {
 	case ie.CreatePDR:
-		f, err := value.CreatePDR()
+		children, err := value.ValueAsGrouped()
 		if err != nil {
 			return invalidRequestIE(value.Type, err)
 		}
-		if failure := requireIEs(requiredIE{ie.PDRID, f.PDRID}, requiredIE{ie.Precedence, f.Precedence}); failure != nil {
+		if failure := requireIEs(requiredIE{ie.PDRID, firstChild(children, ie.PDRID)}, requiredIE{ie.Precedence, firstChild(children, ie.Precedence)}); failure != nil {
 			return failure
 		}
-		return validatePDI(f.PDI, true)
+		return validatePDI(firstChild(children, ie.PDI), true)
 	case ie.UpdatePDR:
 		f, err := value.UpdatePDR()
 		if err != nil {
@@ -127,30 +139,32 @@ func validateRule(value *ie.IE) *requestIEError {
 		}
 		return requireIEs(requiredIE{ie.PDRID, f.PDRID})
 	case ie.CreateFAR:
-		f, err := value.CreateFAR()
+		children, err := value.ValueAsGrouped()
 		if err != nil {
 			return invalidRequestIE(value.Type, err)
 		}
-		if failure := requireIEs(requiredIE{ie.FARID, f.FARID}, requiredIE{ie.ApplyAction, f.ApplyAction}); failure != nil {
+		action := firstChild(children, ie.ApplyAction)
+		if failure := requireIEs(requiredIE{ie.FARID, firstChild(children, ie.FARID)}, requiredIE{ie.ApplyAction, action}); failure != nil {
 			return failure
 		}
+		forwarding := firstChild(children, ie.ForwardingParameters)
 		// TS 29.244 V20.1.0 Table 7.5.2.3-1: FORW makes Forwarding Parameters conditional-mandatory.
-		if f.ApplyAction.HasFORW() && f.ForwardingParameters == nil {
+		if action.HasFORW() && forwarding == nil {
 			return &requestIEError{ie.CauseConditionalIEMissing, ie.ForwardingParameters, ie.ErrIENotFound}
 		}
-		if f.ForwardingParameters != nil {
-			forward, err := f.ForwardingParameters.ForwardingParameters()
+		if forwarding != nil {
+			forward, err := forwarding.ValueAsGrouped()
 			if err != nil {
 				return invalidRequestIE(ie.ForwardingParameters, err)
 			}
-			return requireIEs(requiredIE{ie.DestinationInterface, forward.DestinationInterface})
+			return requireIEs(requiredIE{ie.DestinationInterface, firstChild(forward, ie.DestinationInterface)})
 		}
 	case ie.UpdateFAR:
-		f, err := value.UpdateFAR()
+		children, err := value.ValueAsGrouped()
 		if err != nil {
 			return invalidRequestIE(value.Type, err)
 		}
-		return requireIEs(requiredIE{ie.FARID, f.FARID})
+		return requireIEs(requiredIE{ie.FARID, firstChild(children, ie.FARID)})
 	case ie.RemoveFAR:
 		f, err := value.RemoveFAR()
 		if err != nil {
