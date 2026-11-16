@@ -74,8 +74,7 @@ func TestRuleVersionPoolsReserveBeyondConfiguredLiveCapacity(t *testing.T) {
 				case "QER":
 					return tx.DeleteQer(id)
 				default:
-					_, err := tx.DeleteUrr(id)
-					return err
+					return tx.(*ruleTransaction).DeferUsage(id, func(UrrInfo) {})
 				}
 			}
 			ids := make([]uint32, 4)

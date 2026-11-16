@@ -234,6 +234,9 @@ func (tx *ruleTransaction) DeferUsage(id uint32, report func(UrrInfo)) error {
 	if id == 0 {
 		return fmt.Errorf("reserved URR slot")
 	}
+	// Retirement changes committed live capacity immediately; the counter slot
+	// remains reserved until its final usage has been read after rule grace.
+	tx.removedVersions[2] = appendVersionRemoval(tx.removedVersions[2], id)
 	tx.usagePending = true
 	tx.retired = append(tx.retired, func() error {
 		counters, err := tx.objects.GetUrr(id)
