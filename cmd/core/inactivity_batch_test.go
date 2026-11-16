@@ -7,10 +7,10 @@ import (
 
 type sampledActivityPlane struct{ reads map[uint32]int }
 
-func (p *sampledActivityPlane) NewSessionActivity() (uint32, uint64, error) { return 0, 0, nil }
-func (p *sampledActivityPlane) SessionActivityCount(slot uint32) (uint64, error) {
+func (p *sampledActivityPlane) NewSessionActivity() (uint32, error) { return 0, nil }
+func (p *sampledActivityPlane) ConsumeSessionActivity(slot uint32) (bool, error) {
 	p.reads[slot]++
-	return 0, nil
+	return false, nil
 }
 func (p *sampledActivityPlane) ReleaseSessionActivity(uint32) {}
 

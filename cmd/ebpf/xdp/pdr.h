@@ -188,7 +188,7 @@ struct
     __uint(max_entries, FAR_MAP_SIZE);
 } far_map SEC(".maps");
 
-// TS 29.244 V20.1.0 clause 5.11.2: count received matching user packets,
+// TS 29.244 V20.1.0 clause 5.11.2: observe received matching user packets,
 // including packets subsequently discarded by their FAR or QoS rules.
 // Slot zero disables monitoring. Packet writes never touch journal images.
 struct {
@@ -200,6 +200,9 @@ struct {
 } session_activity SEC(".maps");
 static __always_inline void note_session_activity(__u32 slot) {
     if (!slot) return;
-    __u64 *count = bpf_map_lookup_elem(&session_activity, &slot);
-    if (count) __sync_fetch_and_add(count, 1);
+    // Packet writers only set the bit. User space clears an observed set bit
+    // before timestamping it. A delayed store therefore only delays expiry;
+    // it cannot overwrite newer activity with an older generation number.
+    volatile __u64 *active = bpf_map_lookup_elem(&session_activity, &slot);
+    if (active && !*active) *active = 1;
 }

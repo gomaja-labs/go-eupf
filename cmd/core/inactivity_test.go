@@ -44,18 +44,21 @@ func (p *activityPlane) BeginRuleTransaction(id uint64) (ebpf.RuleTransaction, e
 	before := *p.MapOperationsMock
 	return &mapTransactionMock{ForwardingPlaneController: p, rollback: func() { *p.MapOperationsMock = before }}, nil
 }
-func (p *activityPlane) NewSessionActivity() (uint32, uint64, error) {
+func (p *activityPlane) NewSessionActivity() (uint32, error) {
 	if p.active {
-		return 0, 0, ebpf.ErrRuleCapacity
+		return 0, ebpf.ErrRuleCapacity
 	}
 	p.active = true
-	return 1, p.count, nil
+	p.count = 0
+	return 1, nil
 }
-func (p *activityPlane) SessionActivityCount(uint32) (uint64, error) {
+func (p *activityPlane) ConsumeSessionActivity(uint32) (bool, error) {
 	if p.failRead {
-		return 0, errors.New("synthetic counter failure")
+		return false, errors.New("synthetic counter failure")
 	}
-	return p.count, nil
+	active := p.count != 0
+	p.count = 0
+	return active, nil
 }
 func (p *activityPlane) ReleaseSessionActivity(slot uint32) {
 	p.active = false
@@ -225,11 +228,11 @@ type delayedActivityPlane struct {
 	activity *activityPlane
 }
 
-func (p *delayedActivityPlane) NewSessionActivity() (uint32, uint64, error) {
+func (p *delayedActivityPlane) NewSessionActivity() (uint32, error) {
 	return p.activity.NewSessionActivity()
 }
-func (p *delayedActivityPlane) SessionActivityCount(slot uint32) (uint64, error) {
-	return p.activity.SessionActivityCount(slot)
+func (p *delayedActivityPlane) ConsumeSessionActivity(slot uint32) (bool, error) {
+	return p.activity.ConsumeSessionActivity(slot)
 }
 func (p *delayedActivityPlane) ReleaseSessionActivity(slot uint32) {
 	p.activity.ReleaseSessionActivity(slot)

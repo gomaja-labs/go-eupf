@@ -12,11 +12,10 @@ import (
 
 func TestSessionActivityCountsAllReceivedPathsOutsidePublishedRules(t *testing.T) {
 	b := loadDatapath(t)
-	slot, initial, err := b.NewSessionActivity()
+	slot, err := b.NewSessionActivity()
 	if err != nil || slot == 0 {
 		t.Fatal(slot, err)
 	}
-	want := initial
 	for _, filtered := range []bool{false, true} {
 		pdr := PdrInfo{PdrID: 1, Precedence: ^uint32(0), FarId: 2, ActivitySlot: slot, OuterHeaderRemovalPresent: true}
 		if filtered {
@@ -51,9 +50,11 @@ func TestSessionActivityCountsAllReceivedPathsOutsidePublishedRules(t *testing.T
 				if action, _, err := b.UpfIpEntrypointFunc.Test(packet); err != nil || action != 1 {
 					t.Fatalf("DROP input action %d: %v", action, err)
 				}
-				want++
-				if count, err := b.SessionActivityCount(slot); err != nil || count != want {
-					t.Fatalf("activity filtered=%v uplink=%v v6=%v count=%d want=%d: %v", filtered, uplink, v6, count, want, err)
+				if active, err := b.ConsumeSessionActivity(slot); err != nil || !active {
+					t.Fatalf("missing activity filtered=%v uplink=%v v6=%v: %v", filtered, uplink, v6, err)
+				}
+				if active, err := b.ConsumeSessionActivity(slot); err != nil || active {
+					t.Fatalf("activity repeated without another packet: %v", err)
 				}
 			}
 		}
@@ -65,14 +66,14 @@ func TestSessionActivityCountsAllReceivedPathsOutsidePublishedRules(t *testing.T
 			t.Fatal("packet activity mutated a published rule image")
 		}
 	}
-	// Zero disables monitoring, and reusing a reclaimed counter preserves its
-	// generation baseline rather than resetting memory shared with a packet CPU.
+	// Zero disables monitoring. Reuse starts clear after the previous rule
+	// lifetime's grace period; callers must not release a live reference.
 	b.ReleaseSessionActivity(slot)
-	reused, count, err := b.NewSessionActivity()
-	if err != nil || reused != slot || count != want {
-		t.Fatal("counter reuse lost baseline", reused, count, err)
+	reused, err := b.NewSessionActivity()
+	if err != nil || reused != slot {
+		t.Fatal("activity slot reuse", reused, err)
 	}
-	if _, err := b.SessionActivityCount(0); err == nil {
+	if _, err := b.ConsumeSessionActivity(0); err == nil {
 		t.Fatal("reserved slot zero was readable")
 	}
 }

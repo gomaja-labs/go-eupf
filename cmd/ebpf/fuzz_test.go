@@ -53,7 +53,7 @@ func FuzzDatapathPacket(f *testing.F) {
 	if err := b.QerMap.Put(uint32(1), &qer); err != nil {
 		f.Fatal(err)
 	}
-	activity, _, err := b.NewSessionActivity()
+	activity, err := b.NewSessionActivity()
 	if err != nil {
 		f.Fatal(err)
 	}

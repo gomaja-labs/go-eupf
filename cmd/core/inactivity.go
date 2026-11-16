@@ -20,11 +20,10 @@ const activityPollInterval = 100 * time.Millisecond
 const activityPollBatchSize = 64
 
 // stateMu owns sampling state. The controller separately serializes map closure
-// and counter-slot allocation; packet writers change only the counter map.
+// and slot allocation; packet writers change only the activity map.
 type sessionActivity struct {
 	controller     ebpf.SessionActivityController
 	slot           uint32
-	observed       uint64
 	last           time.Time
 	previous, next *sessionActivity
 	association    *NodeAssociation
@@ -64,11 +63,11 @@ func (conn *PfcpConnection) stageSessionActivity(session *Session, timer *ie.IE,
 	if !ok {
 		return &requestIEError{ie.CauseSystemFailure, ie.UserPlaneInactivityTimer, errors.New("session activity controller is unavailable")}
 	}
-	slot, count, err := controller.NewSessionActivity()
+	slot, err := controller.NewSessionActivity()
 	if err != nil {
 		return &requestIEError{ie.CauseNoResourcesAvailable, ie.UserPlaneInactivityTimer, err}
 	}
-	session.activity = &sessionActivity{controller: controller, slot: slot, observed: count, last: time.Now()}
+	session.activity = &sessionActivity{controller: controller, slot: slot, last: time.Now()}
 	session.activityReserved = true
 	return nil
 }
@@ -189,15 +188,21 @@ func (conn *PfcpConnection) serviceInactivity(now time.Time) bool {
 			continue
 		}
 		activity := session.activity
-		count, err := activity.controller.SessionActivityCount(activity.slot)
+		active, err := activity.controller.ConsumeSessionActivity(activity.slot)
 		if err != nil {
 			// A failed observation must not look like inactivity and silently discard
 			// a live session. Propagate the dataplane failure to the supervisor.
 			conn.failInactivityLocked(fmt.Errorf("session %d activity: %w", seid, err))
 			continue
 		}
-		if count != activity.observed {
-			activity.observed, activity.last = count, now
+		if active {
+			// Timestamp after clearing: a packet racing with the clear must
+			// never be assigned a time earlier than its store. Keep synthetic
+			// clock advances used by callers, while rounding real observations up.
+			activity.last = time.Now()
+			if activity.last.Before(now) {
+				activity.last = now
+			}
 		}
 		elapsed := now.Sub(activity.last)
 		if conn.inactivityReleaseTimeout > 0 && elapsed >= conn.inactivityReleaseTimeout {
