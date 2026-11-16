@@ -2,6 +2,7 @@ package ebpf
 
 import (
 	"fmt"
+	"syscall"
 	"unsafe"
 
 	cilium "github.com/cilium/ebpf"
@@ -57,7 +58,7 @@ type sharedRuleValue interface {
 
 func storeSharedRule[T sharedRuleValue](memory *sharedRuleMemory, slot uint32, value *T) error {
 	if memory == nil || memory.data == nil || memory.object.FD() < 0 {
-		return fmt.Errorf("rule mapping is closed")
+		return fmt.Errorf("rule mapping is closed: %w", syscall.EBADF)
 	}
 	size := uint64(unsafe.Sizeof(*value))
 	if slot == 0 || slot >= memory.entries || size != memory.valueSize {
