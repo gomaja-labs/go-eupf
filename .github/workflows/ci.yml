@@ -15,16 +15,24 @@ concurrency:
 
 jobs:
   test:
-    name: test / Go ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    name: test / Go ${{ matrix.name }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: minimum
+            arch: amd64
+            runner: ubuntu-latest
             go-version-file: go.mod
           - name: stable
+            arch: amd64
+            runner: ubuntu-latest
+            go-version: stable
+          - name: stable
+            arch: arm64
+            runner: ubuntu-24.04-arm
             go-version: stable
     steps:
       - uses: actions/checkout@v7.0.1

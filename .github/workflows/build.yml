@@ -16,8 +16,16 @@ concurrency:
 
 jobs:
   images:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -53,7 +61,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         if: github.event_name == 'push'
         with:
-          name: images
+          name: images-${{ matrix.arch }}
           path: images.tar.gz
           retention-days: 1
 
@@ -67,9 +75,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8.0.2
         with:
-          name: images
-      - name: Load scanned images
-        run: gunzip -c images.tar.gz | docker load
+          pattern: images-*
       - name: Publish on main and tags
         if: github.event_name == 'push'
         env:
@@ -80,10 +86,19 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
           repository="${REPOSITORY,,}"
+          # Publish the saved, scanned images; never rebuild after testing.
+          for arch in amd64 arm64; do
+            gunzip -c "images-$arch/images.tar.gz" | docker load
+            for suffix in '' '-cli'; do
+              docker tag "eupf$suffix:scan" "ghcr.io/$repository$suffix:$GITHUB_SHA-$arch"
+              docker push "ghcr.io/$repository$suffix:$GITHUB_SHA-$arch"
+            done
+          done
           for suffix in '' '-cli'; do
-            docker tag "eupf$suffix:scan" "ghcr.io/$repository$suffix:$REF_NAME"
-            docker tag "eupf$suffix:scan" "ghcr.io/$repository$suffix:$GITHUB_SHA"
-            docker push "ghcr.io/$repository$suffix:$REF_NAME"
-            docker push "ghcr.io/$repository$suffix:$GITHUB_SHA"
+            docker buildx imagetools create \
+              --tag "ghcr.io/$repository$suffix:$REF_NAME" \
+              --tag "ghcr.io/$repository$suffix:$GITHUB_SHA" \
+              "ghcr.io/$repository$suffix:$GITHUB_SHA-amd64" \
+              "ghcr.io/$repository$suffix:$GITHUB_SHA-arm64"
           done
           docker logout ghcr.io

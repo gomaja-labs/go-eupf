@@ -252,7 +252,7 @@ pushes to `main` and tags. CI never creates another branch.
 
 ### Hardware requirements
 
-- CPU: any popular CPU is supported, incl. x86, x86_64, armhf, armv7, aarch64, ppc64le, s390x
+- CPU: linux/amd64 (x86_64) or linux/arm64 (aarch64); both have native CI build and test jobs
 - CPU_cores: 1 core is enough to run eUPF
 - RAM: size the container with the [startup memory plan](docs/pfcp-transport.md). The Helm defaults use 1,024 sessions, 96 MiB replay and a 512 MiB container; the accounting floor is 484.96875 MiB before any larger measured map baseline. Standalone defaults admit 65,535 sessions and need substantially more memory. Raise session/map capacity and memory together; startup rejects a visible hard limit below its calculated requirement.
 - HDD: 50MB of free space is required to install eUPF. Different types of storage can be used: HDD, SSD, SD-card, USB-stick

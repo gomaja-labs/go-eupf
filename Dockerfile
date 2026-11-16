@@ -5,13 +5,19 @@ FROM golang:${GO_VERSION}-bookworm AS toolchain
 ARG BUILD_UID=10001
 ARG BUILD_GID=10001
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y clang-14 llvm-14 gcc-multilib libbpf-dev \
+    && apt-get install --no-install-recommends -y clang-14 llvm-14 gcc libbpf-dev \
+    # BPF compilation of sys/socket.h selects glibc's 32-bit stubs on x86.
+    && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install --no-install-recommends -y gcc-multilib; fi \
     && rm -rf /var/lib/apt/lists/* \
+    # With -target bpf clang omits Debian's native multiarch include directory.
+    # Point every bpf2go invocation at it, including generators without cflags.
+    && printf '#!/bin/sh\nexec clang-14 -I"/usr/include/$(gcc -dumpmachine)" "$@"\n' > /usr/local/bin/bpf-clang \
+    && chmod 755 /usr/local/bin/bpf-clang \
     && groupadd -g "${BUILD_GID}" build \
     && useradd -m -u "${BUILD_UID}" -g build build \
     && mkdir /app \
     && chown build:build /app /go
-ENV BPF2GO_CC=clang-14 BPF2GO_STRIP=llvm-strip-14
+ENV BPF2GO_CC=bpf-clang BPF2GO_STRIP=llvm-strip-14
 USER build
 WORKDIR /app
 
