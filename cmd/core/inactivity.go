@@ -277,8 +277,15 @@ func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, prior
 	// overtaking a still-unapplied positive observation.
 	for i := range batch[:n] {
 		item := &batch[i]
-		item.active, item.err = item.activity.controller.ConsumeSessionActivity(item.activity.slot)
+		// TS 29.244 V20.1.0 clause 5.11.2: an empty observation may expire
+		// only as of the read's beginning:
+		// a packet can arrive after the empty value was copied. A positive
+		// observation covers every packet up to its completed clear instead.
 		item.observed = time.Now()
+		item.active, item.err = item.activity.controller.ConsumeSessionActivity(item.activity.slot)
+		if item.active {
+			item.observed = time.Now()
+		}
 		if item.observed.Before(now) {
 			item.observed = now
 		}

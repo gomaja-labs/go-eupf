@@ -15,32 +15,41 @@ type delayedActivityController struct {
 	ebpf.SessionActivityController
 	entered, resume chan struct{}
 	reads           atomic.Int32
+	afterConsume    bool
 }
 
 func (p *delayedActivityController) ConsumeSessionActivity(slot uint32) (bool, error) {
+	var active bool
+	var err error
+	if p.afterConsume {
+		active, err = p.SessionActivityController.ConsumeSessionActivity(slot)
+	}
 	if p.reads.Add(1) == 1 {
 		close(p.entered)
 		<-p.resume
+	}
+	if p.afterConsume {
+		return active, err
 	}
 	return p.SessionActivityController.ConsumeSessionActivity(slot)
 }
 
 func TestInactivityPendingObservationCannotBeOvertaken(t *testing.T) {
-	conn := &PfcpConnection{done: make(chan struct{})}
-	assoc := NewNodeAssociation("sample.example", "127.0.0.1")
-	plane := &activityPlane{MapOperationsMock: &MapOperationsMock{}, count: 1}
-	controller := &delayedActivityController{SessionActivityController: plane, entered: make(chan struct{}), resume: make(chan struct{})}
+	conn, _, session, plane, _ := inactivityFixture(t, time.Second, 0)
+	plane.count = 1
+	controller := &delayedActivityController{SessionActivityController: plane, entered: make(chan struct{}), resume: make(chan struct{}), afterConsume: true}
 	unblock := sync.OnceFunc(func() { close(controller.resume) })
-	session := NewSession(1, 2, "", "", false)
-	session.activity = &sessionActivity{controller: controller, slot: 1, last: time.Now().Add(-time.Hour)}
-	assoc.Sessions[session.LocalSEID] = session
-	conn.watchSessionActivity(assoc, session, 1)
+	session.activity.controller, session.activity.last = controller, time.Now().Add(-time.Hour)
+	conn.nextActivityPoll = time.Time{}
 	finished := make(chan struct{})
 	go func() { conn.serviceInactivity(time.Now()); close(finished) }()
 	t.Cleanup(func() { unblock(); <-finished })
 	<-controller.entered
+	conn.stateMu.Lock()
+	conn.nextActivityPoll = time.Time{}
+	conn.stateMu.Unlock()
 	conn.serviceInactivity(time.Now())
-	if controller.reads.Load() != 1 {
+	if controller.reads.Load() != 1 || !session.inactivityArmed {
 		t.Fatal("a second observation overtook pending packet activity")
 	}
 	unblock()
