@@ -165,11 +165,18 @@ func BenchmarkPFCPRequests(b *testing.B) {
 				finishProfiles := requestBenchmarkProfiles(b, operation+"-"+policy)
 				b.ReportAllocs()
 				b.ResetTimer()
-				for _, wire := range requests {
+				// Small batches amortize testing's timer bookkeeping in CPU
+				// profiles while keeping every client read outside ReportAllocs.
+				for first := 0; first < len(requests); first += 16 {
+					end := min(first+16, len(requests))
 					b.StartTimer()
-					conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
+					for _, wire := range requests[first:end] {
+						conn.Handle(wire, cp.LocalAddr().(*net.UDPAddr))
+					}
 					b.StopTimer()
-					read()
+					for range end - first {
+						read()
+					}
 				}
 				finishProfiles()
 				runtime.KeepAlive(conn)
