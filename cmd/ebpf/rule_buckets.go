@@ -41,7 +41,7 @@ func (b *BpfObjects) releaseBucket(id uint32) {
 }
 func (tx *ruleTransaction) allocateBucket() (uint32, error) {
 	b := tx.objects
-	id, err := b.nextRuleID(b.bucketIDs, &b.bucketMutex, &tx.capacityDeadline)
+	id, err := b.nextRuleID(b.bucketIDs, &b.bucketMutex, &tx.capacityDeadline, false)
 	if err == nil {
 		tx.allocatedBuckets = append(tx.allocatedBuckets, id)
 	}

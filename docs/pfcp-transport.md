@@ -346,3 +346,16 @@ A background sweep targets a 100 ms interval, subject to scheduler and processin
 A detached release context retains its CP entity address reference until its terminal outcome. A CP entity restart invalidates delivery even while final counter grace is pending; Setup replacement and association release do the same. Reclamation still collects the final counters, then records unsent octets without sending them to the retired context. Crossing session requests from an additional admitted CP address resolve the detached SEID and receive Cause 65 with zero response SEID. Late or repeated responses to canceled reports do not restore their context or count usage again.
 
 At standalone defaults (65,535 sessions, 128 MiB replay and 4,096 packet slots), the current runtime measured a 1,040,744,448-byte loaded charge and a 1,543,480,320-byte growing-map reserve. Including the current session, queue, buffer and URR-window terms requires 7,855,603,904 bytes (7.32 GiB). An 8 GiB container became ready with a 5,627,178,816-byte Go soft limit; 512 MiB was refused before loading maps. This startup check does not exercise 65,535 live forwarding sessions.
+
+The configured FAR, QER and URR sizes bound committed live rules; slot zero and
+replacement headroom are additional physical slots. For live capacity L and
+M = 64 rules per type per session, H = min(L, 2M): one serialized journal can
+stage at most M replacement versions while another batch is retiring. FAR and
+URR arrays contain L + H + 1 slots. QER contains 2L + H + 1, because each live
+QER can retain its stable initial policer anchor alongside its current
+configuration. Committed live-ID accounting prevents new rules from consuming
+this reserve. Later retired batches wait for reclamation within the existing
+one-second transaction capacity budget; exhaustion returns Cause 75 (TS 29.244
+V20.1.0 table 8.2.1-1). Buffer bindings use the physical FAR capacity; buffer
+states use twice that capacity for overlapping lifetimes. At the chart sizes,
+FAR/QER/URR each use 2,177 physical slots; standalone defaults each use 131,199.

@@ -20,13 +20,8 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 		b.SetFarMapSize(2048)
 		b.SetBufferCapacity(1024, 4096)
 	})
-	for range 3 {
-		if _, err := b.GetNextFAR(); err != nil {
-			t.Fatal(err)
-		}
-	}
 	const sessions = 1024
-	current := make([]uint32, sessions)
+	current := make([]uint32, 2*sessions)
 	packets := make([][]byte, 4*sessions)
 	addresses := make([]net.IP, 2*sessions)
 	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
@@ -37,12 +32,12 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 		addresses[2*i] = address
 		addresses[2*i+1] = net.IP{10, 61, byte(i >> 8), byte(i)}
 		far := FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: uint32(100000 + i), RemoteIP: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), TransportLevelMarking: 0x10fc}
-		id, err := b.NewFar(far)
-		if err != nil {
-			t.Fatal(err)
-		}
-		current[i] = id
 		for lane := 0; lane < 2; lane++ {
+			id, err := b.NewFar(far)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current[2*i+lane] = id
 			if err := b.PutPdrDownlink(addresses[2*i+lane], PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 1), FarId: id}); err != nil {
 				t.Fatal(err)
 			}
@@ -93,18 +88,19 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 	go func() {
 		defer complete.Store(true)
 		defer pinPublicationCPU(t, 2)()
-		for i, old := range current {
+		for index, old := range current {
+			i, lane := index/2, index%2
 			tx, err := b.BeginRuleTransaction(uint64(i + 1))
 			if err != nil {
 				result <- err
 				return
 			}
 			next, err := tx.NewFar(FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: uint32(200000 + i), RemoteIP: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), TransportLevelMarking: 0x20fc})
-			for lane := 0; lane < 2 && err == nil; lane++ {
+			if err == nil {
 				err = tx.PutPdrDownlink(addresses[2*i+lane], PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 1), FarId: next})
-				if err == nil {
-					err = tx.PutPdrUplink(uint32(4096+2*i+lane), PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 3), FarId: next, OuterHeaderRemovalPresent: true})
-				}
+			}
+			if err == nil {
+				err = tx.PutPdrUplink(uint32(4096+2*i+lane), PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 3), FarId: next, OuterHeaderRemovalPresent: true})
 			}
 			if err == nil {
 				err = tx.DeleteFar(old)
@@ -142,7 +138,7 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("replaced=%d full-hash-keys=4096 observations=%d mixed-FAR=%d", sessions, observations, mixed)
+	t.Logf("sessions=%d replaced-FARs=2048 full-hash-keys=4096 observations=%d mixed-FAR=%d", sessions, observations, mixed)
 	if mixed != 0 {
 		t.Fatal("FAR burst exposed a mixed configuration")
 	}

@@ -29,6 +29,7 @@ type ruleTransaction struct {
 	graced                                   bool
 	undo                                     []func() error
 	allocatedFAR, allocatedQER, allocatedURR []uint32
+	removedVersions                          [3][]uint32
 	// true: reserved but not initialized; false: immutable initialized version.
 	newFAR, newQER, newURR map[uint32]bool
 	finished               bool
@@ -92,9 +93,13 @@ func (tx *ruleTransaction) Commit() error {
 	if tx.finished {
 		return fmt.Errorf("rule transaction already finished")
 	}
+	if err := tx.checkLiveVersionCapacity(); err != nil {
+		return err
+	}
 	if err := tx.publishPDRs(); err != nil {
 		return err
 	}
+	tx.commitLiveVersions()
 	work := append([]func() error(nil), tx.retired...)
 	if tx.resourceReclaim != nil {
 		work = append(work, tx.resourceReclaim)
@@ -392,6 +397,7 @@ func (tx *ruleTransaction) DeleteFar(id uint32) error {
 	if err := tx.detach(1, id); err != nil {
 		return err
 	}
+	tx.removedVersions[0] = appendVersionRemoval(tx.removedVersions[0], id)
 	// The detached slot remains reserved until every old reader has returned.
 	// Clearing an unreachable value is reclamation, not a rule-plan write.
 	tx.retired = append(tx.retired, func() error {
@@ -417,6 +423,7 @@ func (tx *ruleTransaction) DeleteQer(id uint32) error {
 	if err := tx.objects.QerMap.Lookup(id, &value); err != nil {
 		return err
 	}
+	tx.removedVersions[1] = appendVersionRemoval(tx.removedVersions[1], id)
 	// Capture the anchor before clearing: a failed second write is retried with
 	// this same identity, rather than rereading an already zeroed version.
 	tx.retired = append(tx.retired, func() error { return tx.objects.deleteQerSlots(id, value.PolicerId) })
@@ -436,6 +443,7 @@ func (tx *ruleTransaction) DeleteUrr(id uint32) (UrrInfo, error) {
 	}
 	err = journalRule[IpEntrypointUrrInfo](tx, tx.objects.UrrMap, id, func() error { return tx.objects.UrrMap.Put(id, &IpEntrypointUrrInfo{}) })
 	if err == nil {
+		tx.removedVersions[2] = appendVersionRemoval(tx.removedVersions[2], id)
 		tx.releases = append(tx.releases, func() { tx.objects.ReleaseURR(id) })
 	}
 	return result, err
@@ -502,7 +510,7 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 }
 
 func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
-	id, err := tx.objects.nextRuleID(tx.objects.farIdTracker, &tx.objects.farMutex, &tx.capacityDeadline)
+	id, err := tx.objects.nextRuleID(tx.objects.farIdTracker, &tx.objects.farMutex, &tx.capacityDeadline, false)
 	if err == nil {
 		if tx.newFAR == nil {
 			tx.newFAR = make(map[uint32]bool)
@@ -513,7 +521,7 @@ func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
 	return id, err
 }
 func (tx *ruleTransaction) GetNextQER() (uint32, error) {
-	id, err := tx.objects.nextRuleID(tx.objects.qerIdTracker, &tx.objects.qerMutex, &tx.capacityDeadline)
+	id, err := tx.objects.nextRuleID(tx.objects.qerIdTracker, &tx.objects.qerMutex, &tx.capacityDeadline, false)
 	if err == nil {
 		if tx.newQER == nil {
 			tx.newQER = make(map[uint32]bool)
@@ -524,7 +532,7 @@ func (tx *ruleTransaction) GetNextQER() (uint32, error) {
 	return id, err
 }
 func (tx *ruleTransaction) GetNextURR() (uint32, error) {
-	id, err := tx.objects.nextRuleID(tx.objects.urrIdTracker, &tx.objects.urrMutex, &tx.capacityDeadline)
+	id, err := tx.objects.nextRuleID(tx.objects.urrIdTracker, &tx.objects.urrMutex, &tx.capacityDeadline, false)
 	if err == nil {
 		if tx.newURR == nil {
 			tx.newURR = make(map[uint32]bool)

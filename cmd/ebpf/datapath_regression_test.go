@@ -465,7 +465,7 @@ func TestDatapathResizeReplacesProgramMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.MaxEntries != 2048 {
+	if info.MaxEntries != 2177 {
 		t.Fatalf("capacity=%d", info.MaxEntries)
 	}
 	putDatapath(t, b.FarMap.Put, uint32(1500), &IpEntrypointFarInfo{Action: 1})

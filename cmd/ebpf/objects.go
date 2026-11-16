@@ -140,18 +140,31 @@ func (bpfObjects *BpfObjects) Load() error {
 		return err
 	}
 
+	farCapacity, err := RuleVersionCapacity(bpfObjects.farMapSize)
+	if err != nil {
+		return err
+	}
+	qerCapacity, err := QERVersionCapacity(bpfObjects.qerMapSize)
+	if err != nil {
+		return err
+	}
+	urrCapacity, err := RuleVersionCapacity(bpfObjects.urrMapSize)
+	if err != nil {
+		return err
+	}
+
 	desiredMapSizes := map[string]uint32{
-		"qer_map":              bpfObjects.qerMapSize,
-		"far_map":              bpfObjects.farMapSize,
+		"qer_map":              qerCapacity,
+		"far_map":              farCapacity,
 		"pdr_map_downlink_ip4": bpfObjects.pdrMapSize,
 		"pdr_map_downlink_ip6": bpfObjects.pdrMapSize,
 		"pdr_map_teid_ip4":     bpfObjects.pdrMapSize,
 		"pdr_buckets":          bucketCapacity,
-		"urr_map":              bpfObjects.urrMapSize,
+		"urr_map":              urrCapacity,
 		"buffer_anchors":       bpfObjects.bufferSessions,
 		"session_activity":     bpfObjects.bufferSessions + 1,
-		"buffer_bindings":      bpfObjects.farMapSize,
-		"buffer_states":        2 * bpfObjects.farMapSize,
+		"buffer_bindings":      farCapacity,
+		"buffer_states":        2 * farCapacity,
 		"buffer_notice_ready":  bpfObjects.bufferSessions,
 	}
 
@@ -191,19 +204,19 @@ func (bpfObjects *BpfObjects) Load() error {
 	}()
 
 	if info, err := bpfObjects.FarMap.Info(); err == nil {
-		bpfObjects.farIdTracker = NewIdTracker(info.MaxEntries)
+		bpfObjects.farIdTracker = newVersionIDTracker(bpfObjects.farMapSize, info.MaxEntries)
 	} else {
 		return err
 	}
 
 	if info, err := bpfObjects.QerMap.Info(); err == nil {
-		bpfObjects.qerIdTracker = NewIdTracker(info.MaxEntries)
+		bpfObjects.qerIdTracker = newVersionIDTracker(bpfObjects.qerMapSize, info.MaxEntries)
 	} else {
 		return err
 	}
 
 	if info, err := bpfObjects.UrrMap.Info(); err == nil {
-		bpfObjects.urrIdTracker = NewIdTracker(info.MaxEntries)
+		bpfObjects.urrIdTracker = newVersionIDTracker(bpfObjects.urrMapSize, info.MaxEntries)
 	} else {
 		return err
 	}
@@ -330,25 +343,34 @@ func (bpfObjects *BpfObjects) ResizeAllMaps(qerMapSize, farMapSize, pdrMapSize, 
 }
 
 func (bpfObjects *BpfObjects) GetNextQER() (uint32, error) {
-	return bpfObjects.nextRuleID(bpfObjects.qerIdTracker, &bpfObjects.qerMutex, nil)
+	return bpfObjects.nextRuleID(bpfObjects.qerIdTracker, &bpfObjects.qerMutex, nil, true)
 }
 
 func (bpfObjects *BpfObjects) GetNextFAR() (uint32, error) {
-	return bpfObjects.nextRuleID(bpfObjects.farIdTracker, &bpfObjects.farMutex, nil)
+	return bpfObjects.nextRuleID(bpfObjects.farIdTracker, &bpfObjects.farMutex, nil, true)
 }
 
 func (bpfObjects *BpfObjects) GetNextURR() (uint32, error) {
-	return bpfObjects.nextRuleID(bpfObjects.urrIdTracker, &bpfObjects.urrMutex, nil)
+	return bpfObjects.nextRuleID(bpfObjects.urrIdTracker, &bpfObjects.urrMutex, nil, true)
 }
 
-func (b *BpfObjects) nextRuleID(ids *IdTracker, mu *sync.Mutex, deadline *time.Time) (uint32, error) {
+func (b *BpfObjects) nextRuleID(ids *IdTracker, mu *sync.Mutex, deadline *time.Time, commitLive bool) (uint32, error) {
+	atLiveLimit := false
 	allocate := func() (uint32, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		return ids.GetNext()
+		if commitLive && ids.live != nil && ids.liveCount >= ids.liveLimit {
+			atLiveLimit = true
+			return 0, ErrRuleCapacity
+		}
+		id, err := ids.GetNext()
+		if err == nil && commitLive {
+			ids.markLive(id)
+		}
+		return id, err
 	}
 	id, err := allocate()
-	if err == nil || b.grace == nil {
+	if err == nil || b.grace == nil || atLiveLimit {
 		return id, err
 	}
 	var local time.Time
@@ -383,8 +405,10 @@ func (bpfObjects *BpfObjects) ReleaseURR(urrId uint32) {
 }
 
 type IdTracker struct {
-	bitmap  *roaring.Bitmap
-	maxSize uint32
+	bitmap               *roaring.Bitmap
+	maxSize              uint32
+	live                 []uint64
+	liveLimit, liveCount uint32
 }
 
 func NewIdTracker(size uint32) *IdTracker {
@@ -412,6 +436,7 @@ func (t *IdTracker) Release(id uint32) {
 		return
 	}
 
+	t.unmarkLive(id)
 	t.bitmap.Add(id)
 }
 

@@ -783,6 +783,7 @@ func (tx *ruleTransaction) RetireQer(id uint32) error {
 	if err := tx.objects.QerMap.Lookup(id, &value); err != nil {
 		return err
 	}
+	tx.removedVersions[1] = appendVersionRemoval(tx.removedVersions[1], id)
 	if value.PolicerId == 0 || value.PolicerId == id {
 		return nil
 	}
