@@ -36,6 +36,7 @@ config:
   data:
     config.yml: |
       max_sessions: 1024
+      pfcp_replay_memory_mib: 96
       interface_name: [n3, n6]
       api_address: :8080
       pfcp_address: 10.100.50.241:8805
@@ -87,13 +88,7 @@ service:
       protocol: TCP
       name: metrics
 
-resources:
-  limits:
-    cpu: 100m
-    memory: 128Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
+# Use the chart's sized resource defaults.
 
 livenessProbe:
   tcpSocket:

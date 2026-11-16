@@ -105,7 +105,16 @@ At chart capacity this is 4,225 slots instead of 8,193; standalone defaults use 
 
 PDR, FAR, QER and URR slot allocation share a deadline one second after a transaction's first capacity shortage. The minimum kernel's non-expedited grace period can exceed 100 ms while making progress. Waiting uses one shared grace completion, including after callers time out; stalled readers cannot retain one barrier per rejected request. Exhaustion returns No resources available, Cause 75 (TS 29.244 V20.1.0 table 8.2.1-1), because safe publication capacity is temporarily unavailable. A recovery I/O failure remains a dataplane failure. The deadline bounds capacity waiting; scheduling, other transaction work and lock acquisition can add response delay.
 
-The configured FAR/QER/URR array sizes already bound live plus retiring identifiers; they are not separate whole-map replacement reserves and are unchanged. Slot zero is unavailable. QER versions retain shared policer anchors until every referring version has passed grace. URR configuration remains in user space while final packet counters retain their identifiers through grace. An entirely live physical pool cannot be made available by waiting and may reject further admission or replacement. The `buffer_states` capacity of `2*F` has a different lifetime: canceled or draining cycles may still own retained packets and notification state beyond a rule grace period. It remains capped, with admission backpressure, rather than being reduced to a short transaction batch. Buffer anchors and activity slots are bounded by process-wide session admission, which includes retiring contexts and pending sampler pins.
+The configured FAR/QER/URR limits bound committed live rules; physical slots
+also include bounded replacement/retirement headroom and slot zero. QER versions
+retain stable policer anchors until every referring version has passed grace.
+URR configuration remains in user space while final packet counters retain their
+identifiers through grace. The `buffer_states` map holds twice the
+physical FAR array capacity, including reserved slot zero, allowing canceled or
+draining cycles to retain packets and notification state beyond rule grace. Its admission backpressure
+remains independent of packet credits. Buffer anchors and activity slots are
+bounded by process-wide session admission, including retiring contexts and
+pending sampler pins. See the rule-capacity formulas below.
 
 Expiry and association invalidation unlink entries from both indexes in O(1)
 per removed outcome. Every address of one peer Node ID on the same local connection uses the same share. Associations on different local N4/Sxa/Sxb endpoints have distinct shares, even for the same peer Node ID; all shares consume the single process budget.

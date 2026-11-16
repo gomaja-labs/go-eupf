@@ -24,6 +24,7 @@ config:
   data:
     config.yml: |
       max_sessions: 1024
+      pfcp_replay_memory_mib: 96
       interface_name: eth0
       api_address: :8080
       pfcp_address: :8805
@@ -87,13 +88,7 @@ service:
       protocol: UDP
       name: pfcp
 
-resources:
-  limits:
-    cpu: 100m
-    memory: 128Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
+# Use the chart's sized resource defaults.
 
 livenessProbe:
   tcpSocket:

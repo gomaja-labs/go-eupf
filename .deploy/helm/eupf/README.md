@@ -8,7 +8,7 @@ Deploys [eUPF](https://github.com/gomaja-labs/go-eupf) — an open-source 5G Use
 helm install eupf .deploy/helm/eupf
 ```
 
-The default values produce a working pod: eUPF is configured via `UPF_*` environment variables (see below), probes and resource requests/limits are set, and the API is served on port 8080.
+The default values configure a pod with `UPF_*` environment variables (see below), probes, resource requests/limits and an API listener on port 8080.
 
 ## Cluster prerequisites
 
@@ -42,11 +42,41 @@ List-valued parameters (e.g. `UPF_INTERFACE_NAME`) are comma-separated strings.
 
 ### Sessions and memory
 
-The chart sets the shared session admission limit `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` and `pfcp_replay_memory_mib: 64` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
+The chart sets the shared session admission limit `UPF_MAX_SESSIONS: "1024"` and limits the UPF to 512 MiB and one CPU. eUPF's standalone default is 65535 sessions, which requires a larger memory limit. In ConfigMap mode set `max_sessions: 1024` and `pfcp_replay_memory_mib: 96` in `config.data` to use the chart's sizing, because the default `UPF_*` variables are not injected there.
 
-eUPF derives each PDR, FAR and URR map's capacity as twice `max_sessions`, and the QER map's capacity as `max_sessions`. Array maps allocate at startup; PDR hash maps hold small slot descriptors and IPv6 trie storage grows as rules are installed; the shared PDR bucket array is preallocated with four times each hash map's capacity plus slot zero. Both are charged to the container's memory cgroup. The process measures the loaded cgroup charge and reserves growing-map capacity before checking whether the hard limit fits the configured replay, session and queue budgets.
+The default live capacities are `pdr_map_size = 2*N`, `far_map_size = 2*N`,
+`urr_map_size = 2*N` and `qer_map_size = N`, where `N = max_sessions`.
+Each PDR key map admits `K = pdr_map_size` keys; their shared bucket array has
+`2K + min(2K, 128) + 1` slots. For each configured live FAR or URR limit `L`,
+the array has `L + min(L, 128) + 1` slots. QER uses
+`2L + min(L, 128) + 1`, retaining a stable policer anchor as well as the current
+configuration. Slot zero is unused. At 1,024 sessions this is 4,225 PDR bucket
+slots and 2,177 slots in each FAR/QER/URR array. Additional slots permit bounded
+replacement and retirement; they do not increase the committed live-rule limits.
+Array maps allocate at startup; PDR descriptor hashes and IPv6 trie storage
+grow as rules are installed. Both are charged to the memory cgroup.
 
-The startup memory floor is `2 * pfcp_replay_memory_mib + B + 32 KiB * max_sessions + 3 * (16 MiB + R) originated queues + 32 MiB transient headroom + H + K + W`, where `B = max(64 MiB, observed loaded cgroup charge + growing-map reserve)`. `R = max(16 MiB, 2048 * (urr_map_size + 128))` bytes reserves detached final usage per endpoint and remains 16 MiB at chart defaults. The empty buffering maps and packet ring contribute to `B`; growing kernel metadata is reserved separately in `K`. `H` reserves the fixed payload pool, descriptors and buffering lifetime metadata; `W` reserves per-URR measurement-window state. With the chart's 64 MiB replay budget, 1024 sessions, 4096 packets and a four-packet per-session ceiling, `H = 32 MiB`, `K = 25.8125 MiB`, `W = 1.5 MiB`, and the minimum floor is 411.3125 MiB. A larger measured baseline raises it. The replay budget is shared across N4, Sxa and Sxb; the standalone replay default remains 128 MiB. See [PFCP transport](../../../docs/pfcp-transport.md) for the exact terms and evidence limits.
+The startup floor is
+`2 * replay budget + B + 32 KiB * N + 3 * (16 MiB + R) + 32 MiB + H + K + W`.
+Here `B = max(64 MiB, observed loaded cgroup charge + growing-map reserve)`
+includes empty buffering maps and the fixed packet ring. For the following
+memory terms, let `P = buffer_packets`, `F = far_map_size` and
+`U = urr_map_size` be effective live capacities, `V = F + min(F, 128)` and
+`J = U + min(U, 128)`. All terms below are bytes; this use of `K` is the kernel
+reserve, distinct from the PDR key capacity above:
+
+- `R = max(16 MiB, 2048*(U + 128))`: detached final usage per endpoint.
+- `H = 2*131072 + P*(2048 + 2*160) + 2*1024*N + 2*320*(2*V) + 2*4608*V`: fixed runtime, packet payloads/descriptors, session and overlapping FAR lifetime metadata, and notification identities, including replacement/GC headroom.
+- `K = 11 MiB + 320*N + 1152*(2*V) + 4608*P`: growing kernel metadata and rendered-packet storage, including the 8 MiB generic-ingress authorization reserve; excluded from the Go soft limit.
+- `W = 768*J`: URR measurement-window state and replacement/GC headroom.
+
+With 1,024 sessions, **96 MiB** replay, 4,096 packets and a four-packet
+per-session ceiling, `R = 16 MiB`, `H = 33.28125 MiB`, `K = 34.09375 MiB`,
+`W = 1.59375 MiB`, and the minimum floor is **484.96875 MiB**. A larger measured
+`B` raises it. The replay budget is shared across N4/Sxa/Sxb; the standalone
+default remains 128 MiB. Buffer metadata is reserved for every admitted session
+and FAR lifetime, independently of packet credits. See
+[PFCP transport](../../../docs/pfcp-transport.md) for accounting details and limits.
 
 After this admission check, the automatic Go soft limit is `container hard limit - B - 32 MiB transient headroom - K`. The replay, session, buffer, URR-window and originated-queue budgets fit within that soft limit; the full startup floor is not subtracted from it. A smaller explicit `GOMEMLIMIT` is honored only when it still fits those budgets. Without a visible cgroup hard limit, startup applies neither an automatic Go soft limit nor this refusal check. Raise map capacities and the memory limit together; forwarding load, rule populations and kernel allocation costs need their own measurements. See [PFCP transport](../../../docs/pfcp-transport.md) for the fixed-workload measurements and operational limits.
 
@@ -59,7 +89,7 @@ config:
     config.yml: |
       interface_name: eth0
       max_sessions: 1024
-      pfcp_replay_memory_mib: 64
+      pfcp_replay_memory_mib: 96
       buffer_packets: 4096
       buffer_per_session: 4
       buffer_retention_seconds: 30
