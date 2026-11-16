@@ -6,7 +6,6 @@ package core
 
 import (
 	"net/http"
-	"sync"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
 
@@ -53,10 +52,6 @@ func StartMetrics(addr string) error {
 
 func RegisterMetrics(stats ebpf.UpfXdpActionStatistic, conn []*PfcpConnection) {
 	collector := newDataplaneCollector(stats.BpfObjects.UpfExtStat, stats.BpfObjects.UpfRouteStat)
-	registeredDataplane.Lock()
-	registeredDataplane.collector = collector
-	registeredDataplane.source = stats.BpfObjects
-	registeredDataplane.Unlock()
 	prometheus.MustRegister(collector)
 
 	UpfPfcpSessions = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -83,30 +78,4 @@ func RegisterMetrics(stats ebpf.UpfXdpActionStatistic, conn []*PfcpConnection) {
 
 	prometheus.MustRegister(UpfPfcpSessions)
 	prometheus.MustRegister(UpfPfcpAssociationsTotal)
-}
-
-// The HTTP route can refresh counters before rendering the registered metrics.
-// Share history with Collect so that either path observes each delta only once.
-var registeredDataplane struct {
-	sync.Mutex
-	collector *dataplaneCollector
-	source    *ebpf.BpfObjects
-}
-
-func GatherMetrics(stats ebpf.UpfXdpActionStatistic) {
-	registeredDataplane.Lock()
-	defer registeredDataplane.Unlock()
-	collector := registeredDataplane.collector
-	if collector == nil {
-		return
-	}
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	if registeredDataplane.source != stats.BpfObjects {
-		registeredDataplane.source = stats.BpfObjects
-		collector.packets, collector.routes = stats.BpfObjects.UpfExtStat, stats.BpfObjects.UpfRouteStat
-		collector.previousPackets = [13]uint64{}
-		collector.previousRoutes = [6]uint64{}
-	}
-	collector.snapshot()
 }

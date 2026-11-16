@@ -216,7 +216,6 @@ func (h *ApiHandler) InitMetricsRoute() *gin.Engine {
 
 	router.GET("/metrics", func() gin.HandlerFunc {
 		return func(c *gin.Context) {
-			core.GatherMetrics(*h.ForwardPlaneStats)
 			promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 		}
 	}())
