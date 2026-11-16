@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	cilium "github.com/cilium/ebpf"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 )
@@ -26,26 +27,66 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 	}
 	const sessions = 1024
 	current := make([]uint32, sessions)
-	packets := make([][]byte, sessions)
-	addresses := make([]net.IP, sessions)
+	packets := make([][]byte, 4*sessions)
+	addresses := make([]net.IP, 2*sessions)
+	if err := b.DeletePdrUplink(10, 0, 1); err != nil {
+		t.Fatal(err)
+	}
 	for i := range sessions {
 		address := net.IP{10, 60, byte(i >> 8), byte(i)}
-		addresses[i] = address
+		addresses[2*i] = address
+		addresses[2*i+1] = net.IP{10, 61, byte(i >> 8), byte(i)}
 		far := FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: uint32(100000 + i), RemoteIP: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), TransportLevelMarking: 0x10fc}
 		id, err := b.NewFar(far)
 		if err != nil {
 			t.Fatal(err)
 		}
 		current[i] = id
-		if err := b.PutPdrDownlink(address, PdrInfo{SessionID: uint64(i + 1), PdrID: 1, FarId: id}); err != nil {
-			t.Fatal(err)
+		for lane := 0; lane < 2; lane++ {
+			if err := b.PutPdrDownlink(addresses[2*i+lane], PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 1), FarId: id}); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.PutPdrUplink(uint32(4096+2*i+lane), PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 3), FarId: id, OuterHeaderRemovalPresent: true}); err != nil {
+				t.Fatal(err)
+			}
 		}
 		ip := &layers.IPv4{Version: 4, IHL: 5, TTL: 64, Protocol: layers.IPProtocolUDP, SrcIP: net.IP{198, 51, 100, 1}, DstIP: address}
 		udp := &layers.UDP{SrcPort: 1234, DstPort: 4321}
 		if err := udp.SetNetworkLayerForChecksum(ip); err != nil {
 			t.Fatal(err)
 		}
-		packets[i] = serializeDatapath(t, &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 2}, EthernetType: layers.EthernetTypeIPv4}, ip, udp, gopacket.Payload(make([]byte, 16)))
+		packets[4*i] = serializeDatapath(t, &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 2}, EthernetType: layers.EthernetTypeIPv4}, ip, udp, gopacket.Payload(make([]byte, 16)))
+		otherIP := *ip
+		otherIP.DstIP = addresses[2*i+1]
+		otherUDP := *udp
+		if err := otherUDP.SetNetworkLayerForChecksum(&otherIP); err != nil {
+			t.Fatal(err)
+		}
+		packets[4*i+1] = serializeDatapath(t, &layers.Ethernet{SrcMAC: net.HardwareAddr{2, 0, 0, 0, 0, 1}, DstMAC: net.HardwareAddr{2, 0, 0, 0, 0, 2}, EthernetType: layers.EthernetTypeIPv4}, &otherIP, &otherUDP, gopacket.Payload(make([]byte, 16)))
+		for lane := 0; lane < 2; lane++ {
+			packet := gtpDatapath(t, udpDatapath(t, false), nil, 0x30, false)
+			tunnel := append([]byte(nil), packet[42:]...)
+			binary.BigEndian.PutUint32(tunnel[4:8], uint32(4096+2*i+lane))
+			packets[4*i+lane+2] = outerDatapath(t, tunnel, false)
+		}
+	}
+	for name, m := range map[string]*cilium.Map{"uplink": b.PdrMapTeidIp4, "downlink": b.PdrMapDownlinkIp4} {
+		count := 0
+		iterator := m.Iterate()
+		var key uint32
+		var value IpEntrypointPdrIndex
+		for iterator.Next(&key, &value) {
+			count++
+		}
+		if err := iterator.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if count != 2048 {
+			t.Fatalf("%s hash is not full: %d keys", name, count)
+		}
+	}
+	if err := b.SynchronizeRules(); err != nil {
+		t.Fatal(err)
 	}
 	var complete atomic.Bool
 	result := make(chan error, 1)
@@ -59,8 +100,11 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 				return
 			}
 			next, err := tx.NewFar(FarInfo{Action: 2, OuterHeaderCreation: 1, Teid: uint32(200000 + i), RemoteIP: binary.LittleEndian.Uint32(net.IP{198, 18, 1, 2}), TransportLevelMarking: 0x20fc})
-			if err == nil {
-				err = tx.PutPdrDownlink(addresses[i], PdrInfo{SessionID: uint64(i + 1), PdrID: 1, FarId: next})
+			for lane := 0; lane < 2 && err == nil; lane++ {
+				err = tx.PutPdrDownlink(addresses[2*i+lane], PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 1), FarId: next})
+				if err == nil {
+					err = tx.PutPdrUplink(uint32(4096+2*i+lane), PdrInfo{SessionID: uint64(i + 1), PdrID: uint32(lane + 3), FarId: next, OuterHeaderRemovalPresent: true})
+				}
 			}
 			if err == nil {
 				err = tx.DeleteFar(old)
@@ -78,9 +122,10 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 	}()
 	defer pinPublicationCPU(t, 5)()
 	observations, mixed := 0, 0
-	for i := 0; !complete.Load() || i < sessions; i++ {
-		index := i % sessions
-		action, out, err := b.UpfIpEntrypointFunc.Test(packets[index])
+	for i := 0; !complete.Load() || i < len(packets); i++ {
+		packetIndex := i % len(packets)
+		index := packetIndex / 4
+		action, out, err := b.UpfIpEntrypointFunc.Test(packets[packetIndex])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +142,7 @@ func TestChartSizedFARReplacementBurstKeepsPacketVersions(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("replaced=%d observations=%d mixed-FAR=%d", sessions, observations, mixed)
+	t.Logf("replaced=%d full-hash-keys=4096 observations=%d mixed-FAR=%d", sessions, observations, mixed)
 	if mixed != 0 {
 		t.Fatal("FAR burst exposed a mixed configuration")
 	}
