@@ -112,6 +112,14 @@ func (conn *PfcpConnection) serviceReportCleanupLocked(now time.Time) {
 		assoc := req.association
 		session := assoc.Sessions[req.localSEID]
 		if conn.associationByID(assoc.ID) != assoc || session == nil {
+			// A preceding item in this detached queue may already have
+			// deleted the session. Preserve each rejected window exactly once
+			// (TS 29.244 V20.1.0 clauses 6.3.5.2 and 6.4).
+			if release := conn.localReleases[req.localSEID]; release != nil && release.association == assoc {
+				release.retainFailedUsage(req, req.completedOutcome)
+			} else {
+				recordUndeliveredUsage(req, "context removed before report cleanup")
+			}
 			continue
 		}
 		// The CP may change after Cause 65 but before local reclamation.
