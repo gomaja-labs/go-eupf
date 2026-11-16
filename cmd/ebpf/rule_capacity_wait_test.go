@@ -81,11 +81,31 @@ func TestPDRBucketCapacityHasBoundedRetirementWait(t *testing.T) {
 		if !errors.Is(err, ErrRuleCapacity) {
 			t.Fatalf("exhaustion lost its resource cause: %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		unblock()
 		if err := <-result; err != nil && !errors.Is(err, ErrRuleCapacity) {
 			t.Error(err)
 		}
 		t.Fatal("bucket allocation waited beyond the retirement bound")
+	}
+}
+
+func TestRuleCapacityWaitAllowsNonExpeditedGrace(t *testing.T) {
+	b := NewBpfObjects()
+	b.farIdTracker = NewIdTracker(2)
+	id, err := b.GetNextFAR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, entered, unblock := blockedRuleRetirement(t)
+	b.grace = g
+	g.retire([]func() error{func() error { b.ReleaseFAR(id); return nil }}, false)
+	<-entered
+	// The minimum kernel uses a non-expedited grace period. A brief delay
+	// beyond 100 ms must still return the retired slot within the budget.
+	timer := time.AfterFunc(150*time.Millisecond, unblock)
+	defer timer.Stop()
+	if next, err := b.GetNextFAR(); err != nil || next != id {
+		t.Fatalf("normal retirement was rejected: slot=%d error=%v", next, err)
 	}
 }

@@ -93,7 +93,10 @@ func (g *ruleGrace) wait() error {
 // ruleCapacityWait is one transaction's total wait budget after its first slot
 // shortage, excluding execution/scheduling time. Exhaustion remains temporary
 // resource unavailability (TS 29.244 V20.1.0 table 8.2.1-1, Cause 75).
-const ruleCapacityWait = 100 * time.Millisecond
+// The minimum kernel's non-expedited grace period can exceed 100 ms even
+// while readers make progress. Leave room for its completion without waiting
+// indefinitely when a reader is stalled.
+const ruleCapacityWait = time.Second
 
 func (g *ruleGrace) waitForCapacity(deadline time.Time) error {
 	delay := time.Until(deadline)
