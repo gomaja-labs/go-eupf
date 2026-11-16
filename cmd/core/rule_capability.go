@@ -60,7 +60,11 @@ func capabilityFields(typ reflect.Type, supported []string) *capabilityFieldPlan
 func rejectUnsupportedFields(fields interface{}, supported ...string) error {
 	value := reflect.ValueOf(fields).Elem()
 	for _, index := range capabilityFields(value.Type(), supported).fields {
-		switch child := value.Field(index).Interface().(type) {
+		field := value.Field(index)
+		if field.IsNil() || field.Kind() == reflect.Slice && field.Len() == 0 {
+			continue
+		}
+		switch child := field.Interface().(type) {
 		case *ie.IE:
 			if child != nil {
 				return unsupportedRuleIE(child.Type)
