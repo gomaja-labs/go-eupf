@@ -40,8 +40,16 @@ type pdrMutation struct {
 
 func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutation, error) {
 	k := pdrMutationKey{m, key}
-	if draft := tx.pdrs[k]; draft != nil {
-		return draft, nil
+	if tx.pdrs != nil {
+		if draft := tx.pdrs[k]; draft != nil {
+			return draft, nil
+		}
+	} else {
+		for _, draft := range tx.pdrOrder {
+			if draft.pdrMutationKey == k {
+				return draft, nil
+			}
+		}
 	}
 	// These unpinned maps start empty and every control-plane writer uses this
 	// journal. Configuration images avoid copying the large kernel bucket on
@@ -69,10 +77,17 @@ func (tx *ruleTransaction) pdrDraft(m *cilium.Map, key interface{}) (*pdrMutatio
 		draft.entries = append([]IpEntrypointPdrEntry(nil), image.entries...)
 	}
 
-	if tx.pdrs == nil {
-		tx.pdrs = make(map[pdrMutationKey]*pdrMutation)
+	// Most requests touch only one or two keys. Keep that lookup in the existing
+	// order slice, then switch to a hash index before linear work can grow.
+	if tx.pdrs == nil && len(tx.pdrOrder) == 8 {
+		tx.pdrs = make(map[pdrMutationKey]*pdrMutation, len(tx.pdrOrder)+1)
+		for _, previous := range tx.pdrOrder {
+			tx.pdrs[previous.pdrMutationKey] = previous
+		}
 	}
-	tx.pdrs[k] = draft
+	if tx.pdrs != nil {
+		tx.pdrs[k] = draft
+	}
 	tx.pdrOrder = append(tx.pdrOrder, draft)
 	return draft, nil
 }
@@ -145,8 +160,10 @@ func (tx *ruleTransaction) publishPDRs() error {
 					return a.PdrId < b.PdrId
 				})
 			}
-			var value IpEntrypointPdrInfo
-			value.SessionId, value.Count = draft.owner, uint32(len(draft.entries))
+			// Put consumes its native value synchronously. Reuse one zeroed buffer
+			// under ruleMutex; immutable images and undo records own separate slices.
+			value := &tx.objects.publicationBucket.Info
+			*value = IpEntrypointPdrInfo{SessionId: draft.owner, Count: uint32(len(draft.entries))}
 			copy(value.Entries[:], draft.entries)
 			// Configuration fields come from the publication image; mutable
 			// notification flags were captured when the draft was created.
@@ -164,15 +181,16 @@ func (tx *ruleTransaction) publishPDRs() error {
 				}
 			} else {
 				if draft.m == tx.objects.PdrMapDownlinkIp6 {
-					err = draft.m.Put(draft.key, &value)
+					err = draft.m.Put(draft.key, value)
 				} else {
 					var slot uint32
 					slot, err = tx.allocateBucket()
 					publishedSlot = slot
 					if err == nil {
 						key, kind := tx.objects.bucketKey(draft.m, draft.key)
-						bucket := IpEntrypointPdrBucket{Key: key, Kind: kind, Info: value}
-						err = tx.objects.PdrBuckets.Put(slot, &bucket)
+						bucket := &tx.objects.publicationBucket
+						bucket.Key, bucket.Kind = key, kind
+						err = tx.objects.PdrBuckets.Put(slot, bucket)
 						if err == nil && tx.beforeWrite != nil {
 							err = tx.beforeWrite()
 						}

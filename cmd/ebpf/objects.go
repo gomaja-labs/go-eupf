@@ -57,9 +57,11 @@ type BpfObjects struct {
 	ruleMutex              sync.Mutex
 	ruleKeys               ruleKeyIndex
 	ruleImages             map[pdrMutationKey]pdrImage
-	rulePoison             error
-	ruleClosed             bool
-	grace                  *ruleGrace
+	// ruleMutex serializes the synchronous map writes that borrow this buffer.
+	publicationBucket IpEntrypointPdrBucket
+	rulePoison        error
+	ruleClosed        bool
+	grace             *ruleGrace
 	IpEntrypointObjects
 
 	farIdTracker *IdTracker
