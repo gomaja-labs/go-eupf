@@ -3,9 +3,29 @@ package ebpf
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	cilium "github.com/cilium/ebpf"
 )
+
+// MaxRulesPerSession is the admitted number of rules of each type in a PFCP
+// session. One PDR selects at most one of the two hash-key maps.
+const MaxRulesPerSession = 64
+
+// PDRBucketCapacity provisions every live hash key and bounded replacement
+// headroom. ruleMutex permits one publication transaction at a time; the PFCP
+// rule limit bounds it to 64 hash buckets. Reserve another such batch for
+// retiring versions, capped at the original full-key replacement reserve for
+// small maps. Additional retired batches use the bounded capacity wait.
+func PDRBucketCapacity(keysPerMap uint32) (uint32, error) {
+	live := 2 * uint64(keysPerMap)
+	reserve := min(live, uint64(2*MaxRulesPerSession))
+	total := live + reserve + 1 // Slot zero is never published.
+	if keysPerMap == 0 || total > math.MaxUint32 {
+		return 0, fmt.Errorf("invalid PDR map capacity %d", keysPerMap)
+	}
+	return uint32(total), nil
+}
 
 func (b *BpfObjects) bucketKey(m *cilium.Map, key interface{}) (uint32, uint32) {
 	if m == b.PdrMapTeidIp4 {

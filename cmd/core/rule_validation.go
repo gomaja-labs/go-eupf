@@ -102,7 +102,7 @@ func validateSessionRuleIDs(session *Session, lists ...[]*ie.IE) error {
 					count++
 				}
 			}
-			if count > 64 {
+			if count > ebpf.MaxRulesPerSession {
 				return &ruleFailure{key.kind, key.id, ebpf.ErrRuleCapacity}
 			}
 			changes = append(changes, change)

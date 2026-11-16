@@ -135,6 +135,10 @@ func (bpfObjects *BpfObjects) Load() error {
 	if err != nil {
 		return err
 	}
+	bucketCapacity, err := PDRBucketCapacity(bpfObjects.pdrMapSize)
+	if err != nil {
+		return err
+	}
 
 	desiredMapSizes := map[string]uint32{
 		"qer_map":              bpfObjects.qerMapSize,
@@ -142,7 +146,7 @@ func (bpfObjects *BpfObjects) Load() error {
 		"pdr_map_downlink_ip4": bpfObjects.pdrMapSize,
 		"pdr_map_downlink_ip6": bpfObjects.pdrMapSize,
 		"pdr_map_teid_ip4":     bpfObjects.pdrMapSize,
-		"pdr_buckets":          4*bpfObjects.pdrMapSize + 1,
+		"pdr_buckets":          bucketCapacity,
 		"urr_map":              bpfObjects.urrMapSize,
 		"buffer_anchors":       bpfObjects.bufferSessions,
 		"session_activity":     bpfObjects.bufferSessions + 1,
@@ -152,7 +156,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	}
 
 	for name, size := range desiredMapSizes {
-		if size == 0 || bpfObjects.pdrMapSize > (^uint32(0)-1)/4 {
+		if size == 0 {
 			return errors.New("map capacity must be positive")
 		}
 		spec.Maps[name].MaxEntries = size
@@ -178,7 +182,7 @@ func (bpfObjects *BpfObjects) Load() error {
 	bpfObjects.bufferMutex.Unlock()
 	bpfObjects.ruleKeys = ruleKeyIndex{}
 	bpfObjects.ruleImages = make(map[pdrMutationKey]pdrImage)
-	bpfObjects.bucketIDs = NewIdTracker(4*bpfObjects.pdrMapSize + 1)
+	bpfObjects.bucketIDs = NewIdTracker(bucketCapacity)
 	loaded := false
 	defer func() {
 		if !loaded {
