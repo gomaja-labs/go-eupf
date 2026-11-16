@@ -8,9 +8,17 @@
 
 # eUPF
 
-eUPF is the opensource User Plane Function (UPF) project for using inside or "outside" of any 3GPP 5G core. The goal of the project is to provide high-observability and easily-deployed software for a various cases like multi-access edge computing (MEC) and local traffic breakout. eUPF is built with eBPF to provide high observability and performance.
+eUPF is an open-source User Plane Function with a Go PFCP control plane and
+an eBPF/XDP forwarding plane. It routes user traffic between GTP-U tunnels and
+data networks, with deployment examples for edge computing and local breakout.
 
- The eUPF has been tested with three different 5G cores: Free5GC, Open5GS and OpenAirInterface. The OpenAirInterface gNB was also used during testing.
+eUPF includes deployment examples for Open5GS and OpenAirInterface. Current
+free5GC SMFs are incompatible: they allocate local F-TEIDs in the CP instead of
+requesting UP allocation with CHOOSE. eUPF rejects new CP-allocated F-TEIDs with
+Cause 71, as required by TS 29.244 V20.1.0 clause 5.5.1. See
+[free5GC #509](https://github.com/free5gc/free5gc/issues/509) and the
+[rule capabilities](docs/rule-capabilities.md). The free5GC examples remain
+topology references, not working integration instructions for current releases.
 
 ## What is 5G core and CUPS
 
@@ -29,6 +37,7 @@ sudo docker run -d --rm \
   --cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
   -v /sys/fs/bpf:/sys/fs/bpf \
   -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  -e UPF_INTERFACE_NAME=eth0 \
   -e UPF_API_ADDRESS=:8080 -e UPF_API_TOKEN="$UPF_API_TOKEN" \
   -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 --name your-eupf-def \
    ghcr.io/gomaja-labs/go-eupf:main
@@ -43,7 +52,7 @@ Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
 <details><summary><i>See startup parameters you might want to change</i></summary>
 <p>
 
-   - UPF_INTERFACE_NAME=eth0  *Network interfaces handling N3 (GTP) & N6 (SGi) traffic.*
+   - UPF_INTERFACE_NAME=""  *Standalone default: no attached interfaces. Set a comma-separated list for N3 (GTP) and N6 (SGi) traffic.*
    - UPF_N3_ADDRESS=127.0.0.1 *IPv4 address for N3 interface*
    - UPF_N9_ADDRESS=127.0.0.1 *IPv4 address for N9 interface*
    - UPF_XDP_ATTACH_MODE=generic *XDP attach mode. generic, native or offload (driver support required)*
@@ -52,7 +61,7 @@ Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
    - UPF_PFCP_NODE_ID=127.0.0.1  *Local NodeID for PFCP protocol. Format is a hostname or IP address*
    - UPF_METRICS_ADDRESS=:9090   *Local host:port for serving Prometheus metrics endpoint*
    - UPF_MAX_SESSIONS=65535      *Maximum number of sessions. Automatically sizes the eBPF maps when individual map sizes are not set*
-   - UPF_PDR_MAP_SIZE=0          *Size of the PDR eBPF map. Overrides the value derived from max_sessions when set (non-zero). See also QER/FAR/URR_MAP_SIZE*
+   - UPF_PDR_MAP_SIZE=0          *Capacity of each PDR key map. Overrides the value derived from max_sessions when non-zero. FAR/QER/URR sizes bound live rules; replacement slots are additional.*
    - UPF_FEATURE_UEIP=false      *Enable UE IP address allocation*
    - UPF_UEIP_POOL=10.60.0.0/24  *IP pool for the UEIP feature*
    - UPF_TEID_POOL=65535         *TEID allocation pool size*
@@ -146,30 +155,42 @@ eUPF supports sending GTP Echo requests towards neighbour GTP nodes. Every neigh
 #### Control plane
 
 - [x]  PFCP Association Setup/Release and Heartbeats
-- [x]  Session Establishment/Modification with support for PFCP entities such as Packet Detection Rules (PDRs), Forwarding Action Rules (FARs), QoS Enforcement Rules (QERs).
-- [ ]  UPF-initiated PFCP association
-- [x]  UPF-based UE IP address assignment
+- [x]  PFCP Session Establishment, Modification and Deletion with PDR, FAR, QER and URR rules.
+- [x]  UPF-initiated PFCP association
+- [x]  UPF-based IPv4 UE address assignment
+- [x]  Downlink packet buffering, BAR control and Downlink Data Reports
+- [x]  UP function initiated session release and Enhanced PFCP Association Release
+- [x]  Session-level User Plane Inactivity reporting and local inactivity release
+- [x]  Restart detection, session restoration and PFCP message bundling
 
 #### Data plane
 
-- [x]  IPv4 support
+- [x]  IPv4 and explicit IPv6 UE addresses/prefixes (IPv4 outer GTP-U transport)
 - [x]  N3, N4, N6 interfaces
 - [x]  Single & Multi-port support
 - [x]  Static IP routing
 - [x]  Basic QoS support with per-session rate limiting
 - [x]  I-UPF/A-UPF ULCL/Branching (N9 interface)
 - [x]  Configurable eBPF map sizing via `max_sessions`
+- [x]  Per-FAR SNDEM End Marker generation after tunnel changes
+- [x]  End Marker relay and container handling on labeled N3/N9 data-forwarding tunnels
 
 #### Management plane
-- [x]  Free5gc compatibility
+- [ ]  free5GC integration — blocked by [CP-allocated F-TEIDs](https://github.com/free5gc/free5gc/issues/509)
 - [x]  Open5gs compatibility
 - [x]  Integration with Prometheus for exporting PFCP and data plane-level metrics
 - [x]  REST API for inspecting and managing PFCP associations, sessions and eBPF maps
-- [ ]  Monitoring/Debugging capabilities using tcpdump and cli
+- [x]  Management CLI and subscriber packet capture
 
 #### 3GPP specs compatibility
-- [x]  `FTUP` F-TEID allocation / release in the UP function is supported by the UP function.
-- [x]  `UEIP` Allocating UE IP addresses or prefixes.
+- [x]  `FTUP` Mandatory UP F-TEID allocation with CHOOSE; new CP allocations are rejected. Existing UP allocations may be referenced, and RESTI permits restoration.
+- [x]  `UEIP` Optional automatic IPv4 UE allocation (`feature_ueip`); IPv6 allocation is not implemented.
+- [x]  `DDND`, `DLBD`, `DBDM`, `UDBC` Bounded downlink buffering and notification parameters.
+- [x]  `EMPU` End Marker generation.
+- [x]  `EPFAR` Enhanced PFCP Association Release.
+- [x]  `BUNDL` PFCP bundling.
+- [ ]  `BUCP`, `DDDS`, `EDBNC` CP buffering and extended notification control.
+- [ ]  `UPIDP` Per-PDR inactivity reporting.
 - [ ]  `SSET` PFCP sessions successively controlled by different SMFs of a same SMF Set.
 - [ ]  `MPAS` Multiple PFCP associations to the SMFs in an SMF set.
 - [ ]  `QFQM` Per QoS flow per UE QoS monitoring.
@@ -182,9 +203,11 @@ eUPF supports sending GTP Echo requests towards neighbour GTP nodes. Every neigh
 
 ### Prerequisites
 
-Linux kernel 5.15 or newer and Docker are required. The Dockerfile defines the
+Linux 5.15.0-25-generic is the minimum tested kernel; see
+[minimum-kernel requirements](docs/minimum-kernel.md). Docker is required for
+the build commands below. The Dockerfile defines the
 shared build and CI toolchain: Go 1.27.4, Debian bookworm and clang/LLVM 14.
-The minimum supported Go version is the `go` directive in `go.mod` (1.26.0).
+The minimum supported Go version is the `go` directive in `go.mod` (1.26.10).
 Code generators are pinned by Go tool directives; no global generator install is needed.
 
 ### Build and run
@@ -220,7 +243,7 @@ The scripts compile as your user and run eBPF test executables with `sudo` insid
 the container's own network namespace. Smoke logs and PFCP captures are written
 under `ci-results/`. No host network or host BPF filesystem is mounted.
 
-For a native build, install Go 1.26 or newer and clang/LLVM 14, gcc-multilib and
+For a native build, install Go 1.26.10 or newer and clang/LLVM 14, gcc-multilib and
 libbpf-dev, then run `go generate ./cmd/...` and `go build -o bin/eupf ./cmd`.
 Run `sudo ./bin/eupf` with appropriate network privileges in a test environment.
 CI tests minimum and stable Go using the same Dockerfile toolchain stage.
@@ -231,7 +254,7 @@ pushes to `main` and tags. CI never creates another branch.
 
 - CPU: any popular CPU is supported, incl. x86, x86_64, armhf, armv7, aarch64, ppc64le, s390x
 - CPU_cores: 1 core is enough to run eUPF
-- RAM: you need up to 70MB to run eUPF and up to 512MB to run Linux kernel
+- RAM: size the container with the [startup memory plan](docs/pfcp-transport.md). The Helm defaults use 1,024 sessions, 96 MiB replay and a 512 MiB container; the accounting floor is 484.96875 MiB before any larger measured map baseline. Standalone defaults admit 65,535 sessions and need substantially more memory. Raise session/map capacity and memory together; startup rejects a visible hard limit below its calculated requirement.
 - HDD: 50MB of free space is required to install eUPF. Different types of storage can be used: HDD, SSD, SD-card, USB-stick
 - NIC: Any internal or external networking interface that can be used in Linux
 

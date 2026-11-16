@@ -1,5 +1,12 @@
 # Free5GC + eUPF with Calico BGP
 
+Current free5GC SMFs are incompatible with this eUPF release: they allocate
+F-TEIDs in the CP and do not send CHOOSE. eUPF requires UP allocation for new
+tunnels and rejects these requests with Cause 71 (TS 29.244 V20.1.0 clause
+5.5.1). See [free5GC #509](https://github.com/free5gc/free5gc/issues/509).
+These examples describe topology only until the SMF allocation behaviour changes.
+
+
 
 
 ![](./schema.png)

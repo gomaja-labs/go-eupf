@@ -38,7 +38,16 @@ stage or CPU-set configuration, so this is not a supported release setting.
 
 A design needs bounded CPU-set validation, a stable tunnel hash, queue sizing,
 CPU hotplug handling, overload/drop counters, and a second-stage program that
-preserves packet metadata and transaction admission. Changes would span the
+preserves packet metadata and immutable rule publication. Queued packets must
+not retain references to retired PDR buckets, FAR/QER/URR versions or activity
+slots beyond their grace period; the reclamation barrier must cover readers in
+both stages and any queued references. Preserve per-FAR sequence ordering and
+the drain guard so newly arriving packets cannot overtake buffered packets
+when forwarding resumes. Mark session activity once for matching received user
+packets before FAR/QoS processing, including eventual drops, and exclude GTP
+control packets and authenticated buffered continuations from activity. See
+[rule publication and buffering](pfcp-transport.md) for the current lifetimes.
+Changes would span the
 XDP entrypoint, [`cmd/ebpf/objects.go`](../cmd/ebpf/objects.go), startup and
 configuration. Validate ordering, overload, counters and fairness under
 multi-queue load on real NICs; compare with hardware RSS and record CPU use,

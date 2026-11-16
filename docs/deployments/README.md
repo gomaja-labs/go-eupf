@@ -1,5 +1,11 @@
 # Deployment examples
-The eUPF can be integrated with different 5G Core implementations in different scenarios.
+The examples describe integration with different 5G core implementations.
+
+Current free5GC SMFs allocate new local F-TEIDs in the CP without CHOOSE and
+are incompatible with this release: eUPF rejects those requests with Cause 71
+(TS 29.244 V20.1.0 clause 5.5.1). See
+[free5GC #509](https://github.com/free5gc/free5gc/issues/509). The free5GC links
+below are topology references pending an SMF change.
 
 eUPF outbound connections is pure routed at the node. There is no embedded NAT, so external NAT should be used if address translation is needed.
 

@@ -1,4 +1,11 @@
 # How to install and run eUPF
+
+Current free5GC SMFs are incompatible with this release because they allocate
+new F-TEIDs in the CP without CHOOSE. eUPF rejects those requests with Cause 71
+(TS 29.244 V20.1.0 clause 5.5.1); see
+[free5GC #509](https://github.com/free5gc/free5gc/issues/509). The free5GC
+commands and historical logs below are topology references only.
+
 The easyest way to install eUPF is to use helm charts for one of the supported opensource 5G core projects in your own kubernetes cluster.
 Alternatively, eUPF could be deployed with docker-compose (with free5gc or OpenAirInterface configs is ready at the moment).
 
@@ -13,13 +20,16 @@ Deployment options:
 
 ## General node requirements
 
-**eUPF need Linux kernel > 5.14 version (we used Ubuntu 22.04 LTS)**
+**The minimum supported tested kernel is Linux 5.15.0-25-generic.** See the
+[minimum-kernel requirements and tests](minimum-kernel.md).
 
 ### Driver support
 
 #### Drivers supporting generic XDP
 
-Starting from kernel 4.12 you can run XDP(and eUPF) in generic mode anywhere. But it should be used for testing or debugging purpose only (no performance prospective)
+Generic XDP does not require native XDP support in the NIC driver. eUPF still
+requires the minimum kernel stated above; generic mode does not lower that
+requirement. See [data-plane settings](dataplane-settings.md) for attachment modes.
 
 #### Drivers supporting native XDP
 

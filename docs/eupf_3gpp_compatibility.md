@@ -34,8 +34,9 @@ table. Generic-XDP kernel continuations carry an authenticated private envelope
 so released packets are counted and classified once.
 
 Local session release stops forwarding through the deletion transaction and
-reports final USAR/TEBUR or UISR, with PSDBU in the last request
-(TS 29.244 V20.1.0 clause 5.18.2). EPFAR is advertised and negotiated preparation
+reports final USAR/TEBUR or UISR, with PSDBU in the last request only when both
+functions negotiated EPFAR
+(TS 29.244 V20.1.0 clause 5.18.2 and table 7.5.8.1-1). EPFAR is advertised and negotiated preparation
 from either peer reports and deletes sessions before URSS. The local
 `inactivity_release_timeout` setting shares received-packet activity with the
 CP's session-level User Plane Inactivity Timer. The latter requests UPIR and
@@ -52,3 +53,17 @@ FAR's 3GPP Interface Type to be N3 or N9 for data forwarding (TS 29.244 V20.1.0
 clause 5.17.3). The UPF cannot otherwise identify an EPS-to-5GS forwarding tunnel.
 Ordinary N9 and N4-u relays preserve received extension headers; their QER QFI
 alone does not request insertion of a downlink container.
+
+FTUP is always advertised: new local tunnels require UP F-TEID allocation
+with CHOOSE; an existing UP allocation may be referenced, and RESTI permits
+restoration (TS 29.244 V20.1.0 clauses 5.5.1 and 5.5.3). This excludes current
+free5GC SMFs that allocate the F-TEID in the CP; see
+[free5GC #509](https://github.com/free5gc/free5gc/issues/509).
+
+PFCP bundling is advertised with BUNDL. DDND, DLBD, DBDM and UDBC advertise
+the implemented buffering parameters; BUCP, DDDS and EDBNC are not implemented.
+UEIP is advertised only when automatic IPv4 allocation is enabled. Explicit
+IPv6 UE addresses and prefixes are supported, but IPv6 allocation and IPv6
+outer GTP-U transport are not. N9/ULCL uses the documented Source Interface and
+FAR destination rules; these capabilities do not imply support for every
+branching or multicast procedure.
