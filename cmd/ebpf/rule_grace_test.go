@@ -8,6 +8,21 @@ import (
 	"time"
 )
 
+func TestRuleGraceCoalescesPublicationWakeups(t *testing.T) {
+	started := time.Now()
+	barrier := make(chan time.Time, 1)
+	g := &ruleGrace{wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	g.synchronize = func() error { barrier <- time.Now(); return nil }
+	go g.run()
+	g.enqueue(graceWork{})
+	when := <-barrier
+	close(g.stop)
+	<-g.done
+	if when.Sub(started) < time.Millisecond {
+		t.Fatal("publication woke an unbatched grace barrier")
+	}
+}
+
 func TestRuleGraceBatchesRetirementsAfterReadersFinish(t *testing.T) {
 	entered := make(chan struct{})
 	secondEntered := make(chan struct{})

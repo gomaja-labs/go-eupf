@@ -146,6 +146,11 @@ func (g *ruleGrace) waitForCapacity(deadline time.Time) error {
 // must restart the UPF with fresh maps. Backoff is 100, 200, 400, then 500 ms.
 const ruleRecoveryWindow = 3 * time.Second
 
+// Coalesce adjacent publications before starting the kernel barrier. This
+// adds at most one millisecond of intentional retention, within the shared
+// capacity wait budget; the barrier still precedes every reclamation.
+const ruleGraceBatchWindow = time.Millisecond
+
 func (g *ruleGrace) drain() {
 	g.mu.Lock()
 	work := g.pending
@@ -234,6 +239,14 @@ func (g *ruleGrace) run() {
 	for {
 		select {
 		case <-g.wake:
+			timer := time.NewTimer(ruleGraceBatchWindow)
+			select {
+			case <-timer.C:
+			case <-g.stop:
+				timer.Stop()
+				g.drain()
+				return
+			}
 			g.drain()
 		case <-g.stop:
 			g.drain()
