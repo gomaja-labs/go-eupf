@@ -175,7 +175,7 @@ func TestInactivityLocalReleaseUsesSameActivityAndDeletion(t *testing.T) {
 			conn.serviceInactivity(time.Now())
 			conn.serviceLocalSessionReleases()
 			report := identityRead(t, peer).(*message.SessionReportRequest)
-			if !report.ReportType.HasUISR() || !report.PFCPSRReqFlags.HasPSDBU() || report.ReportType.HasUPIR() || len(assoc.Sessions) != 0 || len(plane.released) != 1 {
+			if !report.ReportType.HasUISR() || report.PFCPSRReqFlags.HasPSDBU() || report.ReportType.HasUPIR() || len(assoc.Sessions) != 0 || len(plane.released) != 1 {
 				t.Fatal("local inactivity did not use common release")
 			}
 			conn.Handle(protocolWire(t, message.NewSessionReportResponse(session.LocalSEID, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))), peer.LocalAddr().(*net.UDPAddr))

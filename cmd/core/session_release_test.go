@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -23,8 +24,8 @@ func TestLocalSessionReleaseDeletesAndSendsUISR(t *testing.T) {
 		t.Fatal("session release refused")
 	}
 	report := identityRead(t, peer).(*message.SessionReportRequest)
-	if !report.ReportType.HasUISR() || !report.PFCPSRReqFlags.HasPSDBU() || report.SEID() != 77 || conn.GetSessionCount() != 0 {
-		t.Fatal("release did not delete locally and send UISR with PSDBU to the CP F-SEID")
+	if !report.ReportType.HasUISR() || report.PFCPSRReqFlags.HasPSDBU() || report.SEID() != 77 || conn.GetSessionCount() != 0 {
+		t.Fatal("release did not delete locally and send UISR without unnegotiated PSDBU to the CP F-SEID")
 	}
 	conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))), peer.LocalAddr().(*net.UDPAddr))
 	if _, err := conn.ReleaseSessionByID(11); err == nil {
@@ -53,8 +54,8 @@ func TestLocalSessionReleaseUsageAndTerminalOutcomes(t *testing.T) {
 				t.Fatal(err)
 			}
 			report := identityRead(t, peer).(*message.SessionReportRequest)
-			if !report.ReportType.HasUSAR() || !report.PFCPSRReqFlags.HasPSDBU() || len(report.UsageReport) != 1 {
-				t.Fatal("missing final usage or deletion indication")
+			if !report.ReportType.HasUSAR() || report.PFCPSRReqFlags.HasPSDBU() || len(report.UsageReport) != 1 {
+				t.Fatal("missing final usage or unexpected unnegotiated deletion indication")
 			}
 			fields, err := report.UsageReport[0].UsageReportWithinSessionReportRequest()
 			if err != nil {
@@ -400,5 +401,43 @@ func TestLocalReleaseCrossingRequestsFromAdditionalCPAddress(t *testing.T) {
 	conn.Handle(protocolWire(t, message.NewSessionReportResponse(11, report.Sequence(), ie.NewCause(ie.CauseRequestAccepted))), peer.LocalAddr().(*net.UDPAddr))
 	if conn.addressIndex[session.CPFSEIDIPv4.String()][assoc] != 0 {
 		t.Fatal("completed delivery retained entity address reference")
+	}
+}
+
+// TS 29.244 V20.1.0 table 7.5.8.1-1 and clause 6.3.5.2.
+func TestLocalReleasePSDBURequiresNegotiatedEPFAR(t *testing.T) {
+	for _, cpSupport := range []bool{false, true} {
+		for _, upSupport := range []bool{false, true} {
+			for _, withUsage := range []bool{false, true} {
+				t.Run(fmt.Sprintf("cp-%t-up-%t-usage-%t", cpSupport, upSupport, withUsage), func(t *testing.T) {
+					conn, assoc, _, peer := downlinkFixture(t, true)
+					assoc.CPFeatures = make([]byte, 2)
+					assoc.UPFeatures = make([]byte, 6)
+					if cpSupport {
+						assoc.CPFeatures[0] = 1 << 2
+					}
+					if upSupport {
+						assoc.UPFeatures[1] = 1 << 7
+					}
+					session := NewSession(11, 77, "", "", false)
+					session.CPFSEIDIPv4 = peer.LocalAddr().(*net.UDPAddr).IP
+					if withUsage {
+						conn.mapOperations = &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 20}}
+						session.NewUrr(9, 1, ebpf.UrrInfo{})
+					}
+					assoc.Sessions[11] = session
+					if _, err := conn.ReleaseSessionByID(11); err != nil {
+						t.Fatal(err)
+					}
+					report := identityRead(t, peer).(*message.SessionReportRequest)
+					if got := report.PFCPSRReqFlags.HasPSDBU(); got != (cpSupport && upSupport) {
+						t.Fatalf("PSDBU=%t, negotiated=%t", got, cpSupport && upSupport)
+					}
+					if report.ReportType.HasUSAR() != withUsage || report.ReportType.HasUISR() == withUsage {
+						t.Fatal("final report kind changed with negotiation")
+					}
+				})
+			}
+		}
 	}
 }

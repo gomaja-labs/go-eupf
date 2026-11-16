@@ -11,6 +11,8 @@ import (
 
 func TestLocalReleaseCanReportDenseURRSession(t *testing.T) {
 	conn, assoc, _, peer := downlinkFixture(t, true)
+	assoc.CPFeatures = []byte{4}
+	assoc.UPFeatures = []byte{0, 128}
 	conn.mapOperations = &MapOperationsMock{urr: ebpf.UrrInfo{UplinkVolume: 1}}
 	session := NewSession(11, 77, "", "", false)
 	session.CPFSEIDIPv4 = net.ParseIP("127.0.0.92")

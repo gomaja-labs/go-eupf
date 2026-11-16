@@ -14,7 +14,7 @@ import (
 )
 
 // SessionReleaseResult describes a committed local deletion. Report delivery
-// continues independently; EPFAR says whether the CP negotiated that procedure.
+// continues independently; EPFAR reports whether both functions negotiated PSDBU.
 type SessionReleaseResult struct {
 	SEID  uint64 `json:"seid"`
 	EPFAR bool   `json:"epfar"`
@@ -42,7 +42,7 @@ func associationEPFAR(assoc *NodeAssociation) bool {
 }
 
 // TS 29.244 V20.1.0 clauses 5.18.2 and 8.2.119: PSDBU follows local
-// deletion, not a later CP Deletion Request. Final counts follow producer grace.
+// deletion for an EPFAR association. Final counts follow producer grace.
 // The caller owns stateMu; no network I/O happens inside this transaction.
 func (conn *PfcpConnection) beginLocalSessionReleaseLocked(assoc *NodeAssociation, session *Session) (SessionReleaseResult, error) {
 	charge := config.LocalReleaseContextBytes * (1 + int64(len(session.URRs)))
@@ -324,7 +324,9 @@ func (conn *PfcpConnection) serviceLocalSessionReleases() {
 		}
 		ies := []*ie.IE{ie.New(ie.ReportType, []byte{kind})}
 		ies = append(ies, release.reports[release.next:end]...)
-		if last {
+		// TS 29.244 V20.1.0 table 7.5.8.1-1 and clause 6.3.5.2:
+		// locally initiated PSDBU requires EPFAR at both functions.
+		if last && associationEPFAR(release.association) {
 			ies = append(ies, ie.NewPFCPSRReqFlags(1))
 		}
 		report := message.NewSessionReportRequest(release.session.RemoteSEID, 0, ies...)

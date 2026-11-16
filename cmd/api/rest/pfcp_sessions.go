@@ -18,7 +18,7 @@ import (
 // DeletePfcpSessions godoc
 //
 //	@Summary	Delete PFCP session by IMSI, MSISDN or ID
-//	@Description	Deletes a PFCP session based on provided parameters. Exactly one query key must be provided.
+//	@Description	Deletes a PFCP session based on provided parameters. Exactly one query key must be provided. Final usage delivery continues asynchronously; epfar reports whether both functions negotiated PSDBU in the final report.
 //	@Tags		PFCP
 //	@Accept		json
 //	@Produce	json
