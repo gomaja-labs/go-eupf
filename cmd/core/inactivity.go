@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/gomaja-labs/go-eupf/cmd/ebpf"
@@ -29,6 +30,42 @@ type sessionActivity struct {
 	association    *NodeAssociation
 	seid           uint64
 	queued         bool
+	sampling       bool // stateMu prevents overlapping observations of one session.
+	readersMu      sync.Mutex
+	readers        int
+	afterReaders   func()
+}
+
+func (activity *sessionActivity) beginRead() {
+	activity.readersMu.Lock()
+	activity.readers++
+	activity.readersMu.Unlock()
+}
+
+func (activity *sessionActivity) endRead() {
+	activity.readersMu.Lock()
+	activity.readers--
+	var release func()
+	if activity.readers == 0 {
+		release, activity.afterReaders = activity.afterReaders, nil
+	}
+	activity.readersMu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+// Rule grace covers packet writers. Sampler pins also keep the slot and its
+// admission reservation alive while user space reads outside stateMu.
+func (activity *sessionActivity) afterReadings(release func()) {
+	activity.readersMu.Lock()
+	if activity.readers != 0 {
+		activity.afterReaders = release
+		activity.readersMu.Unlock()
+		return
+	}
+	activity.readersMu.Unlock()
+	release()
 }
 
 // TS 29.244 V20.1.0 clauses 5.11.2 and 8.2.83: a zero or null timer
@@ -142,6 +179,14 @@ func (conn *PfcpConnection) runInactivity() {
 // TS 29.244 V20.1.0 clauses 5.11.2 and 5.18.2 share the received-packet
 // activity source. Sampling rounds activity time upwards, never expiring early.
 func (conn *PfcpConnection) serviceInactivity(now time.Time) bool {
+	return conn.sampleInactivity(now, true, 0)
+}
+
+func (conn *PfcpConnection) serviceInactivityUpdates(now time.Time, seid uint64) {
+	conn.sampleInactivity(now, false, seid)
+}
+
+func (conn *PfcpConnection) sampleInactivity(now time.Time, periodic bool, priority uint64) bool {
 	if conn.activityCount.Load() == 0 {
 		return false
 	}
@@ -150,61 +195,111 @@ func (conn *PfcpConnection) serviceInactivity(now time.Time) bool {
 		conn.stateMu.Unlock()
 		return false
 	}
-	if conn.activityRemaining == 0 && !now.Before(conn.nextActivityPoll) {
+	if periodic && conn.activityRemaining == 0 && !now.Before(conn.nextActivityPoll) {
 		conn.activityRemaining = len(conn.activitySessions)
 		conn.nextActivityPoll = now.Add(activityPollInterval)
 	}
 	type reference struct {
 		seid        uint64
 		association *NodeAssociation
+		activity    *sessionActivity
+		active      bool
+		err         error
+		observed    time.Time
 	}
 	var batch [activityPollBatchSize]reference
 	n := 0
 	dirtyLimit := activityPollBatchSize
-	if conn.activityRemaining > 0 {
+	if periodic && conn.activityRemaining > 0 {
 		dirtyLimit /= 2
 	}
+	// A timer update must not wait behind a bulk association reindex or other
+	// sessions' dirty entries (TS 29.244 V20.1.0 clause 5.11.2).
+	if assoc := conn.activityDirty[priority]; priority != 0 && assoc != nil {
+		if session := assoc.Sessions[priority]; session != nil && session.activity != nil && !session.activity.sampling && !assoc.cleaning && assoc.enhancedRelease == 0 {
+			activity := session.activity
+			activity.sampling = true
+			activity.beginRead()
+			batch[n] = reference{seid: priority, association: assoc, activity: activity}
+			n++
+			delete(conn.activityDirty, priority)
+		}
+	}
+	inspected := 0
 	for seid, assoc := range conn.activityDirty {
-		if n == dirtyLimit {
+		if inspected == dirtyLimit || n == dirtyLimit {
 			break
 		}
-		batch[n] = reference{seid, assoc}
+		inspected++
+		session := assoc.Sessions[seid]
+		if session == nil || session.activity == nil || assoc.cleaning || assoc.enhancedRelease != 0 {
+			delete(conn.activityDirty, seid)
+			continue
+		}
+		activity := session.activity
+		if activity.sampling {
+			continue
+		}
+		activity.sampling = true
+		activity.beginRead()
+		batch[n] = reference{seid: seid, association: assoc, activity: activity}
 		n++
 		delete(conn.activityDirty, seid)
 	}
-	for n < len(batch) && conn.activityRemaining > 0 && conn.activityHead != nil {
+	inspected = 0
+	for periodic && n < len(batch) && inspected < len(batch) && conn.activityRemaining > 0 && conn.activityHead != nil {
 		activity := conn.activityHead
 		conn.unlinkSessionActivity(activity)
 		conn.appendSessionActivity(activity)
 		conn.activityRemaining--
-		batch[n] = reference{activity.seid, activity.association}
+		inspected++
+		session := activity.association.Sessions[activity.seid]
+		if activity.sampling || session == nil || session.activity != activity || activity.association.cleaning || activity.association.enhancedRelease != 0 {
+			continue
+		}
+		activity.sampling = true
+		activity.beginRead()
+		batch[n] = reference{seid: activity.seid, association: activity.association, activity: activity}
 		n++
 	}
+	more := periodic && conn.activityRemaining > 0 && inspected > 0 || len(conn.activityDirty) > 0 && n > 0
+	if n == 0 {
+		if conn.activityHead == nil {
+			conn.activityRemaining = 0
+		}
+		conn.stateMu.Unlock()
+		return more
+	}
+	conn.stateMu.Unlock()
+
+	// Only the controller and immutable slot are touched outside stateMu. Pins
+	// prevent deletion/reuse; sampling prevents an empty concurrent read from
+	// overtaking a still-unapplied positive observation.
+	for i := range batch[:n] {
+		item := &batch[i]
+		item.active, item.err = item.activity.controller.ConsumeSessionActivity(item.activity.slot)
+		item.observed = time.Now()
+		if item.observed.Before(now) {
+			item.observed = now
+		}
+	}
+	conn.stateMu.Lock()
 	var requests []admittedRequest
 	for _, item := range batch[:n] {
-		seid, assoc := item.seid, item.association
+		seid, assoc, activity := item.seid, item.association, item.activity
+		activity.sampling = false
 		session := assoc.Sessions[seid]
-		if session == nil || assoc.cleaning || assoc.enhancedRelease != 0 || session.activity == nil {
+		if conn.isClosed() || session == nil || assoc.cleaning || assoc.enhancedRelease != 0 || session.activity != activity {
 			continue
 		}
-		activity := session.activity
-		active, err := activity.controller.ConsumeSessionActivity(activity.slot)
-		if err != nil {
-			// A failed observation must not look like inactivity and silently discard
-			// a live session. Propagate the dataplane failure to the supervisor.
-			conn.failInactivityLocked(fmt.Errorf("session %d activity: %w", seid, err))
+		if item.err != nil {
+			conn.failInactivityLocked(fmt.Errorf("session %d activity: %w", seid, item.err))
 			continue
 		}
-		if active {
-			// Timestamp after clearing: a packet racing with the clear must
-			// never be assigned a time earlier than its store. Keep synthetic
-			// clock advances used by callers, while rounding real observations up.
-			activity.last = time.Now()
-			if activity.last.Before(now) {
-				activity.last = now
-			}
+		if item.active && activity.last.Before(item.observed) {
+			activity.last = item.observed
 		}
-		elapsed := now.Sub(activity.last)
+		elapsed := item.observed.Sub(activity.last)
 		if conn.inactivityReleaseTimeout > 0 && elapsed >= conn.inactivityReleaseTimeout {
 			if _, err := conn.beginLocalSessionReleaseLocked(assoc, session); err != nil {
 				log.Warn().Err(err).Uint64("seid", seid).Msg("Inactivity release awaits safe deletion")
@@ -230,11 +325,13 @@ func (conn *PfcpConnection) serviceInactivity(now time.Time) bool {
 		session.inactivityArmed = false
 		requests = append(requests, admittedRequest{wire, request.MessageType(), peer, socket, session.Traced})
 	}
-	more := len(conn.activityDirty) > 0 || conn.activityRemaining > 0 && conn.activityHead != nil
 	if conn.activityHead == nil {
 		conn.activityRemaining = 0
 	}
 	conn.stateMu.Unlock()
+	for _, item := range batch[:n] {
+		item.activity.endRead()
+	}
 	if err := conn.sendAdmitted(requests); err != nil {
 		log.Warn().Err(err).Msg("Send inactivity report")
 	}

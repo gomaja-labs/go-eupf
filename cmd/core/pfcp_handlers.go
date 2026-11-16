@@ -114,9 +114,8 @@ func (handlerMap PfcpHandlerMap) Handle(conn *PfcpConnection, buf []byte, addr *
 		if err := handlerMap.handleMessage(conn, incomingMsg, buf, addr, local, contexts[i]); err != nil {
 			results = append(results, err)
 		}
+		conn.serviceInactivityUpdates(time.Now(), incomingMsg.SEID())
 	}
-
-	conn.serviceInactivity(time.Now())
 	return errors.Join(results...)
 }
 

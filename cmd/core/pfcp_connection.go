@@ -518,7 +518,6 @@ func (connection *PfcpConnection) Run() {
 		}
 		connection.serviceTransactions(time.Now())
 		connection.serviceLocalSessionReleases()
-		connection.serviceInactivity(time.Now())
 		now := time.Now()
 		if !now.Before(nextDownlinkService) {
 			connection.serviceDownlinkNotifications(now)

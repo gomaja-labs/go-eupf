@@ -1,9 +1,53 @@
 package core
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
+
+type blockedActivityPlane struct {
+	sampledActivityPlane
+	entered, resume chan struct{}
+	enter           func()
+}
+
+func (p *blockedActivityPlane) ConsumeSessionActivity(uint32) (bool, error) {
+	p.enter()
+	<-p.resume
+	return true, nil
+}
+
+func TestInactivityMapReadDoesNotHoldSessionLock(t *testing.T) {
+	conn := &PfcpConnection{done: make(chan struct{})}
+	assoc := NewNodeAssociation("poll.example", "127.0.0.1")
+	plane := &blockedActivityPlane{entered: make(chan struct{}), resume: make(chan struct{})}
+	plane.enter = sync.OnceFunc(func() { close(plane.entered) })
+	unblock := sync.OnceFunc(func() { close(plane.resume) })
+	session := NewSession(1, 2, "", "", false)
+	session.activity = &sessionActivity{controller: plane, slot: 1, last: time.Now()}
+	assoc.Sessions[session.LocalSEID] = session
+	conn.watchSessionActivity(assoc, session, 1)
+	finished := make(chan struct{})
+	go func() { conn.serviceInactivity(time.Now()); close(finished) }()
+	t.Cleanup(func() { unblock(); <-finished })
+	<-plane.entered
+	locked := make(chan struct{})
+	go func() {
+		conn.stateMu.Lock()
+		count := len(conn.activitySessions)
+		conn.stateMu.Unlock()
+		if count != 1 {
+			t.Error("pending observation changed the monitored population")
+		}
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("activity map read held the PFCP state lock")
+	}
+}
 
 type sampledActivityPlane struct{ reads map[uint32]int }
 

@@ -285,8 +285,9 @@ The common configuration validation checks its bound for every source.
 This local policy differs from a CP-provisioned User Plane Inactivity Timer:
 that timer sends one UPIR and preserves the session until the CP supplies further
 instructions (clause 5.11.2). Background activity sampling targets 100 ms,
-with scheduler and processing delay. Each batch holds the PFCP state lock for
-at most 64 session observations; updated timers also receive dispatch-time checks. See [PFCP transport](pfcp-transport.md) for update,
+with scheduler and processing delay. Each batch snapshots at most 64 sessions,
+reads activity outside the PFCP state lock, and checks their current lifetimes and
+timers before acting. Updated timers receive priority checks after each frame. See [PFCP transport](pfcp-transport.md) for update,
 reclamation and failure semantics. Per-PDR UPINT is rejected.
 
 Unsigned configuration values are decoded without narrowing, wrapping, fractional

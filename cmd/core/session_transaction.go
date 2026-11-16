@@ -70,12 +70,19 @@ func (conn *PfcpConnection) prepareSessionMutation(session *Session, kind sessio
 			if !release && !releaseActivity {
 				return reclaim, func() {}
 			}
-			completion := &sessionRetirement{release: func() {
+			releaseResources := func() {
 				if releaseActivity {
 					activity.controller.ReleaseSessionActivity(activity.slot)
 				}
 				if release {
 					resources.ReleaseSession(owner)
+				}
+			}
+			completion := &sessionRetirement{release: func() {
+				if releaseActivity {
+					activity.afterReadings(releaseResources)
+				} else {
+					releaseResources()
 				}
 			}}
 			var packetOwner *bufferOwner
