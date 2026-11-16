@@ -171,15 +171,13 @@ the entire prefix has the same reachable UPF next hop.
 Upstream PR 549 requests FAR Forwarding Policy handling and NSH encapsulation
 for N6-LAN service function chaining. This is deferred until a supported policy
 model and a repeatable service-chain lab are available. The current
-[`validateForwardingCapability`](../cmd/core/rule_capability.go#L293) rejects a
+[`validateForwardingCapability`](../cmd/core/rule_capability.go) rejects a
 Forwarding Policy IE with Cause 70 (Invalid Forwarding Policy); it does not
 interpret the opaque policy identifier as an NSH header or service-path ID.
 
 TS 29.244 V20.1.0 clauses 5.4.8 and 8.2.23 and Table 7.5.2.3-2 define steering
-through a policy configured locally in the UPF. TS 23.501 V19.9.0 clauses
-5.6.16.1 and 5.6.16.2 describe directional policy selection and AF influence;
-the encapsulation and forwarding between service functions are deployment
-choices. See the [published TS 23.501 text](https://www.etsi.org/deliver/etsi_ts/123500_123599/123501/19.09.00_60/ts_123501v190900p.pdf).
+through a policy configured locally in the UPF. The encapsulation and the
+forwarding between service functions are deployment choices outside PFCP.
 
 A design needs a bounded policy-ID-to-action registry, validated destinations,
 separate uplink/downlink policies, explicit encapsulation and metadata rules,
