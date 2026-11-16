@@ -38,6 +38,7 @@ func TestPublishedFARFieldsRemainConsistent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	updates := 0
+	capacityRetries := 0
 	go func() {
 		defer wg.Done()
 		defer pinPublicationCPU(t, 2)()
@@ -52,14 +53,6 @@ func TestPublishedFARFieldsRemainConsistent(t *testing.T) {
 				info = FarInfo{Action: 1}
 			}
 			next, err := tx.NewFar(info)
-			if errors.Is(err, ErrRuleCapacity) {
-				_ = tx.Rollback()
-				if err := b.SynchronizeRules(); err != nil {
-					t.Error(err)
-					return
-				}
-				continue
-			}
 			if err == nil {
 				err = tx.PutPdrDownlink(net.IP{198, 51, 100, 2}, PdrInfo{SessionID: 9, PdrID: 1, FarId: next, QerIDs: []uint32{1}, UrrIDs: []uint32{1}})
 			}
@@ -70,7 +63,14 @@ func TestPublishedFARFieldsRemainConsistent(t *testing.T) {
 				err = tx.Commit()
 			}
 			if err != nil {
-				_ = tx.Rollback()
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					t.Error(errors.Join(err, rollbackErr))
+					return
+				}
+				if errors.Is(err, ErrRuleCapacity) {
+					capacityRetries++
+					continue
+				}
 				t.Error(err)
 				return
 			}
@@ -100,7 +100,7 @@ func TestPublishedFARFieldsRemainConsistent(t *testing.T) {
 	}
 	stop.Store(true)
 	wg.Wait()
-	t.Logf("updates=%d packets=%d forwarded=%d mixed-FAR=%d", updates, packets, forwarded, mixed)
+	t.Logf("updates=%d packets=%d forwarded=%d capacity-retries=%d mixed-FAR=%d", updates, packets, forwarded, capacityRetries, mixed)
 	if mixed != 0 || updates < 2 || forwarded == 0 {
 		t.Fatal("incoherent FAR output or inactive churn")
 	}
@@ -148,6 +148,7 @@ func TestPublishedQERGateAndRateRemainConsistent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	updates := 0
+	capacityRetries := 0
 	go func() {
 		defer wg.Done()
 		defer pinPublicationCPU(t, 2)()
@@ -159,14 +160,6 @@ func TestPublishedQERGateAndRateRemainConsistent(t *testing.T) {
 			}
 			value := uint64((updates / 2) & 1)
 			next, err := tx.NewQer(QerInfo{PolicerID: anchor, GateStatusUL: uint8(value), MaxBitrateUL: value})
-			if errors.Is(err, ErrRuleCapacity) {
-				_ = tx.Rollback()
-				if err := b.SynchronizeRules(); err != nil {
-					t.Error(err)
-					return
-				}
-				continue
-			}
 			if err == nil {
 				err = tx.PutPdrUplink(100, PdrInfo{SessionID: 10, PdrID: 1, FarId: 1, QerIDs: []uint32{next}})
 			}
@@ -177,7 +170,14 @@ func TestPublishedQERGateAndRateRemainConsistent(t *testing.T) {
 				err = tx.Commit()
 			}
 			if err != nil {
-				_ = tx.Rollback()
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					t.Error(errors.Join(err, rollbackErr))
+					return
+				}
+				if errors.Is(err, ErrRuleCapacity) {
+					capacityRetries++
+					continue
+				}
 				t.Error(err)
 				return
 			}
@@ -198,7 +198,7 @@ func TestPublishedQERGateAndRateRemainConsistent(t *testing.T) {
 	if err := result.Lookup(uint32(0), &mixed); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("updates=%d mixed-QER=%d", updates, mixed)
+	t.Logf("updates=%d capacity-retries=%d mixed-QER=%d", updates, capacityRetries, mixed)
 	if mixed != 0 || updates < 2 {
 		t.Fatal("mixed QER fields or inactive churn")
 	}

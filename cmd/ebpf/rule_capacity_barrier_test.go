@@ -15,6 +15,10 @@ func TestCapacityWaitersShareOnePendingBarrier(t *testing.T) {
 	g.synchronize = func() error { signal(); <-resume; return nil }
 	go g.run()
 	t.Cleanup(func() { unblock(); close(g.stop); <-g.done })
+	// Hold the worker before registering waiters, so every retained capacity
+	// completion remains visible in pending rather than a worker-local batch.
+	g.enqueue(graceWork{})
+	<-entered
 	var wait sync.WaitGroup
 	for range 32 {
 		wait.Go(func() {

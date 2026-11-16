@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"runtime"
 	"sync"
@@ -95,16 +96,23 @@ func TestPublishedBucketsKeepReaderMemory(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	updates := 0
+	capacityRetries := 0
+	var keyUpdates [2]int
 	go func() {
 		defer wg.Done()
 		defer pinPublicationCPU(t, 2)()
 		for !stop.Load() {
-			for _, key := range []uint32{100, 200} {
+			for index, key := range []uint32{100, 200} {
 				if err := put(uint64(key/100+9), key, uint32(updates)); err != nil {
+					if errors.Is(err, ErrRuleCapacity) {
+						capacityRetries++
+						continue
+					}
 					t.Error(err)
 					return
 				}
 				updates++
+				keyUpdates[index]++
 			}
 		}
 	}()
@@ -121,9 +129,9 @@ func TestPublishedBucketsKeepReaderMemory(t *testing.T) {
 	if err := result.Lookup(uint32(0), &mismatch); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("transactions=%d cross-key-reads=%d", updates, mismatch)
-	if mismatch != 0 {
-		t.Fatalf("stable bucket memory reused under %d readers", mismatch)
+	t.Logf("transactions=%d key-updates=%v capacity-retries=%d cross-key-reads=%d", updates, keyUpdates, capacityRetries, mismatch)
+	if mismatch != 0 || keyUpdates[0] == 0 || keyUpdates[1] == 0 {
+		t.Fatalf("stable bucket memory reused or churn inactive: mixed=%d updates=%v", mismatch, keyUpdates)
 	}
 }
 
