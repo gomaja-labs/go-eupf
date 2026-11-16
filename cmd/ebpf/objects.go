@@ -398,9 +398,8 @@ func NewIdTracker(size uint32) *IdTracker {
 }
 
 func (t *IdTracker) GetNext() (next uint32, err error) {
-	i := t.bitmap.Iterator()
-	if i.HasNext() {
-		next := i.Next()
+	if !t.bitmap.IsEmpty() {
+		next := t.bitmap.Minimum()
 		t.bitmap.Remove(next)
 		return next, nil
 	}
