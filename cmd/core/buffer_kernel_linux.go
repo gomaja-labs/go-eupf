@@ -102,15 +102,46 @@ func bufferLinkMessage(index int, up bool) []byte {
 // infer it from configuration: an attached link can have a different mode.
 // Linux UAPI if_link.h: IFLA_XDP_ATTACHED, XDP_ATTACHED_SKB = 2.
 func bufferIngressIsGeneric(index uint32) (bool, error) {
-	rib, err := syscall.NetlinkRIB(unix.RTM_GETLINK, unix.AF_UNSPEC)
+	link, err := newBufferNetlink()
 	if err != nil {
 		return false, err
 	}
-	messages, err := syscall.ParseNetlinkMessage(rib)
+	defer func() { _ = unix.Close(link.fd) }()
+	// A single RTM_GETLINK (ifi_index, without NLM_F_DUMP) bounds work
+	// independently of the number of interfaces. Linux rtnetlink UAPI.
+	request := make([]byte, 16+unix.SizeofIfInfomsg)
+	binary.NativeEndian.PutUint32(request, uint32(len(request)))
+	binary.NativeEndian.PutUint16(request[4:], unix.RTM_GETLINK)
+	binary.NativeEndian.PutUint16(request[6:], unix.NLM_F_REQUEST)
+	binary.NativeEndian.PutUint32(request[8:], 1)
+	binary.NativeEndian.PutUint32(request[20:], index)
+	if err := unix.Sendto(link.fd, request, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return false, err
+	}
+	response := make([]byte, 65536)
+	n, from, err := unix.Recvfrom(link.fd, response, 0)
+	if err != nil {
+		return false, err
+	}
+	kernel, ok := from.(*unix.SockaddrNetlink)
+	if !ok || kernel.Pid != 0 {
+		return false, errors.New("rtnetlink response is not from kernel")
+	}
+	messages, err := syscall.ParseNetlinkMessage(response[:n])
 	if err != nil {
 		return false, err
 	}
 	for _, message := range messages {
+		if message.Header.Seq != 1 {
+			continue
+		}
+		if message.Header.Type == unix.NLMSG_ERROR && len(message.Data) >= 4 {
+			status := int32(binary.NativeEndian.Uint32(message.Data))
+			if status < 0 {
+				return false, unix.Errno(-status)
+			}
+			return false, errors.New("unexpected rtnetlink acknowledgement")
+		}
 		if message.Header.Type != unix.RTM_NEWLINK || len(message.Data) < unix.SizeofIfInfomsg || binary.NativeEndian.Uint32(message.Data[4:]) != index {
 			continue
 		}
@@ -137,7 +168,7 @@ func bufferIngressIsGeneric(index uint32) (bool, error) {
 		}
 		return false, nil
 	}
-	return false, fmt.Errorf("ingress interface %d is gone", index)
+	return false, fmt.Errorf("no link response for ingress interface %d", index)
 }
 func bufferTCMessage(index int, handle, parent, info uint32) []byte {
 	data := make([]byte, 20)

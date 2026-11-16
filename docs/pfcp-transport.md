@@ -281,7 +281,7 @@ Only its dedicated continuation counter advances; invalid envelopes are dropped
 and counted separately. Driver mode removes its existing cursor at TC. Both paths
 preserve the rendered frame, ingress device, protocol and packet type.
 Local tunnels re-enter the private XDP dispatcher; echo and router
-control use its existing continuations. DROP and ABORTED consume the retained
+control use its existing continuations. A continuation whose ingress interface has disappeared is discarded once and counted as `ingress_removed` in `upf_buffer_discarded_packets_total`; it is never retried as an output failure. DROP and ABORTED consume the retained
 packet. Outer GTP-U remains IPv4; both IPv4 and IPv6 inner packets are supported.
 A bounded per-packet kernel result cache prevents repeated test-run syscalls or
 send retries from repeating QER/URR processing on later local legs. Successful

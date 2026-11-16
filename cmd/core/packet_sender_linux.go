@@ -74,6 +74,9 @@ func (sender *bufferPacketSender) Send(packet ebpf.RenderedBuffer) error {
 			return errors.New("kernel continuation has no ingress interface")
 		}
 		generic, err := bufferIngressIsGeneric(packet.IngressIfindex)
+		if errors.Is(err, unix.ENODEV) {
+			return &bufferPacketDiscard{reason: "ingress_removed", err: err}
+		}
 		if err != nil {
 			return fmt.Errorf("inspect kernel continuation ingress: %w", err)
 		}

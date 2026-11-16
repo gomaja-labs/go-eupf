@@ -29,6 +29,17 @@ type BufferingOptions struct {
 
 const noBufferedPacket = uint32(math.MaxUint32)
 
+// A terminal packet disposition is independent of retriable output I/O.
+type bufferPacketDiscard struct {
+	reason string
+	err    error
+}
+
+func (discard *bufferPacketDiscard) Error() string {
+	return discard.reason + ": " + discard.err.Error()
+}
+func (discard *bufferPacketDiscard) Unwrap() error { return discard.err }
+
 type packetBufferSender interface {
 	Prepare() error
 	Send(ebpf.RenderedBuffer) error
@@ -65,18 +76,18 @@ type packetBufferSession struct {
 	revision uint64
 }
 type bufferOwner struct {
-	discardExpiry, discardCancellation uint64
-	noticeReady                        bool
-	conn                               *PfcpConnection
-	association                        *NodeAssociation
-	session                            *Session
-	cycles                             map[uint32]*bufferCycle
-	nextCookie                         uint64
-	active, canceled, graced, released bool
-	terminal                           bool
-	grace                              <-chan struct{}
-	retirement                         *sessionRetirement
-	resourcesDone                      <-chan struct{}
+	discardExpiry, discardCancellation, discardIngress uint64
+	noticeReady                                        bool
+	conn                                               *PfcpConnection
+	association                                        *NodeAssociation
+	session                                            *Session
+	cycles                                             map[uint32]*bufferCycle
+	nextCookie                                         uint64
+	active, canceled, graced, released                 bool
+	terminal                                           bool
+	grace                                              <-chan struct{}
+	retirement                                         *sessionRetirement
+	resourcesDone                                      <-chan struct{}
 }
 
 // PacketBuffering owns one application ring reader and one bounded payload pool
@@ -603,8 +614,10 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 				bufferDiscardedPackets.WithLabelValues(reason).Inc()
 				if reason == "expiry" {
 					owner.discardExpiry++
-				} else {
+				} else if reason == "cancellation" {
 					owner.discardCancellation++
+				} else if reason == "ingress_removed" {
+					owner.discardIngress++
 				}
 			}
 			cycle.failedAt = time.Time{}
@@ -671,7 +684,7 @@ func (buffering *PacketBuffering) serviceOwner(owner *bufferOwner, now time.Time
 			return
 		}
 		log.Debug().Uint64("seid", owner.session.LocalSEID).Uint64("overflow", overflow).
-			Uint64("expiry", owner.discardExpiry).Uint64("cancellation", canceled+owner.discardCancellation).
+			Uint64("expiry", owner.discardExpiry).Uint64("cancellation", canceled+owner.discardCancellation).Uint64("ingress_removed", owner.discardIngress).
 			Msg("Retire packet buffering lifetime")
 		buffering.mu.Lock()
 		if !owner.released {
@@ -889,13 +902,19 @@ func (buffering *PacketBuffering) serviceOutput(owner *bufferOwner) {
 		} else if err == nil && rendered.Action <= 1 {
 			sent = true
 		}
+		var discard *bufferPacketDiscard
+		if errors.As(err, &discard) {
+			sent = true
+		}
 		close(done)
 		conn.stateMu.Lock()
 		packet := &buffering.entries[index]
 		if packet.owner == owner && packet.cycle == chosen && packet.record.Sequence == record.Sequence {
 			if sent {
 				packet.sent = true
-				if rendered.Action <= 1 {
+				if discard != nil {
+					packet.discardReason = discard.reason
+				} else if rendered.Action <= 1 {
 					packet.discardReason = "cancellation"
 				}
 				chosen.failedAt = time.Time{}

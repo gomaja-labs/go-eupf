@@ -7,7 +7,7 @@ import (
 
 var (
 	bufferRetainedPackets  = promauto.NewGauge(prometheus.GaugeOpts{Name: "upf_buffer_retained_packets", Help: "Packets retained in the admission ring or application storage until acknowledgement"})
-	bufferDiscardedPackets = promauto.NewCounterVec(prometheus.CounterOpts{Name: "upf_buffer_discarded_packets_total", Help: "Buffering packets discarded by overflow, expiry or cancellation"}, []string{"reason"})
+	bufferDiscardedPackets = promauto.NewCounterVec(prometheus.CounterOpts{Name: "upf_buffer_discarded_packets_total", Help: "Buffering packets discarded by overflow, expiry, cancellation or removed ingress"}, []string{"reason"})
 )
 
 // Sample monotonic kernel counters independently of consumption. Occupancy
@@ -31,4 +31,5 @@ func (buffering *PacketBuffering) sampleMetrics() {
 	buffering.metricsRetained, buffering.metricsOverflow, buffering.metricsCanceled = retained, overflow, canceled
 	// Publish the bounded label set even before the first retained expiry.
 	bufferDiscardedPackets.WithLabelValues("expiry").Add(0)
+	bufferDiscardedPackets.WithLabelValues("ingress_removed").Add(0)
 }
