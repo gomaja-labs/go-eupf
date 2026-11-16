@@ -3,6 +3,11 @@ package core
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,9 +57,19 @@ func BenchmarkPFCPRequests(b *testing.B) {
 				if policy == "local" {
 					conn.inactivityReleaseTimeout = 24 * time.Hour
 				}
+				samplerDone := make(chan struct{})
+				if policy == "default" {
+					close(samplerDone)
+				} else {
+					go func() {
+						defer close(samplerDone)
+						conn.runInactivity()
+					}()
+				}
 				b.Cleanup(func() {
 					resources.BeginShutdown()
 					conn.Close()
+					<-samplerDone
 					if err := plane.Close(); err != nil {
 						b.Error(err)
 					}
@@ -123,8 +138,14 @@ func BenchmarkPFCPRequests(b *testing.B) {
 						ie.NewCreatePDR(ie.NewPDRID(1), ie.NewPrecedence(100), ie.NewPDI(ie.NewSourceInterface(0), ie.NewFTEID(5, 0, nil, nil, 0), ie.NewUEIPAddress(2, fmt.Sprintf("10.60.%d.%d", index/250, index%250+1), "", 0, 0)), ie.NewOuterHeaderRemoval(0, 0), ie.NewFARID(1)),
 						ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(2), ie.NewForwardingParameters(ie.NewDestinationInterface(1))), inactivity)
 				}
-				for i := 0; i < 16384; i++ {
-					exchange(establishment(i))
+				localSEIDs := make([]uint64, 16384)
+				for i := range localSEIDs {
+					response := exchange(establishment(i)).(*message.SessionEstablishmentResponse)
+					fields, err := response.UPFSEID.FSEID()
+					if err != nil {
+						b.Fatal(err)
+					}
+					localSEIDs[i] = fields.SEID
 				}
 				requests := make([][]byte, b.N)
 				for i := range requests {
@@ -132,19 +153,16 @@ func BenchmarkPFCPRequests(b *testing.B) {
 					if operation == "establishment" {
 						request = establishment(i + 16384)
 					} else {
-						response := exchange(establishment(i + 16384)).(*message.SessionEstablishmentResponse)
-						fields, err := response.UPFSEID.FSEID()
-						if err != nil {
-							b.Fatal(err)
-						}
 						if operation == "deletion" {
-							request = message.NewSessionDeletionRequest(fields.SEID, 0)
+							request = message.NewSessionDeletionRequest(localSEIDs[i], 0)
 						} else {
-							request = message.NewSessionModificationRequest(fields.SEID, 0, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewTransportLevelMarking([]byte{0x10, 0xfc}))))
+							marking := byte(0x10 + 0x10*(i%2))
+							request = message.NewSessionModificationRequest(localSEIDs[len(localSEIDs)-1], 0, ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewTransportLevelMarking([]byte{marking, 0xfc}))))
 						}
 					}
 					requests[i] = encode(request)
 				}
+				finishProfiles := requestBenchmarkProfiles(b, operation+"-"+policy)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for _, wire := range requests {
@@ -153,7 +171,55 @@ func BenchmarkPFCPRequests(b *testing.B) {
 					b.StopTimer()
 					read()
 				}
+				finishProfiles()
+				runtime.KeepAlive(conn)
 			})
 		}
 	}
+}
+
+// EUPF_REQUEST_PROFILES excludes fixture construction from CPU profiles and
+// writes allocation snapshots for subtraction. Profiles include response reads
+// and validation; ReportAllocs excludes that client work through StopTimer.
+func requestBenchmarkProfiles(b *testing.B, name string) func() {
+	b.Helper()
+	directory := os.Getenv("EUPF_REQUEST_PROFILES")
+	if directory == "" {
+		return func() {}
+	}
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		b.Fatal(err)
+	}
+	snapshot := func(suffix string) {
+		b.Helper()
+		runtime.GC()
+		file, err := os.Create(filepath.Join(directory, name+suffix))
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = pprof.WriteHeapProfile(file)
+		if closeErr := file.Close(); err != nil || closeErr != nil {
+			b.Fatalf("write allocation profile: %v; close: %v", err, closeErr)
+		}
+	}
+	snapshot(".before.allocs")
+	file, err := os.Create(filepath.Join(directory, name+".cpu"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			b.Error(closeErr)
+		}
+		b.Fatal(err)
+	}
+	finish := sync.OnceFunc(func() {
+		pprof.StopCPUProfile()
+		if err := file.Close(); err != nil {
+			b.Error(err)
+		}
+		snapshot(".after.allocs")
+	})
+	b.Cleanup(finish)
+	return finish
 }
