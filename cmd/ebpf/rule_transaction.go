@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	cilium "github.com/cilium/ebpf"
 )
@@ -38,6 +39,7 @@ type ruleTransaction struct {
 	pdrs                   map[pdrMutationKey]*pdrMutation
 	pdrOrder               []*pdrMutation
 	bufferGrace            chan struct{}
+	capacityDeadline       time.Time
 }
 
 // BeginRuleTransaction serializes control-plane journals without stopping packet
@@ -500,7 +502,7 @@ func detachRuleMap[K comparable](tx *ruleTransaction, m *cilium.Map, kind uint8,
 }
 
 func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
-	id, err := tx.objects.GetNextFAR()
+	id, err := tx.objects.nextRuleID(tx.objects.farIdTracker, &tx.objects.farMutex, &tx.capacityDeadline)
 	if err == nil {
 		tx.newFAR[id] = true
 		tx.allocatedFAR = append(tx.allocatedFAR, id)
@@ -508,7 +510,7 @@ func (tx *ruleTransaction) GetNextFAR() (uint32, error) {
 	return id, err
 }
 func (tx *ruleTransaction) GetNextQER() (uint32, error) {
-	id, err := tx.objects.GetNextQER()
+	id, err := tx.objects.nextRuleID(tx.objects.qerIdTracker, &tx.objects.qerMutex, &tx.capacityDeadline)
 	if err == nil {
 		tx.newQER[id] = true
 		tx.allocatedQER = append(tx.allocatedQER, id)
@@ -516,7 +518,7 @@ func (tx *ruleTransaction) GetNextQER() (uint32, error) {
 	return id, err
 }
 func (tx *ruleTransaction) GetNextURR() (uint32, error) {
-	id, err := tx.objects.GetNextURR()
+	id, err := tx.objects.nextRuleID(tx.objects.urrIdTracker, &tx.objects.urrMutex, &tx.capacityDeadline)
 	if err == nil {
 		tx.newURR[id] = true
 		tx.allocatedURR = append(tx.allocatedURR, id)

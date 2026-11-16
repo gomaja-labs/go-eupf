@@ -21,20 +21,7 @@ func (b *BpfObjects) releaseBucket(id uint32) {
 }
 func (tx *ruleTransaction) allocateBucket() (uint32, error) {
 	b := tx.objects
-	allocate := func() (uint32, error) {
-		b.bucketMutex.Lock()
-		defer b.bucketMutex.Unlock()
-		return b.bucketIDs.GetNext()
-	}
-	id, err := allocate()
-	if err != nil {
-		// Bound outstanding versions without delaying ordinary PFCP requests. Only
-		// pool exhaustion waits for already queued readers, not a time-based guess.
-		if err = b.grace.wait(); err != nil {
-			return 0, err
-		}
-		id, err = allocate()
-	}
+	id, err := b.nextRuleID(b.bucketIDs, &b.bucketMutex, &tx.capacityDeadline)
 	if err == nil {
 		tx.allocatedBuckets = append(tx.allocatedBuckets, id)
 	}

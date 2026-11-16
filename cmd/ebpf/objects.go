@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/rs/zerolog/log"
@@ -325,21 +326,38 @@ func (bpfObjects *BpfObjects) ResizeAllMaps(qerMapSize, farMapSize, pdrMapSize, 
 }
 
 func (bpfObjects *BpfObjects) GetNextQER() (uint32, error) {
-	bpfObjects.qerMutex.Lock()
-	defer bpfObjects.qerMutex.Unlock()
-	return bpfObjects.qerIdTracker.GetNext()
+	return bpfObjects.nextRuleID(bpfObjects.qerIdTracker, &bpfObjects.qerMutex, nil)
 }
 
 func (bpfObjects *BpfObjects) GetNextFAR() (uint32, error) {
-	bpfObjects.farMutex.Lock()
-	defer bpfObjects.farMutex.Unlock()
-	return bpfObjects.farIdTracker.GetNext()
+	return bpfObjects.nextRuleID(bpfObjects.farIdTracker, &bpfObjects.farMutex, nil)
 }
 
 func (bpfObjects *BpfObjects) GetNextURR() (uint32, error) {
-	bpfObjects.urrMutex.Lock()
-	defer bpfObjects.urrMutex.Unlock()
-	return bpfObjects.urrIdTracker.GetNext()
+	return bpfObjects.nextRuleID(bpfObjects.urrIdTracker, &bpfObjects.urrMutex, nil)
+}
+
+func (b *BpfObjects) nextRuleID(ids *IdTracker, mu *sync.Mutex, deadline *time.Time) (uint32, error) {
+	allocate := func() (uint32, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return ids.GetNext()
+	}
+	id, err := allocate()
+	if err == nil || b.grace == nil {
+		return id, err
+	}
+	var local time.Time
+	if deadline == nil {
+		deadline = &local
+	}
+	if deadline.IsZero() {
+		*deadline = time.Now().Add(ruleCapacityWait)
+	}
+	if err := b.grace.waitForCapacity(*deadline); err != nil {
+		return 0, err
+	}
+	return allocate()
 }
 
 func (bpfObjects *BpfObjects) ReleaseQER(qerId uint32) {
