@@ -196,7 +196,7 @@ func createBARWithExtendedParameters(session *Session, value *ie.IE, extended bo
 	// Table 7.5.2.6-1: BAR ID zero is a present, valid identifier.
 	bar := &bufferingActionRule{id: id}
 	// TS 29.244 V20.1.0 table 7.5.2.6-1: these two fields apply to
-	// Create BAR in Modification only. Ignore them in Establishment (7.6.10).
+	// Create BAR in Modification only. Ignore them in Establishment (clause 7.6.9).
 	duration, dlCount := fields.DLBufferingDuration, fields.DLBufferingSuggestedPacketCount
 	if !extended {
 		duration, dlCount = nil, nil
