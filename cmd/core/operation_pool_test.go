@@ -2,6 +2,8 @@ package core
 
 import (
 	"errors"
+	"fmt"
+	"github.com/gomaja-labs/go-pfcp/ie"
 	"reflect"
 	"testing"
 )
@@ -27,5 +29,34 @@ func TestOperationPoolFailedReservationWritesNothing(t *testing.T) {
 	p.Add(Operation{Reserve: func() error { return errors.New("full") }, Apply: func() error { writes++; return nil }})
 	if p.Commit() == nil || writes != 0 {
 		t.Fatalf("writes=%d", writes)
+	}
+}
+
+func TestOperationPoolIdentifiesRuleFailureInEveryPhase(t *testing.T) {
+	for _, kind := range []uint8{ie.RuleIDTypePDR, ie.RuleIDTypeFAR, ie.RuleIDTypeQER, ie.RuleIDTypeURR} {
+		for _, phase := range []string{"reserve", "apply", "detach", "retire"} {
+			t.Run(fmt.Sprintf("%d/%s", kind, phase), func(t *testing.T) {
+				fault := errors.New("operation failed")
+				failed := func() error { return fault }
+				operation := Operation{}
+				switch phase {
+				case "reserve":
+					operation.Reserve = failed
+				case "apply":
+					operation.Apply = failed
+				case "detach":
+					operation.Detach = failed
+				case "retire":
+					operation.Retire = failed
+				}
+				pool := NewOperationPool()
+				pool.AddRule(kind, 7, operation)
+				err := pool.Commit()
+				var rule *ruleFailure
+				if !errors.Is(err, fault) || !errors.As(err, &rule) || rule.kind != kind || rule.id != 7 {
+					t.Fatalf("lost rule failure metadata: %v", err)
+				}
+			})
+		}
 	}
 }
