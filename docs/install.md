@@ -70,8 +70,6 @@ services:
   eupf:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
-    volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
     environment:
       - GIN_MODE=release
       - UPF_INTERFACE_NAME=eth0
@@ -223,7 +221,9 @@ UE can send packet to internet and get response
 <details><summary>For builds with trace enabled, not production one: See details under the spoiler.</summary>
 <p>
 
-To see debug log from eBPF programs, at the **node** console start command:
+Debug builds write optional kernel trace logs; eUPF itself never reads tracefs or
+debugfs and mounts neither. To inspect those logs, an administrator can mount
+tracefs/debugfs on the **node** and run:
 `sudo cat /sys/kernel/debug/tracing/trace_pipe`
 
 Then switch to UE pod's shell. Sending a single packet `ping -I uesimtun0 -c1 1.1.1.1` with successfull responce, normally you will see such debug output:

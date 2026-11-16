@@ -27,14 +27,6 @@ config:
       pfcp_address: :8805
       metrics_address: :9090
 
-volumes:
-  - name: sys
-    hostPath:
-      path: /sys
-volumeMounts:
-  - name: sys
-    mountPath: /sys
-    readOnly:  true
 bird:
   enabled: false
 

@@ -4,7 +4,6 @@ set -euo pipefail
 cd /src
 case "${1:-}" in
 test)
-	sudo mount -t bpf bpf /sys/fs/bpf
 	go generate ./cmd/...
 	go build ./...
 	go vet ./...
@@ -29,8 +28,6 @@ lint)
 	golangci-lint run ./...
 	;;
 smoke)
-	sudo mount -t bpf bpf /sys/fs/bpf
-	sudo mount -t debugfs debugfs /sys/kernel/debug
 	go generate ./cmd/...
 	go build -o bin/eupf ./cmd
 	mkdir -p ci-results

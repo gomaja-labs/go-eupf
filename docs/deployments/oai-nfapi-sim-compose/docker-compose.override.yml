@@ -42,7 +42,6 @@ services:
       GIN_MODE: release
     command: --iface eth0 --iface eth1 --n3addr 192.168.71.134 --nodeid 192.168.71.134 --paddr 192.168.71.134:8805 --attach generic --loglvl trace --teidpool 65535
     volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
       - ./eupf/entrypoint.sh:/app/bin/entrypoint.sh
     ulimits:
       memlock: -1

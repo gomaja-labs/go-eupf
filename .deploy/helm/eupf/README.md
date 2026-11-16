@@ -19,8 +19,8 @@ The default values configure a pod with `UPF_*` environment variables (see below
   kubelet --allowed-unsafe-sysctls 'net.ipv4.ip_forward'
   ```
 
-- **Privileges**: the default container runs as UID/GID 1000 with NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF, PERFMON and DAC_OVERRIDE capabilities. It is not privileged. Adapt capabilities and kernel policy for your cluster.
-- The default writable hostPath mount is `/sys/fs/bpf`, where eUPF pins maps. Nodes must provide a mounted BPF filesystem. Root-based examples mount `/sys` and use a privileged container to perform their own mounts.
+- **Privileges**: the default container runs as UID/GID 1000 with NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF and PERFMON capabilities. It is not privileged. Adapt capabilities and kernel policy for your cluster.
+- eUPF uses unpinned maps and requires no BPF filesystem, writable sysfs, or hostPath volume. Map state is recreated on startup. NET_RAW is used only for downlink data buffering continuation.
 
 ## Configuration
 

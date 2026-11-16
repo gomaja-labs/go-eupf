@@ -16,11 +16,14 @@ AVD-KSV-0030
 AVD-KSV-0106
 AVD-KSV-0117
 
-# The eUPF data plane needs these capabilities (NET_ADMIN,
-# SYS_RESOURCE, BPF, PERFMON, DAC_OVERRIDE) to load eBPF programs, pin maps
-# under bpffs and raise RLIMIT_MEMLOCK - a restricted security context is
-# not supported by design.
+# eUPF needs NET_ADMIN to attach XDP and configure routes, BPF and PERFMON
+# to load eBPF programs, SYS_RESOURCE to raise RLIMIT_MEMLOCK, and NET_RAW
+# for downlink buffering continuation. A restricted capability set cannot
+# provide these operations.
 AVD-KSV-0118
 
-# The eUPF data plane needs a /sys/fs/bpf hostPath mount to pin eBPF maps. A "disallowed volume type" (hostPath) is by design here.
-AVD-KSV-0121
+# NET_RAW opens the AF_PACKET raw socket in cmd/core/packet_sender_linux.go.
+# Only downlink data buffering continuation uses it: rendered Ethernet frames
+# go to the resolved output interface for XDP_TX/REDIRECT, or to the private
+# eub* veth for XDP_PASS reinjection through its peer's TC ingress program.
+AVD-KSV-0119

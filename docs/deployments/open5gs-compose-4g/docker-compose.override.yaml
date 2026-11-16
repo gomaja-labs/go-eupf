@@ -4,7 +4,6 @@ services:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
     volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
       - ./dumps:/dumps
     environment:
       GIN_MODE: release
@@ -60,7 +59,6 @@ services:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
     volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
       - ./dumps:/dumps
     environment:
       GIN_MODE: release

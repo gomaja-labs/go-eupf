@@ -5,8 +5,6 @@ services:
   eupf:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
-    volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
     environment:
       GIN_MODE: release
       UPF_INTERFACE_NAME: eth0

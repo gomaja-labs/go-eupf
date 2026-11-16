@@ -49,14 +49,6 @@ env:
   # UPF_N3_ADDRESS: 10.100.50.233
   # UPF_N9_ADDRESS: 10.100.50.233
 
-volumes:
-  - name: sys
-    hostPath:
-      path: /sys
-volumeMounts:
-  - name: sys
-    mountPath: /sys
-    readOnly:  true
 metrics:
   enabled: true
   serviceMonitor:

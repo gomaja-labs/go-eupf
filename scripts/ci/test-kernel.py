@@ -81,7 +81,7 @@ def main():
     init = "\n".join([
         "#!/bin/busybox sh", "/bin/busybox --install -s /bin",
         "mount -t proc proc /proc", "mount -t sysfs sysfs /sys",
-        "mount -t devtmpfs devtmpfs /dev", "mount -t bpf bpf /sys/fs/bpf",
+        "mount -t devtmpfs devtmpfs /dev",
         *module_commands, "ulimit -l unlimited", "uname -a",
         f"PATH={shlex.quote(str(pathlib.Path(ip).parent))}:/bin /test -test.v -test.failfast -test.run {shlex.quote(args.pattern)} -test.timeout {args.timeout}s",
         "status=$?", 'echo "KERNEL_TEST_EXIT=$status"', "poweroff -f", "",

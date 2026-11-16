@@ -31,8 +31,8 @@ RUN BPF_CFLAGS="" \
     && BPF_CFLAGS=$BPF_CFLAGS go generate -v ./cmd/...
 RUN CGO_ENABLED=0 go build -v -o bin/eupf ./cmd/
 
-# Tests compile as the unprivileged build user. Only test executables, mounts,
-# and the integration server run through sudo in a private network namespace.
+# Tests compile as the unprivileged build user. Only test executables and
+# the integration server run through sudo in a private network namespace.
 FROM toolchain AS development
 COPY --from=golangci/golangci-lint:v2.15.0 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
 USER root
@@ -67,6 +67,6 @@ COPY --from=builder /app/cmd/docs/swagger.* /app/
 COPY --from=builder /app/cmd/ebpf/zeroentrypoint_bpf.o /app/
 COPY entrypoint.sh /app/bin/entrypoint.sh
 RUN apk add --no-cache libcap \
-    && setcap cap_net_admin,cap_net_raw,cap_sys_resource,cap_bpf,cap_perfmon,cap_dac_override=ep /app/bin/eupf \
+    && setcap cap_net_admin,cap_net_raw,cap_sys_resource,cap_bpf,cap_perfmon=ep /app/bin/eupf \
     && apk del libcap
 ENTRYPOINT ["sh", "/app/bin/entrypoint.sh"]

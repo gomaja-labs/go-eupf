@@ -29,8 +29,6 @@ services:
     privileged: true
     network_mode: "host"
     command: --iface ens64f0np0 --n3addr 10.100.200.14 --nodeid 10.100.200.14 --paddr :8805 --attach native --loglvl debug
-    volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
     environment:
       GIN_MODE: release
     ulimits:

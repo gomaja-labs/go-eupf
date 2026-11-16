@@ -3,7 +3,6 @@ services:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
     volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
       - ./config.yaml:/app/bin/config.yaml
       - ./dumps:/dumps
     entrypoint: ["/app/bin/eupf", "--config", "/app/bin/config.yaml"]

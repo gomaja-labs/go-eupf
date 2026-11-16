@@ -34,9 +34,8 @@ Super fast & simple way is to download and run our docker image. The example exp
 ```bash
 export UPF_API_TOKEN="$(openssl rand -hex 32)"
 sudo docker run -d --rm \
-  --cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
-  -v /sys/fs/bpf:/sys/fs/bpf \
-  -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW \
+  --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
   -e UPF_INTERFACE_NAME=eth0 \
   -e UPF_API_ADDRESS=:8080 -e UPF_API_TOKEN="$UPF_API_TOKEN" \
   -p 127.0.0.1:8080:8080 -p 127.0.0.1:9090:9090 --name your-eupf-def \
@@ -44,9 +43,8 @@ sudo docker run -d --rm \
 ```
 ### Notes
 - 📝 *Linux Kernel **5.15.0-25-generic** is the minimum release version it has been tested on. Previous versions are not supported.*
-- ℹ The eBPF filesystem must be mounted in the host filesystem allowing the eUPF to persist eBPF resources across restarts so that the datapath can continue to operate while the eUPF is subsequently restarted or upgraded.
-Use following command to mount it: `sudo mount bpffs /sys/fs/bpf -t bpf`
-- ℹ The eupf binary has file capabilities for NET_ADMIN, SYS_RESOURCE, BPF, PERFMON and DAC_OVERRIDE. Docker's bounding set must include them: DAC_OVERRIDE is included by default; add the other four with `--cap-add` as above. A non-root container needs a pre-mounted BPF filesystem (the Helm chart uses this mode). Without the required capabilities, exec of the binary fails with `Operation not permitted`.
+- ℹ eUPF uses unpinned eBPF maps and needs no BPF filesystem or writable sysfs. Map state is recreated on startup; persistent session restoration is not provided.
+- ℹ The eupf binary carries NET_ADMIN, NET_RAW, SYS_RESOURCE, BPF and PERFMON file capabilities. Docker's bounding set must include all five, as above. NET_RAW is used only for downlink data buffering continuation. Without the required capabilities, exec of the binary fails with `Operation not permitted`.
 - ℹ During startup eupf sets rlimits, so corresponding privileges are required (ulimit)
 
 <details><summary><i>See startup parameters you might want to change</i></summary>
@@ -72,9 +70,8 @@ In a real-world scenario, you would likely need to replace the interface names a
 
 ```bash
 sudo docker run -d --rm \
-  --cap-add=NET_ADMIN --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
-  -v /sys/fs/bpf:/sys/fs/bpf \
-  -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_RAW \
+  --cap-add=SYS_RESOURCE --cap-add=BPF --cap-add=PERFMON \
   -p 127.0.0.1:8081:8081 -p 127.0.0.1:9091:9091 --name your-eupf-custom \
   -e UPF_INTERFACE_NAME=eth0,n6 -e UPF_XDP_ATTACH_MODE=generic \
   -e UPF_API_ADDRESS=:8081 -e UPF_API_TOKEN="$UPF_API_TOKEN" -e UPF_PFCP_ADDRESS=:8806 \

@@ -177,7 +177,6 @@ services:
     image: ghcr.io/gomaja-labs/go-eupf:main
     privileged: true
     volumes:
-      - /sys/fs/bpf:/sys/fs/bpf
       - ../../../stub/pcc/test/pcc.yaml:/pcc.yaml
     environment:
       GIN_MODE: release

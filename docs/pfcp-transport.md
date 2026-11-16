@@ -231,9 +231,9 @@ it never silently leaves admission poisoned indefinitely.
 
 During process shutdown, an already released association, or an expired release
 period, requires no per-session map deletion: the UPF closes its bpf_link XDP
-attachments and map descriptors. Rule maps are unpinned; the only pinned map is
-an empty program dispatch array. Startup creates fresh rule maps. No persistent
-session restoration is provided. The process deadline is the delivery window,
+attachments and map descriptors. All maps are unpinned, and no BPF filesystem
+mount is needed. Startup creates fresh maps. No persistent session restoration
+is provided. The process deadline is the delivery window,
 full graceful period and four seconds for HTTP shutdown/scheduling: 32 seconds
 with default T1=5, N1=3. The chart uses 40 seconds. Raise the chart's
 `terminationGracePeriodSeconds` above the derived process deadline when changing
