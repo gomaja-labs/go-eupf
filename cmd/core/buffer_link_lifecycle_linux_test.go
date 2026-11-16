@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os/exec"
 	"strings"
@@ -22,31 +23,45 @@ func TestBufferSenderStartupRemovesOnlyStalePrivateLinks(t *testing.T) {
 			t.Fatalf("ip %v: %v %s", args, err, out)
 		}
 	}
-	stale := "go-eupf-buffer:00000000000000000000000000000001"
-	live := "go-eupf-buffer:00000000000000000000000000000002"
-	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	plane, _, _, _, _, _ := packetBufferFixtureStartOptions(t, false, BufferingOptions{Packets: 8, PerSession: 4, FrameBytes: ebpf.BufferFrameSize, Retention: time.Minute})
+	plane.StartBufferPrograms(context.Background())
+	program, err := plane.BufferKernelIngressProgram()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = unix.Close(fd) }()
-	if err := unix.Bind(fd, &unix.SockaddrUnix{Name: "@" + live}); err != nil {
+	defer func() { _ = program.Close() }()
+	create := func() *bufferKernelLink {
+		t.Helper()
+		link, err := newBufferKernelLink(program.FD(), func(*bufferKernelLink) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = link.Close() })
+		return link
+	}
+	stale, live, secondLive := create(), create(), create()
+	// Simulate exit immediately after creation: the kernel keeps the veth pair,
+	// but closes every process-owned descriptor. Reclamation cannot depend on
+	// later alias writes or on recording the returned interface index.
+	if err := unix.Close(stale.ownerFD); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"eubstale", "eublive", "eubuser"} {
-		command("link", "add", name, "type", "veth", "peer", "name", name+"p")
+	stale.ownerFD = -1
+	stale.index = 0
+	users := []string{"eubuser", "eub00000000000z", "eub00000000000A", "eub00000000000"}
+	for i, name := range users {
+		command("link", "add", name, "type", "veth", "peer", "name", fmt.Sprintf("userpeer%d", i))
 		t.Cleanup(func() { _ = exec.Command("ip", "link", "del", name).Run() })
 	}
-	command("link", "set", "dev", "eubstale", "alias", stale)
-	command("link", "set", "dev", "eublive", "alias", live)
 	sender, err := newBufferPacketSender(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = sender.Close() }()
-	if _, err := net.InterfaceByName("eubstale"); err == nil {
+	if _, err := net.InterfaceByName(stale.name); err == nil {
 		t.Fatal("stale private veth survived startup")
 	}
-	for _, name := range []string{"eublive", "eubuser"} {
+	for _, name := range append(users, live.name, secondLive.name) {
 		if _, err := net.InterfaceByName(name); err != nil {
 			t.Fatalf("removed live or unmarked link %s: %v", name, err)
 		}

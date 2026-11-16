@@ -208,16 +208,17 @@ func newBufferKernelLink(programFD int, adopt func(*bufferKernelLink) error) (_ 
 	if _, err = rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	alias := "go-eupf-buffer:" + hex.EncodeToString(random[:])
+	token := hex.EncodeToString(random[:6])
+	owner := "@go-eupf-buffer:" + token
 	resource.ownerFD, err = unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	if err = unix.Bind(resource.ownerFD, &unix.SockaddrUnix{Name: "@" + alias}); err != nil {
+	if err = unix.Bind(resource.ownerFD, &unix.SockaddrUnix{Name: owner}); err != nil {
 		return nil, err
 	}
-	resource.name = fmt.Sprintf("eub%x", random[:4])
-	peer := resource.name + "p"
+	resource.name = "eub" + token
+	peer := "eup" + token
 	resource.address = net.HardwareAddr{2, random[4], random[5], random[6], random[7], random[8]}
 	// Publish ownership before RTM_NEWLINK. Close marks the resource closed
 	// under its own mutex, so no later step can create a link after shutdown.
@@ -227,13 +228,11 @@ func newBufferKernelLink(programFD int, adopt func(*bufferKernelLink) error) (_ 
 	peerData := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(peer), 0))...)
 	// Carry the complete retained frame class, rewrite headroom and cursor.
 	// Linux still applies the actual forwarding device's MTU after reinjection.
-	peerData = append(peerData, bufferAttribute(unix.IFLA_IFALIAS, append([]byte(alias), 0))...)
 	peerData = append(peerData, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
 
 	vethData := bufferAttribute(1|unix.NLA_F_NESTED, peerData) // VETH_INFO_PEER
 	info := append(bufferAttribute(unix.IFLA_INFO_KIND, []byte("veth\x00")), bufferAttribute(unix.IFLA_INFO_DATA|unix.NLA_F_NESTED, vethData)...)
 	data := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(resource.name), 0))...)
-	data = append(data, bufferAttribute(unix.IFLA_IFALIAS, append([]byte(alias), 0))...)
 	data = append(data, bufferAttribute(unix.IFLA_ADDRESS, resource.address)...)
 	data = append(data, bufferAttribute(unix.IFLA_MTU, bufferUint32(4096))...)
 	data = append(data, bufferAttribute(unix.IFLA_LINKINFO|unix.NLA_F_NESTED, info)...)
@@ -339,40 +338,48 @@ func removeStaleBufferLinks() error {
 			return err
 		}
 		for _, attr := range attrs {
-			if attr.Attr.Type != unix.IFLA_IFALIAS {
+			if attr.Attr.Type != unix.IFLA_IFNAME {
 				continue
 			}
-			alias := strings.TrimRight(string(attr.Value), "\x00")
-			token, ok := strings.CutPrefix(alias, "go-eupf-buffer:")
-			if !ok || len(token) != 32 {
+			name := strings.TrimRight(string(attr.Value), "\x00")
+			// Both ends fit IFNAMSIZ: a reserved three-letter prefix and twelve
+			// lowercase hex digits. The name and owner socket exist before any
+			// post-creation step, so a crash cannot leave an unidentifiable pair.
+			if len(name) != 15 || (name[:3] != "eub" && name[:3] != "eup") {
 				continue
 			}
-			if _, err := hex.DecodeString(token); err != nil {
+			token := name[3:]
+			decoded, err := hex.DecodeString(token)
+			if err != nil || hex.EncodeToString(decoded) != token {
 				continue
 			}
 			fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 			if err != nil {
 				return err
 			}
-			ownerErr := unix.Connect(fd, &unix.SockaddrUnix{Name: "@" + alias})
-			closeErr := unix.Close(fd)
-			if closeErr != nil {
-				return closeErr
-			}
-			if ownerErr == nil {
-				continue
-			}
-			if !errors.Is(ownerErr, unix.ECONNREFUSED) && !errors.Is(ownerErr, unix.ENOENT) {
-				return ownerErr
+			// Claim the dead owner's socket until deletion completes. Bind also
+			// excludes a live creator and concurrent startup reclamation; another
+			// creator cannot reuse this token between the check and deletion.
+			ownerErr := unix.Bind(fd, &unix.SockaddrUnix{Name: "@go-eupf-buffer:" + token})
+			if ownerErr != nil {
+				closeErr := unix.Close(fd)
+				if errors.Is(ownerErr, unix.EADDRINUSE) && closeErr == nil {
+					continue
+				}
+				return errors.Join(ownerErr, closeErr)
 			}
 			if control == nil {
 				control, err = newBufferNetlink()
 				if err != nil {
-					return err
+					return errors.Join(err, unix.Close(fd))
 				}
 			}
-			index := int(binary.NativeEndian.Uint32(message.Data[4:]))
-			err = control.change(unix.RTM_DELLINK, 0, bufferLinkMessage(index, false))
+			remove := append(bufferLinkMessage(0, false), bufferAttribute(unix.IFLA_IFNAME, append([]byte(name), 0))...)
+			err = control.change(unix.RTM_DELLINK, 0, remove)
+			closeErr := unix.Close(fd)
+			if closeErr != nil {
+				return errors.Join(err, closeErr)
+			}
 			// Deleting one veth also removes its peer from this dump's snapshot.
 			if err != nil && !errors.Is(err, unix.ENODEV) {
 				return err
