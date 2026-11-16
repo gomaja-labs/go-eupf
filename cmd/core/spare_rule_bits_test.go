@@ -20,7 +20,7 @@ func TestRuleCapabilityIgnoresPublishedSpareBits(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateRuleCapability(test.rule); err != nil {
+			if err := validateRuleCapability(test.rule, nil); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -30,7 +30,7 @@ func TestRuleCapabilityIgnoresPublishedSpareBits(t *testing.T) {
 	}
 }
 func TestEmptyMandatoryReportingTriggersRejected(t *testing.T) {
-	err := validateRuleCapability(ie.NewCreateURR(ie.NewURRID(1), ie.NewMeasurementMethod(0, 1, 0), ie.NewReportingTriggers(0, 0)))
+	err := validateRuleCapability(ie.NewCreateURR(ie.NewURRID(1), ie.NewMeasurementMethod(0, 1, 0), ie.NewReportingTriggers(0, 0)), nil)
 	if err == nil {
 		t.Fatal("accepted empty mandatory reporting triggers")
 	}

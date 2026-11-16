@@ -77,10 +77,10 @@ func rejectUnsupportedFields(fields interface{}, supported ...string) error {
 	}
 	return nil
 }
-func validateRuleCapability(rule *ie.IE) error {
+func validateRuleCapability(rule *ie.IE, views *ruleViews) error {
 	switch rule.Type {
 	case ie.CreatePDR:
-		f, err := rule.CreatePDR()
+		f, err := cachedRuleView(views, rule, (*ie.IE).CreatePDR)
 		if err != nil {
 			return err
 		}
@@ -93,9 +93,9 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err := validateBindingBounds(f.QERID, f.URRID); err != nil {
 			return err
 		}
-		return validatePDICapability(f.PDI)
+		return validatePDICapability(f.PDI, views)
 	case ie.UpdatePDR:
-		f, err := rule.UpdatePDR()
+		f, err := cachedRuleView(views, rule, (*ie.IE).UpdatePDR)
 		if err != nil {
 			return err
 		}
@@ -108,9 +108,9 @@ func validateRuleCapability(rule *ie.IE) error {
 		if err := validateBindingBounds(f.QERID, f.URRID); err != nil {
 			return err
 		}
-		return validatePDICapability(f.PDI)
+		return validatePDICapability(f.PDI, views)
 	case ie.CreateFAR:
-		f, err := rule.CreateFAR()
+		f, err := cachedRuleView(views, rule, (*ie.IE).CreateFAR)
 		if err != nil {
 			return err
 		}
@@ -121,14 +121,14 @@ func validateRuleCapability(rule *ie.IE) error {
 			return err
 		}
 		if f.ForwardingParameters != nil {
-			v, err := f.ForwardingParameters.ForwardingParameters()
+			v, err := cachedRuleView(views, f.ForwardingParameters, (*ie.IE).ForwardingParameters)
 			if err != nil {
 				return err
 			}
 			return validateForwardingCapability(v, v.DestinationInterface, v.ForwardingPolicy)
 		}
 	case ie.UpdateFAR:
-		f, err := rule.UpdateFAR()
+		f, err := cachedRuleView(views, rule, (*ie.IE).UpdateFAR)
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func validateRuleCapability(rule *ie.IE) error {
 			return err
 		}
 		if f.UpdateForwardingParameters != nil {
-			v, err := f.UpdateForwardingParameters.UpdateForwardingParameters()
+			v, err := cachedRuleView(views, f.UpdateForwardingParameters, (*ie.IE).UpdateForwardingParameters)
 			if err != nil {
 				return err
 			}
@@ -220,11 +220,11 @@ func validateBindingBounds(qers, urrs []*ie.IE) error {
 	}
 	return nil
 }
-func validatePDICapability(pdi *ie.IE) error {
+func validatePDICapability(pdi *ie.IE, views *ruleViews) error {
 	if pdi == nil {
 		return nil
 	}
-	f, err := pdi.PDI()
+	f, err := cachedRuleView(views, pdi, (*ie.IE).PDI)
 	if err != nil {
 		return err
 	}
@@ -519,7 +519,7 @@ func validateMeasurementInformation(field *ie.IE) error {
 // validateRuleNetworkInstances applies the single-domain alias admission policy
 // consistently to PDI and FAR provisioning, including modifications.
 // TS 29.244 V20.1.0 tables 7.5.2.2-2, 7.5.2.3-2 and 7.5.4.3-2.
-func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) error {
+func validateRuleNetworkInstances(conn *PfcpConnection, views *ruleViews, groups ...[]*ie.IE) error {
 	for _, rules := range groups {
 		for _, rule := range rules {
 			var kind uint8
@@ -530,13 +530,13 @@ func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) erro
 				kind = ie.RuleIDTypePDR
 				var identifier, pdi *ie.IE
 				if rule.Type == ie.CreatePDR {
-					f, err := rule.CreatePDR()
+					f, err := cachedRuleView(views, rule, (*ie.IE).CreatePDR)
 					if err != nil {
 						return err
 					}
 					identifier, pdi = f.PDRID, f.PDI
 				} else {
-					f, err := rule.UpdatePDR()
+					f, err := cachedRuleView(views, rule, (*ie.IE).UpdatePDR)
 					if err != nil {
 						return err
 					}
@@ -545,7 +545,7 @@ func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) erro
 				value, _ := identifier.PDRID()
 				id = uint32(value)
 				if pdi != nil {
-					f, err := pdi.PDI()
+					f, err := cachedRuleView(views, pdi, (*ie.IE).PDI)
 					if err != nil {
 						return err
 					}
@@ -553,13 +553,13 @@ func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) erro
 				}
 			case ie.CreateFAR:
 				kind = ie.RuleIDTypeFAR
-				f, err := rule.CreateFAR()
+				f, err := cachedRuleView(views, rule, (*ie.IE).CreateFAR)
 				if err != nil {
 					return err
 				}
 				id, _ = f.FARID.FARID()
 				if f.ForwardingParameters != nil {
-					v, err := f.ForwardingParameters.ForwardingParameters()
+					v, err := cachedRuleView(views, f.ForwardingParameters, (*ie.IE).ForwardingParameters)
 					if err != nil {
 						return err
 					}
@@ -567,13 +567,13 @@ func validateRuleNetworkInstances(conn *PfcpConnection, groups ...[]*ie.IE) erro
 				}
 			case ie.UpdateFAR:
 				kind = ie.RuleIDTypeFAR
-				f, err := rule.UpdateFAR()
+				f, err := cachedRuleView(views, rule, (*ie.IE).UpdateFAR)
 				if err != nil {
 					return err
 				}
 				id, _ = f.FARID.FARID()
 				if f.UpdateForwardingParameters != nil {
-					v, err := f.UpdateForwardingParameters.UpdateForwardingParameters()
+					v, err := cachedRuleView(views, f.UpdateForwardingParameters, (*ie.IE).UpdateForwardingParameters)
 					if err != nil {
 						return err
 					}

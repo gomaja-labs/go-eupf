@@ -62,7 +62,7 @@ func readRuleChange(value *ie.IE) (ruleChange, error) {
 // validateSessionRuleIDs is a read-only preflight. Rule IDs are scoped to a
 // session and a rule type, never to global map slots. TS 29.244 V20.1.0 clauses
 // 5.2.1 and 6.3.3.2-6.3.3.3 prohibit duplicates and updates of unknown rules.
-func validateSessionRuleIDs(session *Session, lists ...[]*ie.IE) error {
+func validateSessionRuleIDs(session *Session, views *ruleViews, lists ...[]*ie.IE) error {
 	known := make(map[ruleKey]bool)
 	for id := range session.PDRs {
 		known[ruleKey{ie.RuleIDTypePDR, id}] = true
@@ -84,7 +84,7 @@ func validateSessionRuleIDs(session *Session, lists ...[]*ie.IE) error {
 			if err != nil {
 				return &ruleFailure{change.key.kind, change.key.id, err}
 			}
-			if err := validateRuleCapability(value); err != nil {
+			if err := validateRuleCapability(value, views); err != nil {
 				return &ruleFailure{change.key.kind, change.key.id, err}
 			}
 			key := change.key

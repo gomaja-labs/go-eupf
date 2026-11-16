@@ -10,8 +10,8 @@ type farUpdate struct {
 	id         uint32
 }
 
-func decodeFARUpdate(value *ie.IE) (farUpdate, error) {
-	fields, err := value.UpdateFAR()
+func decodeFARUpdate(value *ie.IE, views *ruleViews) (farUpdate, error) {
+	fields, err := cachedRuleView(views, value, (*ie.IE).UpdateFAR)
 	if err != nil {
 		return farUpdate{}, err
 	}
@@ -21,7 +21,7 @@ func decodeFARUpdate(value *ie.IE) (farUpdate, error) {
 	}
 	result := farUpdate{fields: fields, id: id}
 	if fields.UpdateForwardingParameters != nil {
-		result.forwarding, err = fields.UpdateForwardingParameters.UpdateForwardingParameters()
+		result.forwarding, err = cachedRuleView(views, fields.UpdateForwardingParameters, (*ie.IE).UpdateForwardingParameters)
 		if err != nil {
 			return farUpdate{}, &ruleFailure{ie.RuleIDTypeFAR, id, err}
 		}

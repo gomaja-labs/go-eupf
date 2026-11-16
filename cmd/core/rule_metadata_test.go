@@ -23,7 +23,7 @@ func TestInformativeRuleMetadataDoesNotRejectForwarding(t *testing.T) {
 		ie.NewUpdateFAR(ie.NewFARID(1), ie.NewUpdateForwardingParameters(ie.NewTGPPInterfaceType(ie.TGPPInterfaceTypeN6))),
 		ie.NewCreateURR(ie.NewURRID(1), ie.NewMeasurementInformation(0)),
 	} {
-		if err := validateRuleCapability(rule); err != nil {
+		if err := validateRuleCapability(rule, nil); err != nil {
 			t.Errorf("%s: %v", rule.Type, err)
 		}
 	}
@@ -36,7 +36,7 @@ func TestBehaviourChangingRuleMetadataIsRejected(t *testing.T) {
 		ie.NewCreateFAR(ie.NewFARID(1), ie.NewApplyAction(32)),
 		ie.NewCreateURR(ie.NewURRID(1), ie.NewMeasurementInformation(1)),
 	} {
-		if err := validateRuleCapability(rule); !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
+		if err := validateRuleCapability(rule, nil); !errors.Is(err, ebpf.ErrUnsupportedRuleContent) {
 			t.Errorf("%s: %v", rule.Type, err)
 		}
 	}

@@ -775,10 +775,10 @@ func processEstablishmentRequestRules(
 	if err := validateSessionCapability(req); err != nil {
 		return err
 	}
-	if err := validateSessionRuleIDs(session, req.CreatePDR, req.CreateFAR, req.CreateQER, req.CreateURR); err != nil {
+	if err := validateSessionRuleIDs(session, &pdrContext.views, req.CreatePDR, req.CreateFAR, req.CreateQER, req.CreateURR); err != nil {
 		return err
 	}
-	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.CreateFAR); err != nil {
+	if err := validateRuleNetworkInstances(conn, &pdrContext.views, req.CreatePDR, req.CreateFAR); err != nil {
 		return err
 	}
 	if err := stageSessionBAR(session, req); err != nil {
@@ -789,7 +789,7 @@ func processEstablishmentRequestRules(
 	}
 	mapOperations := conn.mapOperations
 
-	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
+	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile, &pdrContext.views)
 	if err != nil {
 		return err
 	}
@@ -903,12 +903,12 @@ func processModificationRequestRules(
 	if err := validateSessionCapability(req); err != nil {
 		return err
 	}
-	if err := validateSessionRuleIDs(session, req.CreatePDR, req.UpdatePDR, req.RemovePDR,
+	if err := validateSessionRuleIDs(session, &pdrContext.views, req.CreatePDR, req.UpdatePDR, req.RemovePDR,
 		req.CreateFAR, req.UpdateFAR, req.RemoveFAR, req.CreateQER, req.UpdateQER, req.RemoveQER,
 		req.CreateURR, req.UpdateURR, req.RemoveURR); err != nil {
 		return err
 	}
-	if err := validateRuleNetworkInstances(conn, req.CreatePDR, req.UpdatePDR, req.CreateFAR, req.UpdateFAR); err != nil {
+	if err := validateRuleNetworkInstances(conn, &pdrContext.views, req.CreatePDR, req.UpdatePDR, req.CreateFAR, req.UpdateFAR); err != nil {
 		return err
 	}
 	if err := stageSessionBAR(session, req); err != nil {
@@ -919,11 +919,11 @@ func processModificationRequestRules(
 	}
 	mapOperations := conn.mapOperations
 
-	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile)
+	err := createFARs(req.CreateFAR, mapOperations, session, operationPool, logger, conn.profile, &pdrContext.views)
 	if err != nil {
 		return err
 	}
-	err = updateFARs(req.UpdateFAR, mapOperations, session, operationPool, logger, conn.profile, farUpdates)
+	err = updateFARs(req.UpdateFAR, mapOperations, session, operationPool, logger, conn.profile, farUpdates, &pdrContext.views)
 	if err != nil {
 		return err
 	}
@@ -986,9 +986,10 @@ func createFARs(
 	operationPool *OperationPool,
 	logger zerolog.Logger,
 	profile PfcpProfile,
+	views *ruleViews,
 ) error {
 	for _, far := range FARs {
-		fields, decodeErr := far.CreateFAR()
+		fields, decodeErr := cachedRuleView(views, far, (*ie.IE).CreateFAR)
 		if decodeErr != nil {
 			return decodeErr
 		}
@@ -999,7 +1000,7 @@ func createFARs(
 		var forwarding *ie.ForwardingParametersFields
 		var outer, marking, destination *ie.IE
 		if fields.ForwardingParameters != nil {
-			forwarding, err = fields.ForwardingParameters.ForwardingParameters()
+			forwarding, err = cachedRuleView(views, fields.ForwardingParameters, (*ie.IE).ForwardingParameters)
 			if err != nil {
 				return &ruleFailure{ie.RuleIDTypeFAR, farID, err}
 			}
@@ -1197,9 +1198,10 @@ func updateFARs(
 	logger zerolog.Logger,
 	profile PfcpProfile,
 	decoded *[]farUpdate,
+	views *ruleViews,
 ) error {
 	for _, far := range FARs {
-		update, err := decodeFARUpdate(far)
+		update, err := decodeFARUpdate(far, views)
 		if err != nil {
 			return err
 		}

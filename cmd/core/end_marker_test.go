@@ -383,7 +383,7 @@ func decodedMarkerUpdates(t *testing.T, values []*ie.IE) []farUpdate {
 	t.Helper()
 	var updates []farUpdate
 	for _, value := range values {
-		update, err := decodeFARUpdate(value)
+		update, err := decodeFARUpdate(value, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -35,6 +35,7 @@ type PDRCreationContext struct {
 	ResourceManager      *service.ResourceManager
 	TEIDCache            map[uint8]uint32
 	TEIDSources          map[uint8]uint8
+	views                ruleViews
 	Restoration          bool
 	N3Address, N9Address net.IP
 }
@@ -81,13 +82,13 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 	var removeURRs bool
 	switch pdr.Type {
 	case ie.CreatePDR:
-		f, err := pdr.CreatePDR()
+		f, err := cachedRuleView(&pdrContext.views, pdr, (*ie.IE).CreatePDR)
 		if err != nil {
 			return err
 		}
 		activate, qerIDs, removal, farID, pdiIE, precedence = f.ActivatePredefinedRules, f.QERID, f.OuterHeaderRemoval, f.FARID, f.PDI, f.Precedence
 	case ie.UpdatePDR:
-		f, err := pdr.UpdatePDR()
+		f, err := cachedRuleView(&pdrContext.views, pdr, (*ie.IE).UpdatePDR)
 		if err != nil {
 			return err
 		}
@@ -200,7 +201,7 @@ func (pdrContext *PDRCreationContext) extractPDR(pdr *ie.IE, spdrInfo *SPDRInfo)
 		}
 	}
 
-	pdi, err := pdiIE.PDI()
+	pdi, err := cachedRuleView(&pdrContext.views, pdiIE, (*ie.IE).PDI)
 	if err != nil {
 		//return fmt.Errorf("PDI IE is missing")
 		return nil
