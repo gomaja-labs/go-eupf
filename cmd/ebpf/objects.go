@@ -8,14 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/gomaja-labs/go-eupf/cmd/config"
-	"github.com/rs/zerolog/log"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -132,12 +130,6 @@ func (bpfObjects *BpfObjects) Load() error {
 	if bpfObjects.UpfIpEntrypointFunc != nil && bpfObjects.UpfIpEntrypointFunc.FD() >= 0 {
 		return errors.New("BPF objects already loaded")
 	}
-	pinPath := "/sys/fs/bpf/upf_pipeline"
-	if err := os.MkdirAll(pinPath, os.ModePerm); err != nil {
-		log.Info().Msgf("failed to create bpf fs subpath: %+v", err)
-		return err
-	}
-
 	spec, err := LoadIpEntrypoint()
 	if err != nil {
 		return err
@@ -189,7 +181,7 @@ func (bpfObjects *BpfObjects) Load() error {
 		IpEntrypointObjects
 		Configuration *ebpf.Map `ebpf:".bss"`
 	}
-	if err := spec.LoadAndAssign(&objects, &ebpf.CollectionOptions{Maps: ebpf.MapOptions{PinPath: pinPath}}); err != nil {
+	if err := spec.LoadAndAssign(&objects, nil); err != nil {
 		return err
 	}
 	bpfObjects.IpEntrypointObjects = objects.IpEntrypointObjects

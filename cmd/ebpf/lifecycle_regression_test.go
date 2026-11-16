@@ -299,14 +299,11 @@ func TestAllProgramsLoad(t *testing.T) {
 		{"zero", LoadZeroEntrypoint}, {"n3", LoadN3Entrypoint}, {"n6", LoadN6Entrypoint},
 	} {
 		t.Run(entry.name, func(t *testing.T) {
-			if err := os.MkdirAll("/sys/fs/bpf/upf_pipeline", 0750); err != nil {
-				t.Fatal(err)
-			}
 			spec, err := entry.load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			collection, err := cilium.NewCollectionWithOptions(spec, cilium.CollectionOptions{Maps: cilium.MapOptions{PinPath: "/sys/fs/bpf/upf_pipeline"}})
+			collection, err := cilium.NewCollection(spec)
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
@@ -314,4 +311,29 @@ func TestAllProgramsLoad(t *testing.T) {
 		})
 	}
 	loadDatapath(t)
+}
+
+// TestProductionMapsAreUnpinned keeps startup independent of writable sysfs
+// and a mounted BPF filesystem, including lazily loaded buffer collections.
+func TestProductionMapsAreUnpinned(t *testing.T) {
+	for _, entry := range []struct {
+		name string
+		load func() (*cilium.CollectionSpec, error)
+	}{
+		{"ip", LoadIpEntrypoint},
+		{"buffer_admission", LoadBufferAdmission},
+		{"buffer_continuation", LoadBufferEntrypoint},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			spec, err := entry.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, m := range spec.Maps {
+				if m.Pinning != cilium.PinNone {
+					t.Errorf("map %s uses pinning %s; production must run without bpffs", name, m.Pinning)
+				}
+			}
+		})
+	}
 }

@@ -33,7 +33,6 @@ type IpEntrypointObjects struct {
 	SdfNotifyMap              *ebpf.Map
 	TraceMap                  *ebpf.Map
 	UpfExtStat                *ebpf.Map
-	UpfPipeline               *ebpf.Map
 	UpfRouteStat              *ebpf.Map
 	GlobalConfig              *ebpf.Variable
 	GtpErrorSuppressUntil     *ebpf.Variable

@@ -12,7 +12,6 @@
 #include <linux/udp.h>
 #include <sys/socket.h>
 
-#include "xdp/program_array.h"
 #include "xdp/statistics.h"
 #include "xdp/qer.h"
 #include "xdp/urr.h"

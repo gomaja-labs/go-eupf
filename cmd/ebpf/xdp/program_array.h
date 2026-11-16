@@ -19,5 +19,4 @@ struct
     __type(key, uint32_t);
     __type(value, uint32_t);
     __uint(max_entries, 16);
-    __uint(pinning, LIBBPF_PIN_BY_NAME);
 } upf_pipeline SEC(".maps");

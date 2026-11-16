@@ -9,8 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 // TestMain gives every test process its own network and mount namespaces. The
@@ -42,9 +40,6 @@ func TestMain(m *testing.M) {
 }
 
 func setupTestNetwork() error {
-	if err := unix.Mount("bpf", "/sys/fs/bpf", "bpf", 0, ""); err != nil {
-		return fmt.Errorf("private bpffs: %w", err)
-	}
 	commands := [][]string{
 		{"link", "set", "lo", "up"},
 		{"link", "add", "test-egress", "type", "veth", "peer", "name", "test-peer"},
