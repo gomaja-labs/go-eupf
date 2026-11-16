@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Start the runtime image with its documented capabilities and require HTTP readiness.
+# Start the runtime image with its documented capabilities and require HTTP
+# readiness and buffered-forwarding initialization.
 set -euo pipefail
 image=${1:-eupf:scan}
 output=${EUPF_RUNTIME_SMOKE_OUTPUT:-ci-results/runtime-readiness}
@@ -48,4 +49,25 @@ docker exec "$application" awk '
 ' /proc/mounts
 running_uid=$(docker exec "$application" id -u)
 [[ "$running_uid" == "$uid" ]]
-printf 'Runtime API ready; uid=%s image=%s\n' "$uid" "$image"
+# Buffering opens its raw packet socket, creates the private eub*/eup* veth
+# pair and attaches its TC filter after readiness. A failed step removes the
+# pair and logs the error, so require the pair to persist with no failure.
+failure='Buffered forwarding initialization failed'
+stable=0
+for ((attempt = 0; attempt < 120 && stable < 4; attempt++)); do
+	if docker logs "$application" 2>&1 | grep -qF "$failure"; then
+		printf '%s\n' "$failure" >&2
+		exit 1
+	fi
+	if docker exec "$application" ls /sys/class/net | grep -q '^eub'; then
+		stable=$((stable + 1))
+	else
+		stable=0
+	fi
+	sleep .5
+done
+if ((stable < 4)); then
+	printf 'Buffered forwarding was not initialized\n' >&2
+	exit 1
+fi
+printf 'Runtime API and buffered forwarding ready; uid=%s image=%s\n' "$uid" "$image"
