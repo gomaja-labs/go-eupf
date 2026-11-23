@@ -10,8 +10,8 @@ require (
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gomaja-labs/go-pfcp v0.0.0-20261115165234-7abe21e4877c
-	github.com/gopacket/gopacket v1.7.7
-	github.com/jedib0t/go-pretty/v6 v6.8.3
+	github.com/gopacket/gopacket v1.8.0
+	github.com/jedib0t/go-pretty/v6 v6.9.2
 	github.com/korylprince/ipnetgen v1.0.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1
@@ -58,6 +58,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.65.0 // indirect
 	github.com/rhysd/actionlint v1.7.12 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
